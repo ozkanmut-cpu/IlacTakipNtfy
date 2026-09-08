@@ -34,7 +34,7 @@ object SmartEscalation {
     fun deferUntil(c: Context, time: String, expiresAt: Long) {
         cancelAlarms(c, time)
         val base = maxOf(System.currentTimeMillis(), expiresAt) + BATON_GRACE_MS
-        val people = Store.people(c)
+        val people = TemporaryCareStore.prioritizedPeople(c)
         if (people.isNotEmpty()) scheduleStage(c, time, 0, base)
         if (people.size > 1) scheduleStage(c, time, 1, base + 15 * 60_000L)
     }
@@ -74,8 +74,6 @@ class EscalationReceiver : BroadcastReceiver() {
         val pendingResult = goAsync()
         Thread {
             try {
-                // Pull synchronously before deciding. The previous asynchronous pull could
-                // escalate against stale local state even though another device resolved it.
                 SyncEngine.pullBlocking(c.applicationContext)
                 val state = DoseStateEngine.stateForTime(c, time)
                 val unresolved = state.status == DoseSessionStatus.PENDING ||
@@ -89,7 +87,7 @@ class EscalationReceiver : BroadcastReceiver() {
                     return@Thread
                 }
 
-                val people = Store.people(c)
+                val people = TemporaryCareStore.prioritizedPeople(c)
                 val target = people.getOrNull(stage) ?: return@Thread
                 if (!AttentionBudget.allow(c, time, target.topic, stage)) return@Thread
 
