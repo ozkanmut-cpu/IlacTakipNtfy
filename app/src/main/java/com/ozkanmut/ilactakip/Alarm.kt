@@ -31,13 +31,16 @@ object AlarmScheduler {
         p.edit().putStringSet(KEY_TIMES, scheduled).apply()
     }
 
-    private fun cancelGroup(c: Context, time: String) {
+    private fun cancelGroup(c: Context, time: String) = cancelByKey(c, "group-$time")
+
+    fun cancelSnooze(c: Context, time: String) = cancelByKey(c, "snooze-$time")
+
+    private fun cancelByKey(c: Context, key: String) {
         val alarmManager = c.getSystemService(AlarmManager::class.java)
-        val intent = Intent(c, AlarmReceiver::class.java)
         val pendingIntent = PendingIntent.getBroadcast(
             c,
-            ("group-$time").hashCode(),
-            intent,
+            key.hashCode(),
+            Intent(c, AlarmReceiver::class.java),
             PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
         )
         if (pendingIntent != null) {
@@ -57,11 +60,11 @@ object AlarmScheduler {
         val earliest = candidates.minOfOrNull { it.second } ?: return false
         val due = candidates.filter { it.second == earliest }.map { it.first }
         val trigger = earliest.atTime(parsed).atZone(now.zone).toInstant().toEpochMilli()
-        scheduleAt(c, time, due, trigger)
+        scheduleAt(c, time, due, trigger, "group-$time", false)
         return true
     }
 
-    private fun scheduleAt(c: Context, time: String, meds: List<Medication>, triggerAtMillis: Long) {
+    private fun scheduleAt(c: Context, time: String, meds: List<Medication>, triggerAtMillis: Long, requestKey: String, isSnooze: Boolean) {
         if (meds.isEmpty()) return
         val alarmManager = c.getSystemService(AlarmManager::class.java)
         val names = meds.joinToString("|#|") { med -> med.name + if (med.dose.isBlank()) "" else " (${med.dose})" }
@@ -70,14 +73,15 @@ object AlarmScheduler {
             .putExtra("time", time)
             .putExtra("names", names)
             .putExtra("ids", ids)
-        val pendingIntent = PendingIntent.getBroadcast(c, ("group-$time").hashCode(), intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            .putExtra("isSnooze", isSnooze)
+        val pendingIntent = PendingIntent.getBroadcast(c, requestKey.hashCode(), intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         try { alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent) }
         catch (_: SecurityException) { alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent) }
     }
 
     fun snoozeGroup(c: Context, time: String, meds: List<Medication>, minutes: Int) {
         val trigger = System.currentTimeMillis() + minutes.coerceAtLeast(1) * 60_000L
-        scheduleAt(c, time, meds, trigger)
+        scheduleAt(c, time, meds, trigger, "snooze-$time", true)
     }
 }
 
@@ -142,6 +146,7 @@ object Ntfy {
     fun sendEvent(c: Context, type: String, time: String, meds: List<Medication>) {
         when {
             type in terminalTypes -> {
+                AlarmScheduler.cancelSnooze(c, time)
                 SmartEscalation.cancel(c, time)
                 CareBatonStore.resolve(c, time)
             }
