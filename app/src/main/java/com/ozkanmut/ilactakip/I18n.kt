@@ -5,53 +5,114 @@ import java.util.Locale
 /** Dosefolk runtime localization. Follows the phone's primary language automatically. */
 object I18n {
     private val en = mapOf(
-        "app" to "Dosefolk", "today" to "Today", "meds" to "My meds", "follow" to "Care", "history" to "History", "assistant" to "Assistant",
-        "today_plan" to "Today's medication plan", "manage_voice" to "Manage by voice or text", "med_times" to "%1$d medication times • %2$d medications",
-        "med_count" to "%1$d meds", "taken" to "Taken", "snooze" to "+30 min", "missed" to "Not taken", "add_med" to "Add medication",
-        "new_med" to "New medication", "med_name" to "Medication name", "dose_note" to "Dose / note", "add_time" to "+ Add time", "save" to "Save", "cancel" to "Cancel", "delete" to "Delete",
-        "care_permissions" to "Care & permissions", "care_help" to "Caregivers can update status; people you authorize can also edit the medication plan.", "can_edit" to "Can edit my medication plan",
-        "remind" to "Remind", "add_person" to "Add person", "name" to "Name", "pair_code" to "ntfy pairing code", "add" to "Add", "my_code" to "My pairing code: %s",
-        "history_empty" to "Taken, snoozed, missed, remote reminders and plan changes will appear here chronologically.",
-        "ai_title" to "AI Assistant", "ai_help" to "Speak or type. Simple commands are processed on device; advanced natural-language commands will use the ChatGPT control layer.",
-        "ai_ready" to "Ready. You can manage your medication plan by speaking.", "ai_example" to "E.g. snooze the 20:00 medications for 30 minutes", "send" to "Send", "speak" to "🎙 Speak", "speech_prompt" to "Tell Dosefolk",
-        "channel" to "Medication reminders", "all_taken" to "All taken", "snooze30" to "Snooze 30 min", "notif_missed" to "Not taken",
-        "event_taken" to "MEDICATIONS TAKEN", "event_missed" to "MEDICATIONS NOT TAKEN", "event_snoozed" to "SNOOZED 30 MIN", "event_alarm" to "MEDICATION TIME", "reminder_title" to "REMINDER", "reminder_body" to "Please check your medications."
+        "app" to "Dosefolk",
+        "today" to "Today",
+        "meds" to "My meds",
+        "follow" to "Circle",
+        "history" to "History",
+        "assistant" to "Assistant",
+        "today_plan" to "Today's medication plan",
+        "manage_voice" to "Speak or type to manage",
+        "med_times" to "{0} medication times • {1} medications",
+        "med_count" to "{0} meds",
+        "taken" to "Taken",
+        "snooze" to "+30 min",
+        "missed" to "Not taken",
+        "add_med" to "Add medication",
+        "new_med" to "New medication",
+        "med_name" to "Medication name",
+        "dose_note" to "Dose / note",
+        "add_time" to "+ Add time",
+        "save" to "Save",
+        "cancel" to "Cancel",
+        "delete" to "Delete",
+        "care_permissions" to "Circle & permissions",
+        "care_help" to "People you trust can help track doses. Only explicitly authorized people can edit medication plans.",
+        "can_edit" to "Can edit medication plan",
+        "remind" to "Remind",
+        "add_person" to "Add person",
+        "name" to "Name",
+        "pair_code" to "Pairing code",
+        "add" to "Add",
+        "my_code" to "My pairing code: {0}",
+        "history_empty" to "Taken, snoozed, missed and plan-change events will appear here.",
+        "ai_title" to "Dosefolk Assistant",
+        "ai_help" to "Speak or type naturally. Dosefolk handles simple actions immediately and keeps safety-critical changes explicit.",
+        "ai_ready" to "Ready. Tell me what you want to do.",
+        "ai_example" to "e.g. snooze the 20:00 medications for 30 minutes",
+        "send" to "Send",
+        "speak" to "🎙 Speak",
+        "speech_prompt" to "Tell Dosefolk",
+        "channel" to "Medication reminders",
+        "all_taken" to "All taken",
+        "snooze30" to "Snooze 30 min",
+        "notif_missed" to "Not taken",
+        "event_taken" to "MEDICATIONS TAKEN",
+        "event_missed" to "MEDICATIONS NOT TAKEN",
+        "event_snoozed" to "SNOOZED 30 MIN",
+        "event_alarm" to "MEDICATION TIME",
+        "reminder_title" to "REMINDER",
+        "reminder_body" to "Please check the medication dose.",
+        "all_good" to "Everything is on track",
+        "next" to "Next",
+        "needs_attention" to "Needs attention"
     )
-    private fun m(vararg p:Pair<String,String>)=mapOf(*p)
+
+    private fun pack(vararg p: Pair<String, String>) = mapOf(*p)
+
     private val packs = mapOf(
-        "tr" to m("today" to "Bugün","meds" to "İlaçlarım","follow" to "Takip","history" to "Geçmiş","assistant" to "Asistan","today_plan" to "Bugünün ilaç planı","manage_voice" to "Konuşarak veya yazarak yönet","med_count" to "%1$d ilaç","taken" to "İçtim","snooze" to "+30 dk","missed" to "İçilmedi","add_med" to "Yeni ilaç ekle","new_med" to "Yeni ilaç","med_name" to "İlaç adı","dose_note" to "Doz / not","add_time" to "+ Saat ekle","save" to "Kaydet","cancel" to "Vazgeç","delete" to "Sil","care_permissions" to "Takip ve yetkiler","can_edit" to "Programımı düzenleyebilir","remind" to "Hatırlat","add_person" to "Kişi ekle","name" to "Ad","pair_code" to "ntfy eşleştirme kodu","add" to "Ekle","my_code" to "Benim eşleştirme kodum: %s","history_empty" to "İçildi, ertelendi, içilmedi, uzaktan hatırlatma ve program değişiklikleri burada kronolojik gösterilecek.","ai_title" to "AI Asistan","ai_ready" to "Hazırım. İlaç programını konuşarak yönetebilirsin.","send" to "Gönder","speak" to "🎙 Konuş","speech_prompt" to "Dosefolk'a söyle","channel" to "İlaç hatırlatmaları","all_taken" to "Hepsini içtim","snooze30" to "30 dk ertele","notif_missed" to "İçilmedi","event_taken" to "İLAÇLAR İÇİLDİ","event_missed" to "İLAÇLAR İÇİLMEDİ","event_snoozed" to "30 DK ERTELENDİ","event_alarm" to "İLAÇ SAATİ","reminder_title" to "HATIRLATMA","reminder_body" to "İlaçlarını kontrol eder misin?"),
-        "de" to m("today" to "Heute","meds" to "Meine Medikamente","follow" to "Betreuung","history" to "Verlauf","assistant" to "Assistent","taken" to "Eingenommen","missed" to "Nicht eingenommen","add_med" to "Medikament hinzufügen","new_med" to "Neues Medikament","med_name" to "Medikamentenname","dose_note" to "Dosis / Notiz","add_time" to "+ Zeit hinzufügen","save" to "Speichern","cancel" to "Abbrechen","delete" to "Löschen","remind" to "Erinnern","add_person" to "Person hinzufügen","name" to "Name","add" to "Hinzufügen","send" to "Senden","speak" to "🎙 Sprechen","channel" to "Medikamentenerinnerungen","all_taken" to "Alle eingenommen","snooze30" to "30 Min. später","notif_missed" to "Nicht eingenommen"),
-        "fr" to m("today" to "Aujourd’hui","meds" to "Mes médicaments","follow" to "Suivi","history" to "Historique","assistant" to "Assistant","taken" to "Pris","missed" to "Non pris","add_med" to "Ajouter un médicament","new_med" to "Nouveau médicament","med_name" to "Nom du médicament","dose_note" to "Dose / note","add_time" to "+ Ajouter une heure","save" to "Enregistrer","cancel" to "Annuler","delete" to "Supprimer","remind" to "Rappeler","add_person" to "Ajouter une personne","name" to "Nom","add" to "Ajouter","send" to "Envoyer","speak" to "🎙 Parler","all_taken" to "Tout pris","snooze30" to "Reporter de 30 min","notif_missed" to "Non pris"),
-        "es" to m("today" to "Hoy","meds" to "Mis medicamentos","follow" to "Cuidado","history" to "Historial","assistant" to "Asistente","taken" to "Tomado","missed" to "No tomado","add_med" to "Añadir medicamento","new_med" to "Nuevo medicamento","med_name" to "Nombre del medicamento","dose_note" to "Dosis / nota","add_time" to "+ Añadir hora","save" to "Guardar","cancel" to "Cancelar","delete" to "Eliminar","remind" to "Recordar","add_person" to "Añadir persona","name" to "Nombre","add" to "Añadir","send" to "Enviar","speak" to "🎙 Hablar","all_taken" to "Todo tomado","snooze30" to "Posponer 30 min","notif_missed" to "No tomado"),
-        "it" to m("today" to "Oggi","meds" to "I miei farmaci","follow" to "Assistenza","history" to "Cronologia","assistant" to "Assistente","taken" to "Assunto","missed" to "Non assunto","add_med" to "Aggiungi farmaco","new_med" to "Nuovo farmaco","med_name" to "Nome farmaco","dose_note" to "Dose / nota","save" to "Salva","cancel" to "Annulla","delete" to "Elimina","remind" to "Ricorda","add_person" to "Aggiungi persona","send" to "Invia","speak" to "🎙 Parla"),
-        "pt" to m("today" to "Hoje","meds" to "Meus medicamentos","follow" to "Cuidados","history" to "Histórico","assistant" to "Assistente","taken" to "Tomado","missed" to "Não tomado","add_med" to "Adicionar medicamento","save" to "Salvar","cancel" to "Cancelar","delete" to "Excluir","remind" to "Lembrar","send" to "Enviar","speak" to "🎙 Falar"),
-        "nl" to m("today" to "Vandaag","meds" to "Mijn medicijnen","follow" to "Zorg","history" to "Geschiedenis","assistant" to "Assistent","taken" to "Ingenomen","missed" to "Niet ingenomen","add_med" to "Medicijn toevoegen","save" to "Opslaan","cancel" to "Annuleren","delete" to "Verwijderen","send" to "Versturen","speak" to "🎙 Spreken"),
-        "pl" to m("today" to "Dzisiaj","meds" to "Moje leki","follow" to "Opieka","history" to "Historia","assistant" to "Asystent","taken" to "Przyjęto","missed" to "Nie przyjęto","add_med" to "Dodaj lek","save" to "Zapisz","cancel" to "Anuluj","delete" to "Usuń","send" to "Wyślij","speak" to "🎙 Mów"),
-        "ru" to m("today" to "Сегодня","meds" to "Мои лекарства","follow" to "Уход","history" to "История","assistant" to "Ассистент","taken" to "Принято","missed" to "Не принято","add_med" to "Добавить лекарство","save" to "Сохранить","cancel" to "Отмена","delete" to "Удалить","send" to "Отправить","speak" to "🎙 Говорить"),
-        "uk" to m("today" to "Сьогодні","meds" to "Мої ліки","follow" to "Догляд","history" to "Історія","assistant" to "Асистент","taken" to "Прийнято","missed" to "Не прийнято","add_med" to "Додати ліки","save" to "Зберегти","cancel" to "Скасувати","delete" to "Видалити"),
-        "ar" to m("today" to "اليوم","meds" to "أدويتي","follow" to "الرعاية","history" to "السجل","assistant" to "المساعد","taken" to "تم التناول","missed" to "لم يتم التناول","add_med" to "إضافة دواء","save" to "حفظ","cancel" to "إلغاء","delete" to "حذف","send" to "إرسال","speak" to "🎙 تحدث"),
-        "fa" to m("today" to "امروز","meds" to "داروهای من","follow" to "مراقبت","history" to "تاریخچه","assistant" to "دستیار","taken" to "مصرف شد","missed" to "مصرف نشد","add_med" to "افزودن دارو","save" to "ذخیره","cancel" to "لغو","delete" to "حذف"),
-        "he" to m("today" to "היום","meds" to "התרופות שלי","follow" to "טיפול","history" to "היסטוריה","assistant" to "עוזר","taken" to "נלקח","missed" to "לא נלקח","add_med" to "הוספת תרופה","save" to "שמירה","cancel" to "ביטול","delete" to "מחיקה"),
-        "el" to m("today" to "Σήμερα","meds" to "Τα φάρμακά μου","follow" to "Φροντίδα","history" to "Ιστορικό","assistant" to "Βοηθός","taken" to "Ελήφθη","missed" to "Δεν ελήφθη","add_med" to "Προσθήκη φαρμάκου","save" to "Αποθήκευση","cancel" to "Ακύρωση","delete" to "Διαγραφή"),
-        "ro" to m("today" to "Astăzi","meds" to "Medicamentele mele","follow" to "Îngrijire","history" to "Istoric","assistant" to "Asistent","taken" to "Luat","missed" to "Neluat","add_med" to "Adaugă medicament","save" to "Salvează","cancel" to "Anulează","delete" to "Șterge"),
-        "sv" to m("today" to "Idag","meds" to "Mina läkemedel","follow" to "Omsorg","history" to "Historik","assistant" to "Assistent","taken" to "Tagen","missed" to "Inte tagen","add_med" to "Lägg till läkemedel","save" to "Spara","cancel" to "Avbryt","delete" to "Ta bort"),
-        "da" to m("today" to "I dag","meds" to "Min medicin","follow" to "Omsorg","history" to "Historik","assistant" to "Assistent","taken" to "Taget","missed" to "Ikke taget","add_med" to "Tilføj medicin","save" to "Gem","cancel" to "Annuller","delete" to "Slet"),
-        "no" to m("today" to "I dag","meds" to "Mine medisiner","follow" to "Omsorg","history" to "Historikk","assistant" to "Assistent","taken" to "Tatt","missed" to "Ikke tatt","add_med" to "Legg til medisin","save" to "Lagre","cancel" to "Avbryt","delete" to "Slett"),
-        "fi" to m("today" to "Tänään","meds" to "Lääkkeeni","follow" to "Hoito","history" to "Historia","assistant" to "Avustaja","taken" to "Otettu","missed" to "Ei otettu","add_med" to "Lisää lääke","save" to "Tallenna","cancel" to "Peruuta","delete" to "Poista"),
-        "cs" to m("today" to "Dnes","meds" to "Moje léky","follow" to "Péče","history" to "Historie","assistant" to "Asistent","taken" to "Užito","missed" to "Neužito","add_med" to "Přidat lék","save" to "Uložit","cancel" to "Zrušit","delete" to "Smazat"),
-        "hu" to m("today" to "Ma","meds" to "Gyógyszereim","follow" to "Gondozás","history" to "Előzmények","assistant" to "Asszisztens","taken" to "Bevéve","missed" to "Nem vette be","add_med" to "Gyógyszer hozzáadása","save" to "Mentés","cancel" to "Mégse","delete" to "Törlés"),
-        "id" to m("today" to "Hari ini","meds" to "Obat saya","follow" to "Perawatan","history" to "Riwayat","assistant" to "Asisten","taken" to "Diminum","missed" to "Belum diminum","add_med" to "Tambah obat","save" to "Simpan","cancel" to "Batal","delete" to "Hapus"),
-        "vi" to m("today" to "Hôm nay","meds" to "Thuốc của tôi","follow" to "Chăm sóc","history" to "Lịch sử","assistant" to "Trợ lý","taken" to "Đã uống","missed" to "Chưa uống","add_med" to "Thêm thuốc","save" to "Lưu","cancel" to "Hủy","delete" to "Xóa"),
-        "hi" to m("today" to "आज","meds" to "मेरी दवाइयाँ","follow" to "देखभाल","history" to "इतिहास","assistant" to "सहायक","taken" to "ले लिया","missed" to "नहीं लिया","add_med" to "दवा जोड़ें","save" to "सहेजें","cancel" to "रद्द करें","delete" to "हटाएँ"),
-        "ja" to m("today" to "今日","meds" to "薬","follow" to "ケア","history" to "履歴","assistant" to "アシスタント","taken" to "服用済み","missed" to "未服用","add_med" to "薬を追加","save" to "保存","cancel" to "キャンセル","delete" to "削除","send" to "送信","speak" to "🎙 話す"),
-        "ko" to m("today" to "오늘","meds" to "내 약","follow" to "돌봄","history" to "기록","assistant" to "도우미","taken" to "복용함","missed" to "복용 안 함","add_med" to "약 추가","save" to "저장","cancel" to "취소","delete" to "삭제","send" to "보내기","speak" to "🎙 말하기"),
-        "zh" to m("today" to "今天","meds" to "我的药物","follow" to "照护","history" to "历史","assistant" to "助手","taken" to "已服用","missed" to "未服用","add_med" to "添加药物","save" to "保存","cancel" to "取消","delete" to "删除","send" to "发送","speak" to "🎙 说话"),
-        "th" to m("today" to "วันนี้","meds" to "ยาของฉัน","follow" to "การดูแล","history" to "ประวัติ","assistant" to "ผู้ช่วย","taken" to "รับประทานแล้ว","missed" to "ยังไม่ได้รับประทาน","add_med" to "เพิ่มยา","save" to "บันทึก","cancel" to "ยกเลิก","delete" to "ลบ")
+        "tr" to pack(
+            "today" to "Bugün", "meds" to "İlaçlarım", "follow" to "Circle", "history" to "Geçmiş", "assistant" to "Asistan",
+            "today_plan" to "Bugünün ilaç planı", "manage_voice" to "Konuş veya yazarak yönet", "med_times" to "{0} ilaç saati • {1} ilaç", "med_count" to "{0} ilaç",
+            "taken" to "İçtim", "snooze" to "+30 dk", "missed" to "İçilmedi", "add_med" to "İlaç ekle", "new_med" to "Yeni ilaç",
+            "med_name" to "İlaç adı", "dose_note" to "Doz / not", "add_time" to "+ Saat ekle", "save" to "Kaydet", "cancel" to "Vazgeç", "delete" to "Sil",
+            "care_permissions" to "Circle ve yetkiler", "care_help" to "Güvendiğin kişiler doz takibine yardımcı olabilir. İlaç programını yalnız açıkça izin verdiklerin düzenleyebilir.",
+            "can_edit" to "İlaç programını düzenleyebilir", "remind" to "Hatırlat", "add_person" to "Kişi ekle", "name" to "Ad", "pair_code" to "Eşleştirme kodu",
+            "add" to "Ekle", "my_code" to "Eşleştirme kodum: {0}", "history_empty" to "İçildi, ertelendi, içilmedi ve program değişiklikleri burada görünecek.",
+            "ai_title" to "Dosefolk Asistan", "ai_help" to "Doğal şekilde konuş veya yaz. Basit işlemleri hemen yaparım; güvenlik açısından önemli değişiklikleri açıkça onaylatırım.",
+            "ai_ready" to "Hazırım. Ne yapmak istediğini söyle.", "ai_example" to "Örn. 20:00 ilaçlarını 30 dakika ertele", "send" to "Gönder", "speak" to "🎙 Konuş", "speech_prompt" to "Dosefolk'a söyle",
+            "channel" to "İlaç hatırlatmaları", "all_taken" to "Hepsini içtim", "snooze30" to "30 dk ertele", "notif_missed" to "İçilmedi",
+            "event_taken" to "İLAÇLAR İÇİLDİ", "event_missed" to "İLAÇLAR İÇİLMEDİ", "event_snoozed" to "30 DK ERTELENDİ", "event_alarm" to "İLAÇ SAATİ",
+            "reminder_title" to "HATIRLATMA", "reminder_body" to "İlaç dozunu kontrol eder misin?", "all_good" to "Her şey yolunda", "next" to "Sonraki", "needs_attention" to "İlgilenmek gerekiyor"
+        ),
+        "de" to pack("today" to "Heute", "meds" to "Meine Medikamente", "follow" to "Circle", "history" to "Verlauf", "assistant" to "Assistent", "taken" to "Eingenommen", "missed" to "Nicht eingenommen", "add_med" to "Medikament hinzufügen", "save" to "Speichern", "cancel" to "Abbrechen", "delete" to "Löschen", "all_taken" to "Alle eingenommen", "snooze30" to "30 Min. später"),
+        "fr" to pack("today" to "Aujourd’hui", "meds" to "Mes médicaments", "follow" to "Circle", "history" to "Historique", "assistant" to "Assistant", "taken" to "Pris", "missed" to "Non pris", "add_med" to "Ajouter un médicament", "save" to "Enregistrer", "cancel" to "Annuler", "delete" to "Supprimer", "all_taken" to "Tout pris", "snooze30" to "Reporter de 30 min"),
+        "es" to pack("today" to "Hoy", "meds" to "Mis medicamentos", "follow" to "Circle", "history" to "Historial", "assistant" to "Asistente", "taken" to "Tomado", "missed" to "No tomado", "add_med" to "Añadir medicamento", "save" to "Guardar", "cancel" to "Cancelar", "delete" to "Eliminar", "all_taken" to "Todo tomado", "snooze30" to "Posponer 30 min"),
+        "it" to pack("today" to "Oggi", "meds" to "I miei farmaci", "follow" to "Circle", "history" to "Cronologia", "assistant" to "Assistente", "taken" to "Assunto", "missed" to "Non assunto", "save" to "Salva", "cancel" to "Annulla", "delete" to "Elimina"),
+        "pt" to pack("today" to "Hoje", "meds" to "Meus medicamentos", "follow" to "Circle", "history" to "Histórico", "assistant" to "Assistente", "taken" to "Tomado", "missed" to "Não tomado", "save" to "Salvar", "cancel" to "Cancelar", "delete" to "Excluir"),
+        "nl" to pack("today" to "Vandaag", "meds" to "Mijn medicijnen", "follow" to "Circle", "history" to "Geschiedenis", "assistant" to "Assistent", "taken" to "Ingenomen", "missed" to "Niet ingenomen"),
+        "pl" to pack("today" to "Dzisiaj", "meds" to "Moje leki", "follow" to "Circle", "history" to "Historia", "assistant" to "Asystent", "taken" to "Przyjęto", "missed" to "Nie przyjęto"),
+        "ru" to pack("today" to "Сегодня", "meds" to "Мои лекарства", "follow" to "Circle", "history" to "История", "assistant" to "Ассистент", "taken" to "Принято", "missed" to "Не принято"),
+        "uk" to pack("today" to "Сьогодні", "meds" to "Мої ліки", "follow" to "Circle", "history" to "Історія", "assistant" to "Асистент", "taken" to "Прийнято", "missed" to "Не прийнято"),
+        "ar" to pack("today" to "اليوم", "meds" to "أدويتي", "follow" to "الدائرة", "history" to "السجل", "assistant" to "المساعد", "taken" to "تم التناول", "missed" to "لم يتم التناول"),
+        "fa" to pack("today" to "امروز", "meds" to "داروهای من", "follow" to "حلقه", "history" to "تاریخچه", "assistant" to "دستیار", "taken" to "مصرف شد", "missed" to "مصرف نشد"),
+        "he" to pack("today" to "היום", "meds" to "התרופות שלי", "follow" to "מעגל", "history" to "היסטוריה", "assistant" to "עוזר", "taken" to "נלקח", "missed" to "לא נלקח"),
+        "el" to pack("today" to "Σήμερα", "meds" to "Τα φάρμακά μου", "follow" to "Circle", "history" to "Ιστορικό", "assistant" to "Βοηθός", "taken" to "Ελήφθη", "missed" to "Δεν ελήφθη"),
+        "ro" to pack("today" to "Astăzi", "meds" to "Medicamentele mele", "follow" to "Circle", "history" to "Istoric", "assistant" to "Asistent", "taken" to "Luat", "missed" to "Neluat"),
+        "sv" to pack("today" to "Idag", "meds" to "Mina läkemedel", "follow" to "Circle", "history" to "Historik", "assistant" to "Assistent", "taken" to "Tagen", "missed" to "Inte tagen"),
+        "da" to pack("today" to "I dag", "meds" to "Min medicin", "follow" to "Circle", "history" to "Historik", "assistant" to "Assistent", "taken" to "Taget", "missed" to "Ikke taget"),
+        "no" to pack("today" to "I dag", "meds" to "Mine medisiner", "follow" to "Circle", "history" to "Historikk", "assistant" to "Assistent", "taken" to "Tatt", "missed" to "Ikke tatt"),
+        "fi" to pack("today" to "Tänään", "meds" to "Lääkkeeni", "follow" to "Circle", "history" to "Historia", "assistant" to "Avustaja", "taken" to "Otettu", "missed" to "Ei otettu"),
+        "cs" to pack("today" to "Dnes", "meds" to "Moje léky", "follow" to "Circle", "history" to "Historie", "assistant" to "Asistent", "taken" to "Užito", "missed" to "Neužito"),
+        "hu" to pack("today" to "Ma", "meds" to "Gyógyszereim", "follow" to "Circle", "history" to "Előzmények", "assistant" to "Asszisztens", "taken" to "Bevéve", "missed" to "Nem vette be"),
+        "id" to pack("today" to "Hari ini", "meds" to "Obat saya", "follow" to "Circle", "history" to "Riwayat", "assistant" to "Asisten", "taken" to "Diminum", "missed" to "Belum diminum"),
+        "vi" to pack("today" to "Hôm nay", "meds" to "Thuốc của tôi", "follow" to "Circle", "history" to "Lịch sử", "assistant" to "Trợ lý", "taken" to "Đã uống", "missed" to "Chưa uống"),
+        "hi" to pack("today" to "आज", "meds" to "मेरी दवाइयाँ", "follow" to "Circle", "history" to "इतिहास", "assistant" to "सहायक", "taken" to "ले लिया", "missed" to "नहीं लिया"),
+        "ja" to pack("today" to "今日", "meds" to "服薬", "follow" to "Circle", "history" to "履歴", "assistant" to "アシスタント", "taken" to "服用済み", "missed" to "未服用"),
+        "ko" to pack("today" to "오늘", "meds" to "내 약", "follow" to "Circle", "history" to "기록", "assistant" to "도우미", "taken" to "복용함", "missed" to "복용 안 함"),
+        "zh" to pack("today" to "今天", "meds" to "我的药物", "follow" to "Circle", "history" to "记录", "assistant" to "助手", "taken" to "已服用", "missed" to "未服用")
     )
-    fun language():String = Locale.getDefault().language.lowercase()
-    fun t(key:String,vararg args:Any):String {
-        val value=packs[language()]?.get(key) ?: en[key] ?: key
-        return if(args.isEmpty()) value else String.format(Locale.getDefault(),value,*args)
+
+    fun language(): String {
+        val code = Locale.getDefault().language.lowercase(Locale.ROOT)
+        return if (packs.containsKey(code)) code else "en"
     }
-    fun speechLocale():String = Locale.getDefault().toLanguageTag()
+
+    fun speechLocale(): String = Locale.getDefault().toLanguageTag()
+
+    fun t(key: String, vararg args: Any): String {
+        var value = packs[language()]?.get(key) ?: en[key] ?: key
+        args.forEachIndexed { index, arg -> value = value.replace("{$index}", arg.toString()) }
+        return value
+    }
 }
