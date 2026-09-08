@@ -17,25 +17,49 @@ import java.util.UUID
 import kotlin.concurrent.thread
 
 object AlarmScheduler {
+    private const val PREFS = "dosefolk_alarm_scheduler"
+    private const val KEY_TIMES = "scheduled_times"
+
     fun scheduleAll(c: Context, meds: List<Medication>) {
+        val p = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val previous = p.getStringSet(KEY_TIMES, emptySet()).orEmpty().toSet()
+        val scheduled = mutableSetOf<String>()
         meds.flatMap { med -> med.times.map { it to med } }
             .groupBy({ it.first }, { it.second })
-            .forEach { (time, list) -> scheduleNextForTime(c, time, list) }
+            .forEach { (time, list) -> if (scheduleNextForTime(c, time, list)) scheduled += time }
+        (previous - scheduled).forEach { cancelGroup(c, it) }
+        p.edit().putStringSet(KEY_TIMES, scheduled).apply()
+    }
+
+    private fun cancelGroup(c: Context, time: String) {
+        val alarmManager = c.getSystemService(AlarmManager::class.java)
+        val intent = Intent(c, AlarmReceiver::class.java)
+        val pendingIntent = PendingIntent.getBroadcast(
+            c,
+            ("group-$time").hashCode(),
+            intent,
+            PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
+        )
+        if (pendingIntent != null) {
+            alarmManager.cancel(pendingIntent)
+            pendingIntent.cancel()
+        }
     }
 
     /** Schedule only the earliest valid program occurrence at this clock time. */
-    private fun scheduleNextForTime(c: Context, time: String, meds: List<Medication>) {
-        val parsed = runCatching { LocalTime.parse(time) }.getOrNull() ?: return
+    private fun scheduleNextForTime(c: Context, time: String, meds: List<Medication>): Boolean {
+        val parsed = runCatching { LocalTime.parse(time) }.getOrNull() ?: return false
         val now = ZonedDateTime.now()
         val candidates = meds.mapNotNull { med ->
             var from = now.toLocalDate()
             if (!from.atTime(parsed).atZone(now.zone).isAfter(now)) from = from.plusDays(1)
             ProgramRuleStore.nextActiveDate(c, med, from)?.let { date -> med to date }
         }
-        val earliest = candidates.minOfOrNull { it.second } ?: return
+        val earliest = candidates.minOfOrNull { it.second } ?: return false
         val due = candidates.filter { it.second == earliest }.map { it.first }
         val trigger = earliest.atTime(parsed).atZone(now.zone).toInstant().toEpochMilli()
         scheduleAt(c, time, due, trigger)
+        return true
     }
 
     private fun scheduleAt(c: Context, time: String, meds: List<Medication>, triggerAtMillis: Long) {
@@ -100,31 +124,55 @@ class ActionReceiver : BroadcastReceiver() {
         val ids = i.getStringExtra("ids")?.split("|#|") ?: emptyList()
         val stored = Store.load(c).associateBy { it.id }
         val resolvedMeds = ids.mapNotNull { stored[it] }.ifEmpty { names.mapIndexed { index, label -> Medication("legacy-$index", label, "", listOf(time)) } }
-        if (action == "snooze") { AlarmScheduler.snoozeGroup(c, time, resolvedMeds, 30); SmartEscalation.schedule(c, time) }
-        else { SmartEscalation.cancel(c, time); CareBatonStore.resolve(c, time) }
+        if (action == "snooze") {
+            SmartEscalation.cancel(c, time)
+            AlarmScheduler.snoozeGroup(c, time, resolvedMeds, 30)
+        } else {
+            SmartEscalation.cancel(c, time)
+            CareBatonStore.resolve(c, time)
+        }
         Ntfy.sendEvent(c, if (action == "snooze") "snoozed" else action, time, resolvedMeds)
     }
 }
 
 class BootReceiver : BroadcastReceiver() {
-    override fun onReceive(c: Context, i: Intent) { AlarmScheduler.scheduleAll(c, Store.load(c)); Ntfy.retryPending(c); SyncEngine.pullOnce(c) }
+    override fun onReceive(c: Context, i: Intent) {
+        AlarmScheduler.scheduleAll(c, Store.load(c))
+        DosefolkSyncScheduler.ensure(c)
+        DosefolkSyncScheduler.kick(c)
+    }
 }
 
 object Ntfy {
     fun sendEvent(c: Context, type: String, time: String, meds: List<Medication>) {
-        val event = DoseEvent(UUID.randomUUID().toString(), type, time, Store.myName(c), Store.topic(c), System.currentTimeMillis(), meds, "pending")
+        val event = DoseEvent(
+            UUID.randomUUID().toString(), type, time, Store.myName(c), Store.topic(c),
+            System.currentTimeMillis(), meds, "pending", EventStore.nextRevision(c)
+        )
         EventStore.append(c, event)
         StockEngine.applyEvent(c, event)
-        deliverEvent(c.applicationContext, event)
+        thread { deliverEventBlocking(c.applicationContext, event) }
+        DosefolkSyncScheduler.kick(c)
     }
-    fun retryPending(c: Context) { EventStore.pending(c).take(100).forEach { deliverEvent(c.applicationContext, it) } }
-    private fun deliverEvent(c: Context, event: DoseEvent) = thread {
+
+    fun retryPending(c: Context) { DosefolkSyncScheduler.kick(c) }
+
+    fun flushPendingBlocking(c: Context): Boolean {
+        val pending = EventStore.pending(c).take(100)
+        if (pending.isEmpty()) return true
+        return pending.map { deliverEventBlocking(c.applicationContext, it) }.all { it }
+    }
+
+    private fun deliverEventBlocking(c: Context, event: DoseEvent): Boolean {
         val payload = EventStore.payload(event).toString()
         val topics = (listOf(Store.topic(c)) + Store.people(c).map { it.topic }).distinct()
         val allDelivered = topics.all { topic -> post(topic, "Dosefolk sync", payload, "min") }
         if (allDelivered) EventStore.markSynced(c, event.eventId)
+        return allDelivered
     }
+
     fun sendTo(topic: String, title: String, message: String) = thread { post(topic, title, message, "high") }
+
     private fun post(topic: String, title: String, message: String, priority: String): Boolean = try {
         val connection = URL("https://ntfy.sh/$topic").openConnection() as HttpURLConnection
         connection.requestMethod="POST";connection.doOutput=true;connection.connectTimeout=10_000;connection.readTimeout=10_000
