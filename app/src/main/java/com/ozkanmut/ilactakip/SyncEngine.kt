@@ -6,6 +6,8 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.net.URL
+import java.time.Instant
+import java.time.ZoneId
 import kotlin.concurrent.thread
 
 object SyncEngine {
@@ -60,7 +62,13 @@ object SyncEngine {
         if(eventId.isBlank()||type.isBlank()||time.isBlank()) return null
         val medsJson=o.optJSONArray("medications")?:JSONArray()
         val meds=(0 until medsJson.length()).mapNotNull{index->medsJson.optJSONObject(index)?.let{med->Medication(med.optString("id"),med.optString("name"),med.optString("dose"),emptyList())}}
-        return DoseEvent(eventId,type,time,o.optString("actor"),o.optString("actorTopic"),o.optLong("timestamp"),meds,"synced",o.optLong("revision",0L))
+        val timestamp = o.optLong("timestamp")
+        val fallbackDate = if (timestamp > 0L) Instant.ofEpochMilli(timestamp).atZone(ZoneId.systemDefault()).toLocalDate().toString() else ""
+        return DoseEvent(
+            eventId, type, time, o.optString("actor"), o.optString("actorTopic"), timestamp,
+            meds, "synced", o.optLong("revision",0L),
+            o.optString("scheduledDate", fallbackDate).ifBlank { fallbackDate }
+        )
     }
 
     private fun applyRemoteState(c: Context, event: DoseEvent) {
@@ -68,7 +76,7 @@ object SyncEngine {
             "care_claimed" -> CareBatonStore.applyRemoteClaim(c,event)
             "care_released" -> CareBatonStore.resolve(c,event.time)
             "taken","missed","conflict_resolved_taken","conflict_resolved_missed" -> { CareBatonStore.resolve(c,event.time); SmartEscalation.cancel(c,event.time) }
-            "snoozed" -> SmartEscalation.schedule(c,event.time)
+            "snoozed" -> SmartEscalation.cancel(c,event.time)
         }
     }
 }
