@@ -1,5 +1,4 @@
 package com.ozkanmut.ilactakip
-
 import android.app.*
 import android.content.*
 import android.os.Build
@@ -11,31 +10,8 @@ import java.net.URL
 import java.time.ZonedDateTime
 import java.util.UUID
 import kotlin.concurrent.thread
-
-object AlarmScheduler {
-    fun scheduleAll(c:Context,meds:List<Medication>){
-        val groups=meds.flatMap{m->m.times.map{it to m}}.groupBy({it.first},{it.second})
-        groups.forEach{(time,list)->schedule(c,time,list,0)}
-    }
-    private fun schedule(c:Context,time:String,meds:List<Medication>,plusMinutes:Long){
-        val am=c.getSystemService(AlarmManager::class.java);val p=time.split(":");val now=ZonedDateTime.now();var next=now.toLocalDate().atTime(p[0].toInt(),p[1].toInt()).atZone(now.zone).plusMinutes(plusMinutes);if(!next.isAfter(now))next=next.plusDays(1)
-        val names=meds.joinToString("|#|"){it.name+(if(it.dose.isBlank())"" else " (${it.dose})")}
-        val i=Intent(c,AlarmReceiver::class.java).putExtra("time",time).putExtra("names",names)
-        val pi=PendingIntent.getBroadcast(c,("group-$time").hashCode(),i,PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        try{am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP,next.toInstant().toEpochMilli(),pi)}catch(_:SecurityException){am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP,next.toInstant().toEpochMilli(),pi)}
-    }
-    fun snoozeGroup(c:Context,time:String,meds:List<Medication>,minutes:Int){schedule(c,time,meds,minutes.toLong())}
-}
-
-class AlarmReceiver:BroadcastReceiver(){override fun onReceive(c:Context,i:Intent){val time=i.getStringExtra("time")?:return;val names=i.getStringExtra("names")?.split("|#|")?:return;val channel="medication";val nm=c.getSystemService(NotificationManager::class.java);if(Build.VERSION.SDK_INT>=26)nm.createNotificationChannel(NotificationChannel(channel,"İlaç hatırlatmaları",NotificationManager.IMPORTANCE_HIGH))
-    fun action(a:String)=PendingIntent.getBroadcast(c,(time+a).hashCode(),Intent(c,ActionReceiver::class.java).putExtra("action",a).putExtra("time",time).putExtra("names",names.joinToString("|#|")),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-    val text=names.joinToString(", ");val n=NotificationCompat.Builder(c,channel).setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("$time • ${names.size} ilaç").setContentText(text).setStyle(NotificationCompat.BigTextStyle().bigText(text)).setPriority(NotificationCompat.PRIORITY_MAX).setAutoCancel(true).addAction(0,"Hepsini içtim",action("taken")).addAction(0,"30 dk ertele",action("snooze")).addAction(0,"İçilmedi",action("missed")).build();nm.notify(("group-$time").hashCode(),n);Ntfy.sendEvent(c,"alarm",time,names.mapIndexed{x,s->Medication(x.toString(),s,"",listOf(time))});AlarmScheduler.scheduleAll(c,Store.load(c))}}
-
+object AlarmScheduler{fun scheduleAll(c:Context,meds:List<Medication>){meds.flatMap{m->m.times.map{it to m}}.groupBy({it.first},{it.second}).forEach{(t,l)->schedule(c,t,l,0)}};private fun schedule(c:Context,time:String,meds:List<Medication>,plusMinutes:Long){val am=c.getSystemService(AlarmManager::class.java);val p=time.split(":");val now=ZonedDateTime.now();var next=now.toLocalDate().atTime(p[0].toInt(),p[1].toInt()).atZone(now.zone).plusMinutes(plusMinutes);if(!next.isAfter(now))next=next.plusDays(1);val names=meds.joinToString("|#|"){it.name+(if(it.dose.isBlank())"" else " (${it.dose})")};val i=Intent(c,AlarmReceiver::class.java).putExtra("time",time).putExtra("names",names);val pi=PendingIntent.getBroadcast(c,("group-$time").hashCode(),i,PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE);try{am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP,next.toInstant().toEpochMilli(),pi)}catch(_:SecurityException){am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP,next.toInstant().toEpochMilli(),pi)}};fun snoozeGroup(c:Context,time:String,meds:List<Medication>,minutes:Int){schedule(c,time,meds,minutes.toLong())}}
+class AlarmReceiver:BroadcastReceiver(){override fun onReceive(c:Context,i:Intent){val time=i.getStringExtra("time")?:return;val names=i.getStringExtra("names")?.split("|#|")?:return;val channel="medication";val nm=c.getSystemService(NotificationManager::class.java);if(Build.VERSION.SDK_INT>=26)nm.createNotificationChannel(NotificationChannel(channel,I18n.t("channel"),NotificationManager.IMPORTANCE_HIGH));fun action(a:String)=PendingIntent.getBroadcast(c,(time+a).hashCode(),Intent(c,ActionReceiver::class.java).putExtra("action",a).putExtra("time",time).putExtra("names",names.joinToString("|#|")),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE);val text=names.joinToString(", ");val n=NotificationCompat.Builder(c,channel).setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("$time • ${I18n.t("med_count",names.size)}").setContentText(text).setStyle(NotificationCompat.BigTextStyle().bigText(text)).setPriority(NotificationCompat.PRIORITY_MAX).setAutoCancel(true).addAction(0,I18n.t("all_taken"),action("taken")).addAction(0,I18n.t("snooze30"),action("snooze")).addAction(0,I18n.t("notif_missed"),action("missed")).build();nm.notify(("group-$time").hashCode(),n);Ntfy.sendEvent(c,"alarm",time,names.mapIndexed{x,s->Medication(x.toString(),s,"",listOf(time))});AlarmScheduler.scheduleAll(c,Store.load(c))}}
 class ActionReceiver:BroadcastReceiver(){override fun onReceive(c:Context,i:Intent){val a=i.getStringExtra("action")?:return;val time=i.getStringExtra("time")?:return;val names=i.getStringExtra("names")?.split("|#|")?:emptyList();val meds=Store.load(c).filter{time in it.times};if(a=="snooze")AlarmScheduler.snoozeGroup(c,time,meds,30);Ntfy.sendEvent(c,if(a=="snooze")"snoozed" else a,time,meds.ifEmpty{names.mapIndexed{x,s->Medication(x.toString(),s,"",listOf(time))}})}}
 class BootReceiver:BroadcastReceiver(){override fun onReceive(c:Context,i:Intent){AlarmScheduler.scheduleAll(c,Store.load(c))}}
-
-object Ntfy {
-    fun sendEvent(c:Context,type:String,time:String,meds:List<Medication>){val o=JSONObject().put("v",2).put("eventId",UUID.randomUUID().toString()).put("type",type).put("time",time).put("actor",Store.myName(c)).put("actorTopic",Store.topic(c)).put("timestamp",System.currentTimeMillis()).put("medications",JSONArray(meds.map{JSONObject().put("id",it.id).put("name",it.name).put("dose",it.dose)}));sendTo(Store.topic(c),title(type),o.toString());Store.people(c).forEach{sendTo(it.topic,title(type),o.toString())}}
-    private fun title(t:String)=when(t){"taken"->"İLAÇLAR İÇİLDİ";"missed"->"İLAÇLAR İÇİLMEDİ";"snoozed"->"30 DK ERTELENDİ";else->"İLAÇ SAATİ"}
-    fun sendTo(topic:String,title:String,message:String)=thread{try{val x=URL("https://ntfy.sh/$topic").openConnection() as HttpURLConnection;x.requestMethod="POST";x.doOutput=true;x.setRequestProperty("Title",title);x.setRequestProperty("Priority","high");x.setRequestProperty("Content-Type","application/json; charset=utf-8");x.outputStream.use{it.write(message.toByteArray())};x.inputStream.close();x.disconnect()}catch(_:Exception){}}
-}
+object Ntfy{fun sendEvent(c:Context,type:String,time:String,meds:List<Medication>){val o=JSONObject().put("v",2).put("eventId",UUID.randomUUID().toString()).put("type",type).put("time",time).put("actor",Store.myName(c)).put("actorTopic",Store.topic(c)).put("timestamp",System.currentTimeMillis()).put("medications",JSONArray(meds.map{JSONObject().put("id",it.id).put("name",it.name).put("dose",it.dose)}));sendTo(Store.topic(c),title(type),o.toString());Store.people(c).forEach{sendTo(it.topic,title(type),o.toString())}};private fun title(t:String)=when(t){"taken"->I18n.t("event_taken");"missed"->I18n.t("event_missed");"snoozed"->I18n.t("event_snoozed");else->I18n.t("event_alarm")};fun sendTo(topic:String,title:String,message:String)=thread{try{val x=URL("https://ntfy.sh/$topic").openConnection() as HttpURLConnection;x.requestMethod="POST";x.doOutput=true;x.setRequestProperty("Title",title);x.setRequestProperty("Priority","high");x.setRequestProperty("Content-Type","text/plain; charset=utf-8");x.outputStream.use{it.write(message.toByteArray())};x.inputStream.close();x.disconnect()}catch(_:Exception){}}}
