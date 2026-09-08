@@ -35,6 +35,8 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
             notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
+        Ntfy.retryPending(this)
+        SyncEngine.pullOnce(this)
         setContent { MaterialTheme(colorScheme = lightColorScheme()) { MedicationApp(this) } }
     }
 }
