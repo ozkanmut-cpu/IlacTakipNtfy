@@ -168,10 +168,19 @@ object Ntfy {
 
     private fun deliverEventBlocking(c: Context, event: DoseEvent): Boolean {
         val payload = EventStore.payload(event).toString()
-        val topics = (listOf(Store.topic(c)) + Store.people(c).map { it.topic }).distinct()
-        val allDelivered = topics.all { topic -> post(topic, "Dosefolk sync", payload, "min") }
-        if (allDelivered) EventStore.markSynced(c, event.eventId)
-        return allDelivered
+        val topics = (listOf(Store.topic(c)) + Store.people(c).map { it.topic }).filter { it.isNotBlank() }.distinct()
+        var allDelivered = true
+        topics.forEach { topic ->
+            if (DeliveryLedger.delivered(c, event.eventId, topic)) return@forEach
+            val ok = post(topic, "Dosefolk sync", payload, "min")
+            if (ok) DeliveryLedger.markDelivered(c, event.eventId, topic) else allDelivered = false
+        }
+        if (allDelivered && topics.all { DeliveryLedger.delivered(c, event.eventId, it) }) {
+            EventStore.markSynced(c, event.eventId)
+            DeliveryLedger.clearEvent(c, event.eventId)
+            return true
+        }
+        return false
     }
 
     fun sendTo(topic: String, title: String, message: String) = thread { post(topic, title, message, "high") }
