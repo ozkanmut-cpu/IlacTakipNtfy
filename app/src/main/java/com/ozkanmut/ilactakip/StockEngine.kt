@@ -30,7 +30,6 @@ object StockEngine {
         save(c, listOf(stock) + load(c).filterNot { it.medicationId == medication.id })
     }
 
-    /** One-tap New Box: only works after pack size was explicitly configured. */
     @Synchronized
     fun openNewBox(c: Context, medicationId: String): MedicationStock? {
         val current = forMedication(c, medicationId) ?: return null
@@ -44,12 +43,15 @@ object StockEngine {
     /** Idempotent across devices: an event ID can reduce stock only once on this device. */
     @Synchronized
     fun applyEvent(c: Context, event: DoseEvent) {
-        if (event.type != "taken" || alreadyProcessed(c, event.eventId)) return
+        if (event.type !in setOf("taken", "prn_taken") || alreadyProcessed(c, event.eventId)) return
         val current = load(c).associateBy { it.medicationId }.toMutableMap()
         var changed = false
         event.medications.distinctBy { it.id }.forEach { med ->
             val stock = current[med.id] ?: return@forEach
-            current[med.id] = stock.copy(remainingDoses = (stock.remainingDoses - 1).coerceAtLeast(0), updatedAt = event.timestamp)
+            current[med.id] = stock.copy(
+                remainingDoses = (stock.remainingDoses - 1).coerceAtLeast(0),
+                updatedAt = event.timestamp
+            )
             changed = true
         }
         if (changed) save(c, current.values.toList())
