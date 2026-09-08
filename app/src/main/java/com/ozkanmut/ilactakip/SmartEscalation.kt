@@ -11,29 +11,41 @@ import java.time.LocalDate
  * Quiet-success escalation policy.
  * Stage 0: first Circle member after 10 minutes.
  * Stage 1: second Circle member after 25 minutes.
- * Any resolved dose or active Care Baton suppresses escalation.
+ * Resolution cancels the chain. An active Care Baton defers, rather than
+ * consumes, the escalation so attention resumes if the baton expires unresolved.
  */
 object SmartEscalation {
     private const val FIRST_DELAY_MIN = 10L
     private const val SECOND_DELAY_MIN = 25L
+    private const val BATON_GRACE_MS = 5_000L
 
     fun schedule(c: Context, time: String) {
-        cancel(c, time)
-        scheduleStage(c, time, 0, FIRST_DELAY_MIN)
-        scheduleStage(c, time, 1, SECOND_DELAY_MIN)
+        cancelAlarms(c, time)
+        AttentionBudget.clear(c, time)
+        scheduleStage(c, time, 0, System.currentTimeMillis() + FIRST_DELAY_MIN * 60_000L)
+        scheduleStage(c, time, 1, System.currentTimeMillis() + SECOND_DELAY_MIN * 60_000L)
     }
 
     fun cancel(c: Context, time: String) {
-        val alarmManager = c.getSystemService(AlarmManager::class.java)
-        for (stage in 0..1) {
-            alarmManager.cancel(pendingIntent(c, time, stage))
-        }
+        cancelAlarms(c, time)
         AttentionBudget.clear(c, time)
     }
 
-    private fun scheduleStage(c: Context, time: String, stage: Int, delayMinutes: Long) {
+    fun deferUntil(c: Context, time: String, expiresAt: Long) {
+        cancelAlarms(c, time)
+        val base = maxOf(System.currentTimeMillis(), expiresAt) + BATON_GRACE_MS
+        val people = Store.people(c)
+        if (people.isNotEmpty()) scheduleStage(c, time, 0, base)
+        if (people.size > 1) scheduleStage(c, time, 1, base + 15 * 60_000L)
+    }
+
+    private fun cancelAlarms(c: Context, time: String) {
         val alarmManager = c.getSystemService(AlarmManager::class.java)
-        val trigger = System.currentTimeMillis() + delayMinutes * 60_000L
+        for (stage in 0..1) alarmManager.cancel(pendingIntent(c, time, stage))
+    }
+
+    private fun scheduleStage(c: Context, time: String, stage: Int, trigger: Long) {
+        val alarmManager = c.getSystemService(AlarmManager::class.java)
         val pi = pendingIntent(c, time, stage)
         try {
             alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pi)
@@ -59,28 +71,41 @@ class EscalationReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
         val time = i.getStringExtra("time") ?: return
         val stage = i.getIntExtra("stage", 0)
+        val pendingResult = goAsync()
+        Thread {
+            try {
+                // Pull synchronously before deciding. The previous asynchronous pull could
+                // escalate against stale local state even though another device resolved it.
+                SyncEngine.pullBlocking(c.applicationContext)
+                val state = DoseStateEngine.stateForTime(c, time)
+                val unresolved = state.status == DoseSessionStatus.PENDING ||
+                    state.status == DoseSessionStatus.SNOOZED ||
+                    state.status == DoseSessionStatus.CONFLICT
+                if (!unresolved) return@Thread
 
-        SyncEngine.pullOnce(c)
-        val state = DoseStateEngine.stateForTime(c, time)
-        val unresolved = state.status == DoseSessionStatus.PENDING ||
-            state.status == DoseSessionStatus.SNOOZED ||
-            state.status == DoseSessionStatus.CONFLICT
-        if (!unresolved) return
-        if (CareBatonStore.active(c, time) != null) return
+                val baton = CareBatonStore.active(c, time)
+                if (baton != null) {
+                    SmartEscalation.deferUntil(c, time, baton.expiresAt)
+                    return@Thread
+                }
 
-        val people = Store.people(c)
-        val target = people.getOrNull(stage) ?: return
-        if (!AttentionBudget.allow(c, time, target.topic, stage)) return
+                val people = Store.people(c)
+                val target = people.getOrNull(stage) ?: return@Thread
+                if (!AttentionBudget.allow(c, time, target.topic, stage)) return@Thread
 
-        val medNames = state.medications.joinToString(", ") { it.name }
-        val title = if (I18n.language() == "tr") "Dosefolk • ilgilenme gerekiyor" else "Dosefolk • attention needed"
-        val body = if (I18n.language() == "tr") {
-            if (medNames.isBlank()) "$time ilaç kaydı hâlâ açık." else "$time • $medNames hâlâ açık."
-        } else {
-            if (medNames.isBlank()) "The $time medication session is still unresolved." else "$time • $medNames is still unresolved."
-        }
-        Ntfy.sendTo(target.topic, title, body)
-        AttentionBudget.mark(c, time, target.topic, stage)
+                val medNames = state.medications.joinToString(", ") { it.name }
+                val title = if (I18n.language() == "tr") "Dosefolk • ilgilenme gerekiyor" else "Dosefolk • attention needed"
+                val body = if (I18n.language() == "tr") {
+                    if (medNames.isBlank()) "$time ilaç kaydı hâlâ açık." else "$time • $medNames hâlâ açık."
+                } else {
+                    if (medNames.isBlank()) "The $time medication session is still unresolved." else "$time • $medNames is still unresolved."
+                }
+                Ntfy.sendTo(target.topic, title, body)
+                AttentionBudget.mark(c, time, target.topic, stage)
+            } finally {
+                pendingResult.finish()
+            }
+        }.start()
     }
 }
 
