@@ -51,6 +51,22 @@ object CareBatonStore {
     }
 
     @Synchronized
+    fun applyRemoteClaim(c: Context, event: DoseEvent) {
+        cleanup(c)
+        val claim = CareBatonClaim(
+            doseKey = doseKey(event.time),
+            time = event.time,
+            actor = event.actor,
+            actorTopic = event.actorTopic,
+            claimedAt = event.timestamp,
+            expiresAt = event.timestamp + DEFAULT_MINUTES * 60_000L
+        )
+        if (claim.expiresAt <= System.currentTimeMillis()) return
+        val remaining = load(c).filterNot { it.doseKey == claim.doseKey }
+        save(c, listOf(claim) + remaining)
+    }
+
+    @Synchronized
     fun release(c: Context, time: String) {
         val key = doseKey(time)
         save(c, load(c).filterNot { it.doseKey == key })
