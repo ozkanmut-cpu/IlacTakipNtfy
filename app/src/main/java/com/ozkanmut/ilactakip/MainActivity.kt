@@ -95,6 +95,7 @@ private fun ui(tr:String,en:String)=if(I18n.language()=="tr")tr else en
  val unresolved=remember(refresh){CircleState.unresolved(c)}
  LazyColumn(Modifier.fillMaxSize().padding(16.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
   item{Text("Circle",style=MaterialTheme.typography.headlineSmall,fontWeight=FontWeight.Bold);Text(ui("Sorunlar önce görünür. Açıkken Circle otomatik güncellenir.","Problems appear first. Circle refreshes automatically while open."))}
+  item{CircleReliabilityCard(c,people,refresh){refresh++}}
   if(unresolved.isEmpty())item{Card(Modifier.fillMaxWidth()){Column(Modifier.padding(18.dp)){Text("✓ ${I18n.t("all_good")}",fontWeight=FontWeight.Bold)}}}
   items(unresolved,key={it.eventId}){event->
    val claim=CareBatonStore.active(c,event.time);val state=DoseStateEngine.stateForTime(c,event.time)
