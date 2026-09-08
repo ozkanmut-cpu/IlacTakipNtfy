@@ -27,6 +27,17 @@ object DosefolkCheck {
     fun issues(context: Context): List<DosefolkIssue> {
         val result = mutableListOf<DosefolkIssue>()
 
+        TravelGuard.pendingNotice(context)?.let { notice ->
+            result += DosefolkIssue(
+                id = "travel_timezone",
+                title = tr("Saat dilimi değişti", "Timezone changed"),
+                detail = tr(
+                    "${notice.fromZone} → ${notice.toZone}. Dosefolk yeni saat diliminde alarmları yeniden kurdu; ilaç saatlerinin yerel saate göre devam etmesinin doğru olduğunu kontrol et.",
+                    "${notice.fromZone} → ${notice.toZone}. Dosefolk rebuilt alarms in the new timezone; verify that continuing on local clock time is correct for this regimen."
+                )
+            ) { c -> TravelGuard.acknowledge(c) }
+        }
+
         if (Build.VERSION.SDK_INT >= 33 &&
             context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         ) {
