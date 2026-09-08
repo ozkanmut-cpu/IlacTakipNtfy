@@ -6,16 +6,17 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -25,21 +26,19 @@ import java.time.Instant
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
-/**
- * Compact, problem-oriented Circle controls. These stay silent unless useful.
- */
+/** Compact, problem-oriented Circle controls. These stay quiet unless useful. */
 @Composable
 fun CircleReliabilityCard(c: Context, people: List<Person>, externalRefresh: Int, onChanged: () -> Unit) {
     var localRefresh by remember { mutableIntStateOf(0) }
+    var showDigest by remember { mutableStateOf(false) }
     val active = remember(externalRefresh, localRefresh) { TemporaryCareStore.active(c) }
     val receipt = remember(externalRefresh, localRefresh) { OfflineTrustReceipt.snapshot(c) }
+    val digest = remember(externalRefresh, localRefresh) { CareInsights.handover(c, 12) }
+    val drift = remember(externalRefresh, localRefresh) { CareInsights.regimenDrift(c, 7) }
 
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Text(
-                if (I18n.language() == "tr") "Bakım ve güven" else "Care & trust",
-                fontWeight = FontWeight.Bold
-            )
+            Text(if (I18n.language() == "tr") "Bakım ve güven" else "Care & trust", fontWeight = FontWeight.Bold)
 
             if (active != null) {
                 val remainingMinutes = ((active.endsAt - System.currentTimeMillis()).coerceAtLeast(0L) / 60_000L)
@@ -50,18 +49,10 @@ fun CircleReliabilityCard(c: Context, people: List<Person>, externalRefresh: Int
                         "${active.personName} is temporarily first responder • ${formatDuration(remainingMinutes)} left"
                 )
                 OutlinedButton(onClick = {
-                    TemporaryCareStore.clear(c)
-                    localRefresh++
-                    onChanged()
-                }) {
-                    Text(if (I18n.language() == "tr") "Geçici bakımı bitir" else "End temporary care")
-                }
+                    TemporaryCareStore.clear(c); localRefresh++; onChanged()
+                }) { Text(if (I18n.language() == "tr") "Geçici bakımı bitir" else "End temporary care") }
             } else if (people.isNotEmpty()) {
-                Text(
-                    if (I18n.language() == "tr") "Geçici bakım" else "Temporary care",
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = FontWeight.Bold
-                )
+                Text(if (I18n.language() == "tr") "Geçici bakım" else "Temporary care", fontWeight = FontWeight.Bold)
                 Text(
                     if (I18n.language() == "tr")
                         "Bir kişiyi kısa süreliğine ilk uyarılacak kişi yap. İlaç programı değişmez."
@@ -72,22 +63,13 @@ fun CircleReliabilityCard(c: Context, people: List<Person>, externalRefresh: Int
                 people.take(3).forEach { person ->
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         Button(onClick = {
-                            TemporaryCareStore.start(c, person, 24)
-                            localRefresh++
-                            onChanged()
-                        }) {
-                            Text(
-                                if (I18n.language() == "tr") "${person.name} • 24 sa" else "${person.name} • 24h"
-                            )
-                        }
+                            TemporaryCareStore.start(c, person, 24); localRefresh++; onChanged()
+                        }) { Text(if (I18n.language() == "tr") "${person.name} • 24 sa" else "${person.name} • 24h") }
                     }
                 }
             }
 
-            Text(
-                if (I18n.language() == "tr") "Offline Trust Receipt" else "Offline Trust Receipt",
-                fontWeight = FontWeight.Bold
-            )
+            Text("Offline Trust Receipt", fontWeight = FontWeight.Bold)
             if (receipt.lastSuccessfulSync == 0L) {
                 Text(
                     if (I18n.language() == "tr")
@@ -97,23 +79,14 @@ fun CircleReliabilityCard(c: Context, people: List<Person>, externalRefresh: Int
                 )
             } else {
                 Text(
-                    if (I18n.language() == "tr")
-                        "Son başarılı senkron: ${formatTime(receipt.lastSuccessfulSync)}"
-                    else
-                        "Last successful sync: ${formatTime(receipt.lastSuccessfulSync)}"
+                    if (I18n.language() == "tr") "Son başarılı senkron: ${formatTime(receipt.lastSuccessfulSync)}"
+                    else "Last successful sync: ${formatTime(receipt.lastSuccessfulSync)}"
                 )
             }
             when {
                 receipt.pendingEvents > 0 -> AssistChip(
                     onClick = { DosefolkSyncScheduler.kick(c) },
-                    label = {
-                        Text(
-                            if (I18n.language() == "tr")
-                                "${receipt.pendingEvents} kayıt telefonda güvende, gönderim bekliyor"
-                            else
-                                "${receipt.pendingEvents} record(s) safe on phone, waiting to send"
-                        )
-                    }
+                    label = { Text(if (I18n.language() == "tr") "${receipt.pendingEvents} kayıt telefonda güvende, gönderim bekliyor" else "${receipt.pendingEvents} record(s) safe on phone, waiting to send") }
                 )
                 receipt.lastSuccessfulSync > 0L -> Text(
                     if (I18n.language() == "tr") "✓ Circle ile senkronize" else "✓ Synced with Circle",
@@ -122,10 +95,50 @@ fun CircleReliabilityCard(c: Context, people: List<Person>, externalRefresh: Int
             }
             receipt.latestLocalEventAt?.let { at ->
                 Text(
+                    if (I18n.language() == "tr") "Son yerel kayıt: ${formatTime(at)} • cihazda kalıcı olarak saklandı"
+                    else "Latest local record: ${formatTime(at)} • durably stored on device",
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
+
+            TextButton(onClick = { showDigest = !showDigest }) {
+                Text(if (I18n.language() == "tr") "${if (showDigest) "Gizle" else "Son 12 saatin özeti"}" else if (showDigest) "Hide handover" else "Last 12h handover")
+            }
+            if (showDigest) {
+                Text(if (I18n.language() == "tr") "Bakım devri özeti" else "Handover digest", fontWeight = FontWeight.Bold)
+                Text(
                     if (I18n.language() == "tr")
-                        "Son yerel kayıt: ${formatTime(at)} • cihazda kalıcı olarak saklandı"
+                        "İçildi ${digest.taken} • İçilmedi ${digest.missed} • Ertelendi ${digest.snoozed} • Açık ${digest.unresolvedNow}"
                     else
-                        "Latest local record: ${formatTime(at)} • durably stored on device",
+                        "Taken ${digest.taken} • Missed ${digest.missed} • Snoozed ${digest.snoozed} • Open ${digest.unresolvedNow}"
+                )
+                if (digest.conflicts > 0) Text(if (I18n.language() == "tr") "⚠ ${digest.conflicts} çelişkili kayıt" else "⚠ ${digest.conflicts} conflicting record(s)")
+                digest.recentLines.forEach { Text("• $it", style = MaterialTheme.typography.bodySmall) }
+            }
+
+            if (drift.isNotEmpty()) {
+                Text(if (I18n.language() == "tr") "Program sürtünmesi" else "Regimen friction", fontWeight = FontWeight.Bold)
+                drift.take(3).forEach { item ->
+                    val detail = if (I18n.language() == "tr") {
+                        buildString {
+                            append(item.time)
+                            if (item.snoozedDays > 0) append(" • son 7 günde ${item.snoozedDays} gün ertelendi")
+                            if (item.missedDays > 0) append(" • ${item.missedDays} gün içilmedi")
+                        }
+                    } else {
+                        buildString {
+                            append(item.time)
+                            if (item.snoozedDays > 0) append(" • snoozed on ${item.snoozedDays} of the last 7 days")
+                            if (item.missedDays > 0) append(" • missed on ${item.missedDays} days")
+                        }
+                    }
+                    Text(detail)
+                }
+                Text(
+                    if (I18n.language() == "tr")
+                        "Dosefolk yalnızca tekrar eden kullanım desenini gösterir; programı kendiliğinden değiştirmez."
+                    else
+                        "Dosefolk only surfaces the repeated pattern; it never changes the medication schedule automatically.",
                     style = MaterialTheme.typography.bodySmall
                 )
             }
