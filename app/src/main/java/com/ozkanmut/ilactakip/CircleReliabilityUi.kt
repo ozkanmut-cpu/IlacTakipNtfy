@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
@@ -35,6 +36,7 @@ fun CircleReliabilityCard(c: Context, people: List<Person>, externalRefresh: Int
     val receipt = remember(externalRefresh, localRefresh) { OfflineTrustReceipt.snapshot(c) }
     val digest = remember(externalRefresh, localRefresh) { CareInsights.handover(c, 12) }
     val drift = remember(externalRefresh, localRefresh) { CareInsights.regimenDrift(c, 7) }
+    val confidence = remember(externalRefresh, localRefresh) { DoseConfidenceEngine.recent(c, 7) }
 
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -100,6 +102,25 @@ fun CircleReliabilityCard(c: Context, people: List<Person>, externalRefresh: Int
                     style = MaterialTheme.typography.bodySmall
                 )
             }
+
+            Text(if (I18n.language() == "tr") "Doz güveni" else "Dose confidence", fontWeight = FontWeight.Bold)
+            LinearProgressIndicator(
+                progress = { confidence.average.coerceIn(0, 100) / 100f },
+                modifier = Modifier.fillMaxWidth()
+            )
+            Text(
+                if (I18n.language() == "tr")
+                    "Son 7 gün kayıt güveni: %${confidence.average}${if (confidence.uncertainCount > 0) " • ${confidence.uncertainCount} belirsiz oturum" else ""}"
+                else
+                    "Last 7 days record confidence: ${confidence.average}%${if (confidence.uncertainCount > 0) " • ${confidence.uncertainCount} uncertain session(s)" else ""}"
+            )
+            Text(
+                if (I18n.language() == "tr")
+                    "Bu puan yalnızca kayıt kanıtının netliğini gösterir; tıbbi değerlendirme değildir."
+                else
+                    "This score only reflects certainty of the recorded evidence; it is not a medical assessment.",
+                style = MaterialTheme.typography.bodySmall
+            )
 
             TextButton(onClick = { showDigest = !showDigest }) {
                 Text(if (I18n.language() == "tr") "${if (showDigest) "Gizle" else "Son 12 saatin özeti"}" else if (showDigest) "Hide handover" else "Last 12h handover")
