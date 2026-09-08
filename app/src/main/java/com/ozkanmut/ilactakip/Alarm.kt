@@ -11,7 +11,10 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import java.net.HttpURLConnection
 import java.net.URL
+import java.time.Instant
+import java.time.LocalDate
 import java.time.LocalTime
+import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.util.UUID
 import kotlin.concurrent.thread
@@ -60,11 +63,11 @@ object AlarmScheduler {
         val earliest = candidates.minOfOrNull { it.second } ?: return false
         val due = candidates.filter { it.second == earliest }.map { it.first }
         val trigger = earliest.atTime(parsed).atZone(now.zone).toInstant().toEpochMilli()
-        scheduleAt(c, time, due, trigger, "group-$time", false)
+        scheduleAt(c, time, due, trigger, "group-$time", false, earliest.toString())
         return true
     }
 
-    private fun scheduleAt(c: Context, time: String, meds: List<Medication>, triggerAtMillis: Long, requestKey: String, isSnooze: Boolean) {
+    private fun scheduleAt(c: Context, time: String, meds: List<Medication>, triggerAtMillis: Long, requestKey: String, isSnooze: Boolean, scheduledDate: String) {
         if (meds.isEmpty()) return
         val alarmManager = c.getSystemService(AlarmManager::class.java)
         val names = meds.joinToString("|#|") { med -> med.name + if (med.dose.isBlank()) "" else " (${med.dose})" }
@@ -74,14 +77,15 @@ object AlarmScheduler {
             .putExtra("names", names)
             .putExtra("ids", ids)
             .putExtra("isSnooze", isSnooze)
+            .putExtra("scheduledDate", scheduledDate)
         val pendingIntent = PendingIntent.getBroadcast(c, requestKey.hashCode(), intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         try { alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent) }
         catch (_: SecurityException) { alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent) }
     }
 
-    fun snoozeGroup(c: Context, time: String, meds: List<Medication>, minutes: Int) {
+    fun snoozeGroup(c: Context, time: String, meds: List<Medication>, minutes: Int, scheduledDate: String = LocalDate.now().toString()) {
         val trigger = System.currentTimeMillis() + minutes.coerceAtLeast(1) * 60_000L
-        scheduleAt(c, time, meds, trigger, "snooze-$time", true)
+        scheduleAt(c, time, meds, trigger, "snooze-$time", true, scheduledDate)
     }
 }
 
@@ -90,12 +94,18 @@ class AlarmReceiver : BroadcastReceiver() {
         val time = i.getStringExtra("time") ?: return
         val names = i.getStringExtra("names")?.split("|#|") ?: return
         val ids = i.getStringExtra("ids")?.split("|#|") ?: emptyList()
+        val scheduledDate = i.getStringExtra("scheduledDate") ?: LocalDate.now().toString()
         val channel = "medication"
         val notificationManager = c.getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= 26) notificationManager.createNotificationChannel(NotificationChannel(channel, I18n.t("channel"), NotificationManager.IMPORTANCE_HIGH))
         fun action(actionName: String): PendingIntent = PendingIntent.getBroadcast(
-            c,(time+actionName).hashCode(),
-            Intent(c,ActionReceiver::class.java).putExtra("action",actionName).putExtra("time",time).putExtra("names",names.joinToString("|#|")).putExtra("ids",ids.joinToString("|#|")),
+            c,("$scheduledDate|$time|$actionName").hashCode(),
+            Intent(c,ActionReceiver::class.java)
+                .putExtra("action",actionName)
+                .putExtra("time",time)
+                .putExtra("names",names.joinToString("|#|"))
+                .putExtra("ids",ids.joinToString("|#|"))
+                .putExtra("scheduledDate",scheduledDate),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val text = names.joinToString(", ")
@@ -110,10 +120,10 @@ class AlarmReceiver : BroadcastReceiver() {
             .addAction(0,I18n.t("snooze30"),action("snooze"))
             .addAction(0,I18n.t("notif_missed"),action("missed"))
             .build()
-        notificationManager.notify(("group-$time").hashCode(), notification)
+        notificationManager.notify(("group-$scheduledDate-$time").hashCode(), notification)
         val stored = Store.load(c).associateBy { it.id }
         val alarmMeds = ids.mapNotNull { stored[it] }.ifEmpty { names.mapIndexed { index, label -> Medication("legacy-$index", label, "", listOf(time)) } }
-        Ntfy.sendEvent(c, "alarm", time, alarmMeds)
+        Ntfy.sendEvent(c, "alarm", time, alarmMeds, scheduledDate)
         SmartEscalation.schedule(c, time)
         AlarmScheduler.scheduleAll(c, Store.load(c))
     }
@@ -123,12 +133,13 @@ class ActionReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
         val action = i.getStringExtra("action") ?: return
         val time = i.getStringExtra("time") ?: return
+        val scheduledDate = i.getStringExtra("scheduledDate") ?: LocalDate.now().toString()
         val names = i.getStringExtra("names")?.split("|#|") ?: emptyList()
         val ids = i.getStringExtra("ids")?.split("|#|") ?: emptyList()
         val stored = Store.load(c).associateBy { it.id }
         val resolvedMeds = ids.mapNotNull { stored[it] }.ifEmpty { names.mapIndexed { index, label -> Medication("legacy-$index", label, "", listOf(time)) } }
-        if (action == "snooze") AlarmScheduler.snoozeGroup(c, time, resolvedMeds, 30)
-        Ntfy.sendEvent(c, if (action == "snooze") "snoozed" else action, time, resolvedMeds)
+        if (action == "snooze") AlarmScheduler.snoozeGroup(c, time, resolvedMeds, 30, scheduledDate)
+        Ntfy.sendEvent(c, if (action == "snooze") "snoozed" else action, time, resolvedMeds, scheduledDate)
     }
 }
 
@@ -145,7 +156,7 @@ class BootReceiver : BroadcastReceiver() {
 object Ntfy {
     private val terminalTypes = setOf("taken", "missed", "conflict_resolved_taken", "conflict_resolved_missed")
 
-    fun sendEvent(c: Context, type: String, time: String, meds: List<Medication>) {
+    fun sendEvent(c: Context, type: String, time: String, meds: List<Medication>, scheduledDate: String = LocalDate.now().toString()) {
         when {
             type in terminalTypes -> {
                 AlarmScheduler.cancelSnooze(c, time)
@@ -157,7 +168,7 @@ object Ntfy {
 
         val event = DoseEvent(
             UUID.randomUUID().toString(), type, time, Store.myName(c), Store.topic(c),
-            System.currentTimeMillis(), meds, "pending", EventStore.nextRevision(c)
+            System.currentTimeMillis(), meds, "pending", EventStore.nextRevision(c), scheduledDate
         )
         EventStore.append(c, event)
         StockEngine.applyEvent(c, event)
