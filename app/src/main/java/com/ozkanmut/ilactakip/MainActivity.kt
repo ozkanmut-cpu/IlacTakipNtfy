@@ -55,12 +55,13 @@ private fun ui(tr:String,en:String)=if(I18n.language()=="tr")tr else en
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable fun MedicationApp(context:Context){
- var tab by remember{mutableIntStateOf(0)};var meds by remember{mutableStateOf(Store.load(context))};var people by remember{mutableStateOf(Store.people(context))};var manageMeds by remember{mutableStateOf(false)};var addMed by remember{mutableStateOf(false)};var history by remember{mutableStateOf(false)};var stock by remember{mutableStateOf(false)}
+ var tab by remember{mutableIntStateOf(0)};var meds by remember{mutableStateOf(Store.load(context))};var people by remember{mutableStateOf(Store.people(context))};var manageMeds by remember{mutableStateOf(false)};var addMed by remember{mutableStateOf(false)};var history by remember{mutableStateOf(false)};var stock by remember{mutableStateOf(false)};var prn by remember{mutableStateOf(false)}
  val labels=listOf(I18n.t("today"),I18n.t("follow"),I18n.t("assistant"));val icons=listOf("⌂","♥","🎙")
- Scaffold(topBar={TopAppBar(title={Column{Text(I18n.t("app"),fontWeight=FontWeight.Bold);Text(if(tab==2)I18n.t("manage_voice") else I18n.t("today_plan"),style=MaterialTheme.typography.bodySmall)}},actions={if(tab==0){TextButton(onClick={stock=true}){Text(ui("Stok","Stock"))};TextButton(onClick={history=true}){Text(I18n.t("history"))};TextButton(onClick={manageMeds=true}){Text(I18n.t("meds"))}}})},bottomBar={NavigationBar{labels.forEachIndexed{i,s->NavigationBarItem(selected=tab==i,onClick={tab=i},icon={Text(icons[i])},label={Text(s)})}}}){pad->Box(Modifier.padding(pad).fillMaxSize()){when(tab){0->TodayScreen(context,meds);1->CircleScreen(context,people){people=it;Store.savePeople(context,it)};else->VoiceAssistantScreen(context)}}}
+ Scaffold(topBar={TopAppBar(title={Column{Text(I18n.t("app"),fontWeight=FontWeight.Bold);Text(if(tab==2)I18n.t("manage_voice") else I18n.t("today_plan"),style=MaterialTheme.typography.bodySmall)}},actions={if(tab==0){TextButton(onClick={prn=true}){Text("PRN")};TextButton(onClick={stock=true}){Text(ui("Stok","Stock"))};TextButton(onClick={history=true}){Text(I18n.t("history"))};TextButton(onClick={manageMeds=true}){Text(I18n.t("meds"))}}})},bottomBar={NavigationBar{labels.forEachIndexed{i,s->NavigationBarItem(selected=tab==i,onClick={tab=i},icon={Text(icons[i])},label={Text(s)})}}}){pad->Box(Modifier.padding(pad).fillMaxSize()){when(tab){0->TodayScreen(context,meds);1->CircleScreen(context,people){people=it;Store.savePeople(context,it)};else->VoiceAssistantScreen(context)}}}
  if(manageMeds)ModalBottomSheet(onDismissRequest={manageMeds=false}){MedicationScreen(meds,{meds=it;Store.save(context,it)},{addMed=true});Spacer(Modifier.height(24.dp))}
  if(history)ModalBottomSheet(onDismissRequest={history=false}){HistoryScreen(context);Spacer(Modifier.height(24.dp))}
  if(stock)ModalBottomSheet(onDismissRequest={stock=false}){StockScreen(context,meds);Spacer(Modifier.height(24.dp))}
+ if(prn)ModalBottomSheet(onDismissRequest={prn=false}){PrnScreen(context,meds);Spacer(Modifier.height(24.dp))}
  if(addMed)AddMedicationDialog(context,{addMed=false}){m->meds=meds+m;Store.save(context,meds);addMed=false}
 }
 
