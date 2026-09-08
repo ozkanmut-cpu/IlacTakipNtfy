@@ -26,9 +26,7 @@ object AlarmScheduler {
         val parts = time.split(":")
         if (parts.size != 2) return
         val now = ZonedDateTime.now()
-        var next = now.toLocalDate()
-            .atTime(parts[0].toInt(), parts[1].toInt())
-            .atZone(now.zone)
+        var next = now.toLocalDate().atTime(parts[0].toInt(), parts[1].toInt()).atZone(now.zone)
         if (!next.isAfter(now)) next = next.plusDays(1)
         scheduleAt(c, time, meds, next.toInstant().toEpochMilli())
     }
@@ -82,6 +80,7 @@ class AlarmReceiver : BroadcastReceiver() {
 
         val alarmMeds = names.mapIndexed { index, label -> Medication(index.toString(), label, "", listOf(time)) }
         Ntfy.sendEvent(c, "alarm", time, alarmMeds)
+        SmartEscalation.schedule(c, time)
         AlarmScheduler.scheduleAll(c, Store.load(c))
     }
 }
@@ -93,7 +92,13 @@ class ActionReceiver : BroadcastReceiver() {
         val names = i.getStringExtra("names")?.split("|#|") ?: emptyList()
         val meds = Store.load(c).filter { time in it.times }
         val resolvedMeds = meds.ifEmpty { names.mapIndexed { index, label -> Medication(index.toString(), label, "", listOf(time)) } }
-        if (action == "snooze") AlarmScheduler.snoozeGroup(c, time, resolvedMeds, 30)
+        if (action == "snooze") {
+            AlarmScheduler.snoozeGroup(c, time, resolvedMeds, 30)
+            SmartEscalation.schedule(c, time)
+        } else {
+            SmartEscalation.cancel(c, time)
+            CareBatonStore.resolve(c, time)
+        }
         Ntfy.sendEvent(c, if (action == "snooze") "snoozed" else action, time, resolvedMeds)
     }
 }
@@ -129,20 +134,15 @@ object Ntfy {
     private fun deliverEvent(c: Context, event: DoseEvent) = thread {
         val payload = EventStore.payload(event).toString()
         val topics = (listOf(Store.topic(c)) + Store.people(c).map { it.topic }).distinct()
-        val allDelivered = topics.all { topic -> post(topic, title(event.type), payload) }
+        val allDelivered = topics.all { topic -> post(topic, "Dosefolk sync", payload, "min") }
         if (allDelivered) EventStore.markSynced(c, event.eventId)
     }
 
-    private fun title(type: String): String = when (type) {
-        "taken" -> I18n.t("event_taken")
-        "missed" -> I18n.t("event_missed")
-        "snoozed" -> I18n.t("event_snoozed")
-        else -> I18n.t("event_alarm")
+    fun sendTo(topic: String, title: String, message: String) = thread {
+        post(topic, title, message, "high")
     }
 
-    fun sendTo(topic: String, title: String, message: String) = thread { post(topic, title, message) }
-
-    private fun post(topic: String, title: String, message: String): Boolean {
+    private fun post(topic: String, title: String, message: String, priority: String): Boolean {
         return try {
             val connection = URL("https://ntfy.sh/$topic").openConnection() as HttpURLConnection
             connection.requestMethod = "POST"
@@ -150,7 +150,7 @@ object Ntfy {
             connection.connectTimeout = 10_000
             connection.readTimeout = 10_000
             connection.setRequestProperty("Title", title)
-            connection.setRequestProperty("Priority", "high")
+            connection.setRequestProperty("Priority", priority)
             connection.setRequestProperty("Content-Type", "text/plain; charset=utf-8")
             connection.outputStream.use { it.write(message.toByteArray()) }
             val ok = connection.responseCode in 200..299
