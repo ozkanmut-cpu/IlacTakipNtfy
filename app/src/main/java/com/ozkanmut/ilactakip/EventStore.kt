@@ -3,6 +3,8 @@ package com.ozkanmut.ilactakip
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.Instant
+import java.time.ZoneId
 
 data class DoseEvent(
     val eventId: String,
@@ -13,7 +15,8 @@ data class DoseEvent(
     val timestamp: Long,
     val medications: List<Medication>,
     val syncState: String = "pending",
-    val revision: Long = 0L
+    val revision: Long = 0L,
+    val scheduledDate: String = ""
 )
 
 object EventStore {
@@ -61,10 +64,11 @@ object EventStore {
     }
 
     fun payload(event: DoseEvent): JSONObject = JSONObject()
-        .put("v", 4)
+        .put("v", 5)
         .put("eventId", event.eventId)
         .put("type", event.type)
         .put("time", event.time)
+        .put("scheduledDate", event.scheduledDate)
         .put("actor", event.actor)
         .put("actorTopic", event.actorTopic)
         .put("timestamp", event.timestamp)
@@ -89,16 +93,21 @@ object EventStore {
                 )
             }
         }
+        val timestamp = o.optLong("timestamp")
+        val fallbackDate = if (timestamp > 0L) {
+            Instant.ofEpochMilli(timestamp).atZone(ZoneId.systemDefault()).toLocalDate().toString()
+        } else ""
         return DoseEvent(
             eventId = o.optString("eventId"),
             type = o.optString("type"),
             time = o.optString("time"),
             actor = o.optString("actor"),
             actorTopic = o.optString("actorTopic"),
-            timestamp = o.optLong("timestamp"),
+            timestamp = timestamp,
             medications = meds,
             syncState = o.optString("syncState", "pending"),
-            revision = o.optLong("revision", 0L)
+            revision = o.optLong("revision", 0L),
+            scheduledDate = o.optString("scheduledDate", fallbackDate).ifBlank { fallbackDate }
         )
     }
 }
