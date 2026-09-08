@@ -43,7 +43,9 @@ object DosefolkSyncScheduler {
             .setConstraints(network())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.SECONDS)
             .build()
+        // Pending events live in EventStore, so cancelling a currently running worker
+        // provides no benefit and can interrupt an in-flight delivery. One unique kick is enough.
         WorkManager.getInstance(c.applicationContext)
-            .enqueueUniqueWork(KICK, ExistingWorkPolicy.REPLACE, request)
+            .enqueueUniqueWork(KICK, ExistingWorkPolicy.KEEP, request)
     }
 }
