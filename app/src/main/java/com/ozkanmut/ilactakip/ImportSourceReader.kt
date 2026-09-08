@@ -25,9 +25,8 @@ object ImportSourceReader {
     }
 
     private fun readText(c: Context, uri: Uri, done: (Result) -> Unit) {
-        runCatching {
-            c.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
-        }.onSuccess { done(Result(it)) }
+        runCatching { c.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty() }
+            .onSuccess { done(Result(it)) }
             .onFailure { done(Result("", it.message ?: tr("Dosya okunamadı.", "The file could not be read."))) }
     }
 
@@ -52,13 +51,17 @@ object ImportSourceReader {
         val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)
         val pageCount = minOf(renderer.pageCount, 8)
         val output = StringBuilder()
+        var stopped = false
 
         fun finish(error: String? = null) {
+            if (stopped) return
+            stopped = true
             recognizer.close(); renderer.close(); descriptor.close()
             done(Result(output.toString().trim(), error))
         }
 
         fun processPage(index: Int) {
+            if (stopped) return
             if (index >= pageCount) { finish(); return }
             val page = renderer.openPage(index)
             val width = page.width.coerceAtMost(1800)
@@ -66,6 +69,7 @@ object ImportSourceReader {
             val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
             page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
             page.close()
+            var failed = false
             recognizer.process(InputImage.fromBitmap(bitmap, 0))
                 .addOnSuccessListener { text ->
                     if (text.text.isNotBlank()) {
@@ -74,14 +78,15 @@ object ImportSourceReader {
                     }
                 }
                 .addOnFailureListener {
-                    if (output.isEmpty()) { bitmap.recycle(); finish(it.message ?: tr("PDF metni okunamadı.", "PDF text could not be recognized.")); return@addOnFailureListener }
+                    failed = true
+                    if (output.isEmpty()) finish(it.message ?: tr("PDF metni okunamadı.", "PDF text could not be recognized."))
                 }
                 .addOnCompleteListener {
                     if (!bitmap.isRecycled) bitmap.recycle()
-                    if (renderer.pageCount > 0) processPage(index + 1)
+                    if (!stopped && (!failed || output.isNotEmpty())) processPage(index + 1)
                 }
         }
-        processPage(0)
+        if (pageCount == 0) finish(tr("PDF boş.", "The PDF is empty.")) else processPage(0)
     }
 
     private fun tr(tr: String, en: String) = if (I18n.language() == "tr") tr else en
