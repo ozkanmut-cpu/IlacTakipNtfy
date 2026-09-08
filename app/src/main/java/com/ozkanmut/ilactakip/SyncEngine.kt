@@ -11,7 +11,6 @@ import kotlin.concurrent.thread
 object SyncEngine {
     private const val PREFS = "dosefolk_sync"
     private const val LAST_ID = "last_ntfy_id"
-
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     fun pullOnce(c: Context) = thread {
@@ -22,65 +21,40 @@ object SyncEngine {
         val url = URL("https://ntfy.sh/$topic/json?poll=1&since=$encodedSince")
         try {
             val connection = url.openConnection() as HttpURLConnection
-            connection.requestMethod = "GET"
-            connection.connectTimeout = 10_000
-            connection.readTimeout = 15_000
-            if (connection.responseCode !in 200..299) {
-                connection.errorStream?.close(); connection.disconnect(); return@thread
-            }
+            connection.requestMethod = "GET"; connection.connectTimeout = 10_000; connection.readTimeout = 15_000
+            if (connection.responseCode !in 200..299) { connection.errorStream?.close(); connection.disconnect(); return@thread }
             var newestId: String? = null
             connection.inputStream.bufferedReader().useLines { lines ->
                 lines.forEach { line ->
                     val envelope = runCatching { JSONObject(line) }.getOrNull() ?: return@forEach
                     if (envelope.optString("event") != "message") return@forEach
-                    val ntfyId = envelope.optString("id")
-                    if (ntfyId.isNotBlank()) newestId = ntfyId
-                    val message = envelope.optString("message")
-                    val payload = runCatching { JSONObject(message) }.getOrNull() ?: return@forEach
+                    val ntfyId = envelope.optString("id"); if (ntfyId.isNotBlank()) newestId = ntfyId
+                    val payload = runCatching { JSONObject(envelope.optString("message")) }.getOrNull() ?: return@forEach
                     val event = parseDoseEvent(payload) ?: return@forEach
                     EventStore.append(context, event.copy(syncState = "synced"))
+                    StockEngine.applyEvent(context, event)
                     applyRemoteState(context, event)
                 }
             }
             newestId?.let { prefs(context).edit().putString(LAST_ID, it).apply() }
             connection.disconnect()
-        } catch (_: Exception) {
-            // Local medication actions remain authoritative while offline.
-        }
+        } catch (_: Exception) { }
     }
 
     private fun parseDoseEvent(o: JSONObject): DoseEvent? {
-        val eventId = o.optString("eventId")
-        val type = o.optString("type")
-        val time = o.optString("time")
-        if (eventId.isBlank() || type.isBlank() || time.isBlank()) return null
-        val medsJson = o.optJSONArray("medications") ?: JSONArray()
-        val meds = (0 until medsJson.length()).mapNotNull { index ->
-            medsJson.optJSONObject(index)?.let { med ->
-                Medication(
-                    id = med.optString("id"),
-                    name = med.optString("name"),
-                    dose = med.optString("dose"),
-                    times = emptyList()
-                )
-            }
-        }
-        return DoseEvent(
-            eventId = eventId,
-            type = type,
-            time = time,
-            actor = o.optString("actor"),
-            actorTopic = o.optString("actorTopic"),
-            timestamp = o.optLong("timestamp"),
-            medications = meds,
-            syncState = "synced"
-        )
+        val eventId=o.optString("eventId"); val type=o.optString("type"); val time=o.optString("time")
+        if(eventId.isBlank()||type.isBlank()||time.isBlank()) return null
+        val medsJson=o.optJSONArray("medications")?:JSONArray()
+        val meds=(0 until medsJson.length()).mapNotNull{index->medsJson.optJSONObject(index)?.let{med->Medication(med.optString("id"),med.optString("name"),med.optString("dose"),emptyList())}}
+        return DoseEvent(eventId,type,time,o.optString("actor"),o.optString("actorTopic"),o.optLong("timestamp"),meds,"synced")
     }
 
     private fun applyRemoteState(c: Context, event: DoseEvent) {
-        when (event.type) {
-            "care_claimed" -> CareBatonStore.applyRemoteClaim(c, event)
-            "care_released", "taken", "missed" -> CareBatonStore.resolve(c, event.time)
+        when(event.type){
+            "care_claimed" -> CareBatonStore.applyRemoteClaim(c,event)
+            "care_released" -> CareBatonStore.resolve(c,event.time)
+            "taken","missed" -> { CareBatonStore.resolve(c,event.time); SmartEscalation.cancel(c,event.time) }
+            "snoozed" -> SmartEscalation.schedule(c,event.time)
         }
     }
 }
