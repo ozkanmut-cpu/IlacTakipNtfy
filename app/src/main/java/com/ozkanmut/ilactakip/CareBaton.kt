@@ -48,14 +48,15 @@ object CareBatonStore {
 
     @Synchronized fun resolve(c: Context, time: String) { save(c, load(c).filterNot { it.doseKey == doseKey(time) }) }
 
+    /**
+     * Expiry cleanup is intentionally side-effect free. The deferred escalation
+     * alarm that woke us is already the resume mechanism; scheduling another
+     * chain here would create duplicate future alerts.
+     */
     @Synchronized fun cleanup(c: Context) {
         val current = load(c)
         val now = System.currentTimeMillis()
-        val expired = current.filter { it.expiresAt <= now }
-        if (expired.isNotEmpty()) {
-            save(c, current.filter { it.expiresAt > now })
-            expired.map { it.time }.distinct().forEach { resumeIfUnresolved(c, it) }
-        }
+        if (current.any { it.expiresAt <= now }) save(c, current.filter { it.expiresAt > now })
     }
 
     private fun resumeIfUnresolved(c: Context, time: String) {
@@ -89,7 +90,7 @@ object CareBatonStore {
 object CircleState {
     fun unresolved(c: Context): List<DoseEvent> = DoseStateEngine.unresolved(c)
         .mapNotNull { it.latestEvent ?: it.medications.firstOrNull()?.let { med ->
-            DoseEvent("synthetic-${it.time}", "alarm", it.time, "", "", 0L, listOf(med), "synced")
+            DoseEvent("synthetic-${it.scheduledDate}-${it.time}", "alarm", it.time, "", "", 0L, listOf(med), "synced", scheduledDate = it.scheduledDate)
         } }
         .sortedBy { it.time }
 }
