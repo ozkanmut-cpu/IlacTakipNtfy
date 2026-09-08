@@ -62,6 +62,7 @@ object Store {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MedicationApp(context: Context) {
     var meds by remember { mutableStateOf(Store.load(context)) }
