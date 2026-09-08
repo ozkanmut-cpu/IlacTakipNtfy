@@ -21,7 +21,11 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.Instant
+import java.time.LocalDateTime
 import java.time.LocalTime
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
 import java.util.UUID
 
 class MainActivity : ComponentActivity() {
@@ -113,6 +117,7 @@ fun MedicationApp(context: Context) {
     var people by remember { mutableStateOf(Store.people(context)) }
     var showMedicationManager by remember { mutableStateOf(false) }
     var showAddMedication by remember { mutableStateOf(false) }
+    var showHistory by remember { mutableStateOf(false) }
 
     val labels = listOf(I18n.t("today"), I18n.t("follow"), I18n.t("assistant"))
     val icons = listOf("⌂", "♥", "🎙")
@@ -131,6 +136,7 @@ fun MedicationApp(context: Context) {
                 },
                 actions = {
                     if (tab == 0) {
+                        TextButton(onClick = { showHistory = true }) { Text(I18n.t("history")) }
                         TextButton(onClick = { showMedicationManager = true }) { Text(I18n.t("meds")) }
                     }
                 }
@@ -175,6 +181,13 @@ fun MedicationApp(context: Context) {
         }
     }
 
+    if (showHistory) {
+        ModalBottomSheet(onDismissRequest = { showHistory = false }) {
+            HistoryScreen(context)
+            Spacer(Modifier.height(24.dp))
+        }
+    }
+
     if (showAddMedication) {
         AddMedicationDialog(
             context,
@@ -193,11 +206,23 @@ fun TodayScreen(c: Context, meds: List<Medication>) {
     val groups = meds.flatMap { med -> med.times.map { it to med } }
         .groupBy({ it.first }, { it.second })
         .toSortedMap()
+    val issue = DosefolkCheck.issues(c).firstOrNull()
 
     LazyColumn(
         Modifier.fillMaxSize().padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        if (issue != null) {
+            item {
+                Card(shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("⚠ ${issue.title}", fontWeight = FontWeight.Bold)
+                        Text(issue.detail)
+                        Button(onClick = { issue.fix(c) }) { Text("Fix") }
+                    }
+                }
+            }
+        }
         item {
             Card(shape = RoundedCornerShape(24.dp), modifier = Modifier.fillMaxWidth()) {
                 Column(Modifier.padding(20.dp)) {
@@ -272,6 +297,41 @@ fun MedicationScreen(meds: List<Medication>, save: (List<Medication>) -> Unit, a
                     }
                     TextButton(onClick = { save(meds.filterNot { it.id == med.id }) }) {
                         Text(I18n.t("delete"))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun HistoryScreen(c: Context) {
+    val events = EventStore.load(c)
+    LazyColumn(
+        Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        item { Text(I18n.t("history"), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold) }
+        if (events.isEmpty()) {
+            item { Text(I18n.t("history_empty")) }
+        } else {
+            items(events, key = { it.eventId }) { event ->
+                val whenText = LocalDateTime.ofInstant(Instant.ofEpochMilli(event.timestamp), ZoneId.systemDefault())
+                    .format(DateTimeFormatter.ofPattern("dd.MM.yyyy HH:mm"))
+                val status = when (event.type) {
+                    "taken" -> I18n.t("taken")
+                    "missed" -> I18n.t("missed")
+                    "snoozed" -> I18n.t("snooze")
+                    else -> I18n.t("event_alarm")
+                }
+                Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(16.dp)) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                            Text("${event.time} • $status", fontWeight = FontWeight.Bold)
+                            Text(if (event.syncState == "synced") "✓" else "↻")
+                        }
+                        Text(event.medications.joinToString(", ") { it.name })
+                        Text("${event.actor} • $whenText", style = MaterialTheme.typography.bodySmall)
                     }
                 }
             }
