@@ -80,6 +80,7 @@ data class ChatCommandResult(
 
 object ChatControlPolicy {
     val destructiveActions = setOf(
+        ChatAction.UPDATE_MEDICATION,
         ChatAction.DELETE_MEDICATION,
         ChatAction.REMOVE_PERSON,
         ChatAction.BACKUP_RESTORE,
