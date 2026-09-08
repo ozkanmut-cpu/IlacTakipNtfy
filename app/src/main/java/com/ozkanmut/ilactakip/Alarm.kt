@@ -9,8 +9,6 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import androidx.core.app.NotificationCompat
-import org.json.JSONArray
-import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
 import java.time.ZonedDateTime
@@ -75,23 +73,20 @@ class AlarmReceiver : BroadcastReceiver() {
             )
         }
 
-        fun action(actionName: String): PendingIntent {
-            return PendingIntent.getBroadcast(
-                c,
-                (time + actionName).hashCode(),
-                Intent(c, ActionReceiver::class.java)
-                    .putExtra("action", actionName)
-                    .putExtra("time", time)
-                    .putExtra("names", names.joinToString("|#|")),
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-            )
-        }
+        fun action(actionName: String): PendingIntent = PendingIntent.getBroadcast(
+            c,
+            (time + actionName).hashCode(),
+            Intent(c, ActionReceiver::class.java)
+                .putExtra("action", actionName)
+                .putExtra("time", time)
+                .putExtra("names", names.joinToString("|#|")),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
 
         val text = names.joinToString(", ")
-        val title = "$time • ${I18n.t("med_count", names.size)}"
         val notification = NotificationCompat.Builder(c, channel)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle(title)
+            .setContentTitle("$time • ${I18n.t("med_count", names.size)}")
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(text))
             .setPriority(NotificationCompat.PRIORITY_MAX)
@@ -107,8 +102,6 @@ class AlarmReceiver : BroadcastReceiver() {
             Medication(index.toString(), label, "", listOf(time))
         }
         Ntfy.sendEvent(c, "alarm", time, alarmMeds)
-
-        // Keep the next regular daily alarm alive independently of any snooze.
         AlarmScheduler.scheduleAll(c, Store.load(c))
     }
 }
@@ -123,9 +116,7 @@ class ActionReceiver : BroadcastReceiver() {
             names.mapIndexed { index, label -> Medication(index.toString(), label, "", listOf(time)) }
         }
 
-        if (action == "snooze") {
-            AlarmScheduler.snoozeGroup(c, time, resolvedMeds, 30)
-        }
+        if (action == "snooze") AlarmScheduler.snoozeGroup(c, time, resolvedMeds, 30)
         Ntfy.sendEvent(c, if (action == "snooze") "snoozed" else action, time, resolvedMeds)
     }
 }
@@ -133,28 +124,35 @@ class ActionReceiver : BroadcastReceiver() {
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
         AlarmScheduler.scheduleAll(c, Store.load(c))
+        Ntfy.retryPending(c)
     }
 }
 
 object Ntfy {
     fun sendEvent(c: Context, type: String, time: String, meds: List<Medication>) {
-        val payload = JSONObject()
-            .put("v", 2)
-            .put("eventId", UUID.randomUUID().toString())
-            .put("type", type)
-            .put("time", time)
-            .put("actor", Store.myName(c))
-            .put("actorTopic", Store.topic(c))
-            .put("timestamp", System.currentTimeMillis())
-            .put(
-                "medications",
-                JSONArray(meds.map { med ->
-                    JSONObject().put("id", med.id).put("name", med.name).put("dose", med.dose)
-                })
-            )
+        val event = DoseEvent(
+            eventId = UUID.randomUUID().toString(),
+            type = type,
+            time = time,
+            actor = Store.myName(c),
+            actorTopic = Store.topic(c),
+            timestamp = System.currentTimeMillis(),
+            medications = meds,
+            syncState = "pending"
+        )
+        EventStore.append(c, event)
+        deliverEvent(c.applicationContext, event)
+    }
 
-        sendTo(Store.topic(c), title(type), payload.toString())
-        Store.people(c).forEach { person -> sendTo(person.topic, title(type), payload.toString()) }
+    fun retryPending(c: Context) {
+        EventStore.pending(c).take(100).forEach { deliverEvent(c.applicationContext, it) }
+    }
+
+    private fun deliverEvent(c: Context, event: DoseEvent) = thread {
+        val payload = EventStore.payload(event).toString()
+        val topics = (listOf(Store.topic(c)) + Store.people(c).map { it.topic }).distinct()
+        val allDelivered = topics.all { topic -> post(topic, title(event.type), payload) }
+        if (allDelivered) EventStore.markSynced(c, event.eventId)
     }
 
     private fun title(type: String): String = when (type) {
@@ -165,18 +163,26 @@ object Ntfy {
     }
 
     fun sendTo(topic: String, title: String, message: String) = thread {
-        try {
+        post(topic, title, message)
+    }
+
+    private fun post(topic: String, title: String, message: String): Boolean {
+        return try {
             val connection = URL("https://ntfy.sh/$topic").openConnection() as HttpURLConnection
             connection.requestMethod = "POST"
             connection.doOutput = true
+            connection.connectTimeout = 10_000
+            connection.readTimeout = 10_000
             connection.setRequestProperty("Title", title)
             connection.setRequestProperty("Priority", "high")
             connection.setRequestProperty("Content-Type", "text/plain; charset=utf-8")
             connection.outputStream.use { it.write(message.toByteArray()) }
-            connection.inputStream.close()
+            val ok = connection.responseCode in 200..299
+            if (ok) connection.inputStream.close() else connection.errorStream?.close()
             connection.disconnect()
+            ok
         } catch (_: Exception) {
-            // Delivery failures are handled by the local-first reliability layer in later revisions.
+            false
         }
     }
 }
