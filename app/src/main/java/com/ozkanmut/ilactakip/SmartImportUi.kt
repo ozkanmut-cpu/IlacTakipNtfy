@@ -2,6 +2,8 @@ package com.ozkanmut.ilactakip
 
 import android.app.TimePickerDialog
 import android.content.Context
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -18,11 +20,27 @@ fun SmartImportScreen(c: Context, onDone: (List<Medication>) -> Unit) {
     var source by remember { mutableStateOf("") }
     var draft by remember { mutableStateOf<SmartImportDraft?>(null) }
     var rows by remember { mutableStateOf<List<ImportDraftMedication>>(emptyList()) }
+    var reading by remember { mutableStateOf(false) }
+    var sourceError by remember { mutableStateOf<String?>(null) }
 
-    fun analyze() {
-        val parsed = SmartImport.parse(source)
+    fun analyze(text: String = source) {
+        val parsed = SmartImport.parse(text)
         draft = parsed
         rows = parsed.medications
+    }
+
+    val documentPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        reading = true
+        sourceError = null
+        ImportSourceReader.read(c, uri) { result ->
+            reading = false
+            sourceError = result.error
+            if (result.text.isNotBlank()) {
+                source = result.text
+                analyze(result.text)
+            }
+        }
     }
 
     fun commit() {
@@ -45,17 +63,24 @@ fun SmartImportScreen(c: Context, onDone: (List<Medication>) -> Unit) {
     ) {
         item {
             Text(t("Akıllı İçe Aktar", "Smart Import"), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
-            Text(t("Listeyi yapıştır. Dosefolk yalnız eksik olan bilgiyi sorar; hiçbir ilaç onaysız eklenmez.", "Paste a list. Dosefolk asks only for missing information; nothing is added without confirmation."))
+            Text(t("Yazı yapıştır, fotoğraf seç veya PDF aç. Dosefolk önce taslak çıkarır; hiçbir ilaç onaysız eklenmez.", "Paste text, choose a photo, or open a PDF. Dosefolk creates a draft first; nothing is added without confirmation."))
+            Spacer(Modifier.height(8.dp))
+            OutlinedButton(
+                onClick = { documentPicker.launch(arrayOf("image/*", "application/pdf", "text/*")) },
+                enabled = !reading,
+                modifier = Modifier.fillMaxWidth()
+            ) { Text(if (reading) t("Okunuyor…", "Reading…") else t("Fotoğraf / PDF / dosya seç", "Choose photo / PDF / file")) }
+            sourceError?.let { Text("⚠ $it", color = MaterialTheme.colorScheme.error) }
             Spacer(Modifier.height(8.dp))
             OutlinedTextField(
                 value = source,
-                onValueChange = { source = it; draft = null; rows = emptyList() },
+                onValueChange = { source = it; draft = null; rows = emptyList(); sourceError = null },
                 modifier = Modifier.fillMaxWidth().heightIn(min = 140.dp),
-                label = { Text(t("İlaç listesi veya OCR metni", "Medication list or OCR text")) },
+                label = { Text(t("İlaç listesi veya çıkarılan metin", "Medication list or extracted text")) },
                 placeholder = { Text("Vasoxen 5 mg 20:00\nLasix 40 mg sabah") }
             )
             Spacer(Modifier.height(8.dp))
-            Button(onClick = ::analyze, enabled = source.isNotBlank(), modifier = Modifier.fillMaxWidth()) {
+            Button(onClick = { analyze() }, enabled = source.isNotBlank() && !reading, modifier = Modifier.fillMaxWidth()) {
                 Text(t("Taslağı çıkar", "Create draft"))
             }
         }
