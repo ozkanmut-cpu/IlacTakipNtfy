@@ -12,15 +12,25 @@ data class DoseEvent(
     val actorTopic: String,
     val timestamp: Long,
     val medications: List<Medication>,
-    val syncState: String = "pending"
+    val syncState: String = "pending",
+    val revision: Long = 0L
 )
 
 object EventStore {
     private const val PREFS = "dosefolk_events"
     private const val KEY_EVENTS = "events"
+    private const val KEY_REVISION = "local_revision"
     private const val MAX_EVENTS = 1000
 
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    @Synchronized
+    fun nextRevision(c: Context): Long {
+        val p = prefs(c)
+        val next = p.getLong(KEY_REVISION, 0L) + 1L
+        p.edit().putLong(KEY_REVISION, next).apply()
+        return next
+    }
 
     @Synchronized
     fun append(c: Context, event: DoseEvent) {
@@ -51,13 +61,14 @@ object EventStore {
     }
 
     fun payload(event: DoseEvent): JSONObject = JSONObject()
-        .put("v", 3)
+        .put("v", 4)
         .put("eventId", event.eventId)
         .put("type", event.type)
         .put("time", event.time)
         .put("actor", event.actor)
         .put("actorTopic", event.actorTopic)
         .put("timestamp", event.timestamp)
+        .put("revision", event.revision)
         .put("syncState", event.syncState)
         .put("medications", JSONArray(event.medications.map { med ->
             JSONObject().put("id", med.id).put("name", med.name).put("dose", med.dose)
@@ -86,7 +97,8 @@ object EventStore {
             actorTopic = o.optString("actorTopic"),
             timestamp = o.optLong("timestamp"),
             medications = meds,
-            syncState = o.optString("syncState", "pending")
+            syncState = o.optString("syncState", "pending"),
+            revision = o.optLong("revision", 0L)
         )
     }
 }
