@@ -20,10 +20,12 @@ import java.util.Locale
 
 private data class AssistantMessage(val fromUser: Boolean, val text: String)
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun VoiceAssistantScreen(context: Context) {
     var input by remember { mutableStateOf("") }
     var messages by remember { mutableStateOf(listOf(AssistantMessage(false, I18n.t("ai_ready")))) }
+    var showImport by remember { mutableStateOf(false) }
 
     fun submit(text: String) {
         val query = text.trim()
@@ -46,6 +48,10 @@ fun VoiceAssistantScreen(context: Context) {
     ) {
         Text(I18n.t("ai_title"), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Text(I18n.t("ai_help"))
+
+        OutlinedButton(onClick = { showImport = true }, modifier = Modifier.fillMaxWidth()) {
+            Text(if (I18n.language() == "tr") "İlaç listesini içe aktar" else "Import medication list")
+        }
 
         LazyColumn(
             Modifier.weight(1f).fillMaxWidth(),
@@ -90,6 +96,20 @@ fun VoiceAssistantScreen(context: Context) {
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(I18n.t("speak"))
+        }
+    }
+
+    if (showImport) {
+        ModalBottomSheet(onDismissRequest = { showImport = false }) {
+            SmartImportScreen(context) { added ->
+                showImport = false
+                messages = messages + AssistantMessage(
+                    false,
+                    if (I18n.language() == "tr") "${added.size} ilaç onaylanıp programa eklendi."
+                    else "${added.size} medication(s) were confirmed and added."
+                )
+            }
+            Spacer(Modifier.height(24.dp))
         }
     }
 }
