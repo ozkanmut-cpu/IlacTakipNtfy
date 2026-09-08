@@ -11,6 +11,7 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import java.net.HttpURLConnection
 import java.net.URL
+import java.time.LocalTime
 import java.time.ZonedDateTime
 import java.util.UUID
 import kotlin.concurrent.thread
@@ -19,22 +20,33 @@ object AlarmScheduler {
     fun scheduleAll(c: Context, meds: List<Medication>) {
         meds.flatMap { med -> med.times.map { it to med } }
             .groupBy({ it.first }, { it.second })
-            .forEach { (time, list) -> scheduleDaily(c, time, list) }
+            .forEach { (time, list) -> scheduleNextForTime(c, time, list) }
     }
 
-    private fun scheduleDaily(c: Context, time: String, meds: List<Medication>) {
-        val parts = time.split(":")
-        if (parts.size != 2) return
+    /** Schedule only the earliest valid program occurrence at this clock time. */
+    private fun scheduleNextForTime(c: Context, time: String, meds: List<Medication>) {
+        val parsed = runCatching { LocalTime.parse(time) }.getOrNull() ?: return
         val now = ZonedDateTime.now()
-        var next = now.toLocalDate().atTime(parts[0].toInt(), parts[1].toInt()).atZone(now.zone)
-        if (!next.isAfter(now)) next = next.plusDays(1)
-        scheduleAt(c, time, meds, next.toInstant().toEpochMilli())
+        val candidates = meds.mapNotNull { med ->
+            var from = now.toLocalDate()
+            if (!from.atTime(parsed).atZone(now.zone).isAfter(now)) from = from.plusDays(1)
+            ProgramRuleStore.nextActiveDate(c, med, from)?.let { date -> med to date }
+        }
+        val earliest = candidates.minOfOrNull { it.second } ?: return
+        val due = candidates.filter { it.second == earliest }.map { it.first }
+        val trigger = earliest.atTime(parsed).atZone(now.zone).toInstant().toEpochMilli()
+        scheduleAt(c, time, due, trigger)
     }
 
     private fun scheduleAt(c: Context, time: String, meds: List<Medication>, triggerAtMillis: Long) {
+        if (meds.isEmpty()) return
         val alarmManager = c.getSystemService(AlarmManager::class.java)
         val names = meds.joinToString("|#|") { med -> med.name + if (med.dose.isBlank()) "" else " (${med.dose})" }
-        val intent = Intent(c, AlarmReceiver::class.java).putExtra("time", time).putExtra("names", names)
+        val ids = meds.joinToString("|#|") { it.id }
+        val intent = Intent(c, AlarmReceiver::class.java)
+            .putExtra("time", time)
+            .putExtra("names", names)
+            .putExtra("ids", ids)
         val pendingIntent = PendingIntent.getBroadcast(c, ("group-$time").hashCode(), intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         try { alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent) }
         catch (_: SecurityException) { alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent) }
@@ -50,14 +62,30 @@ class AlarmReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
         val time = i.getStringExtra("time") ?: return
         val names = i.getStringExtra("names")?.split("|#|") ?: return
+        val ids = i.getStringExtra("ids")?.split("|#|") ?: emptyList()
         val channel = "medication"
         val notificationManager = c.getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= 26) notificationManager.createNotificationChannel(NotificationChannel(channel, I18n.t("channel"), NotificationManager.IMPORTANCE_HIGH))
-        fun action(actionName: String): PendingIntent = PendingIntent.getBroadcast(c,(time+actionName).hashCode(),Intent(c,ActionReceiver::class.java).putExtra("action",actionName).putExtra("time",time).putExtra("names",names.joinToString("|#|")),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        fun action(actionName: String): PendingIntent = PendingIntent.getBroadcast(
+            c,(time+actionName).hashCode(),
+            Intent(c,ActionReceiver::class.java).putExtra("action",actionName).putExtra("time",time).putExtra("names",names.joinToString("|#|")).putExtra("ids",ids.joinToString("|#|")),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
         val text = names.joinToString(", ")
-        val notification = NotificationCompat.Builder(c, channel).setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("$time • ${I18n.t("med_count", names.size)}").setContentText(text).setStyle(NotificationCompat.BigTextStyle().bigText(text)).setPriority(NotificationCompat.PRIORITY_MAX).setAutoCancel(true).addAction(0,I18n.t("all_taken"),action("taken")).addAction(0,I18n.t("snooze30"),action("snooze")).addAction(0,I18n.t("notif_missed"),action("missed")).build()
+        val notification = NotificationCompat.Builder(c, channel)
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentTitle("$time • ${I18n.t("med_count", names.size)}")
+            .setContentText(text)
+            .setStyle(NotificationCompat.BigTextStyle().bigText(text))
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setAutoCancel(true)
+            .addAction(0,I18n.t("all_taken"),action("taken"))
+            .addAction(0,I18n.t("snooze30"),action("snooze"))
+            .addAction(0,I18n.t("notif_missed"),action("missed"))
+            .build()
         notificationManager.notify(("group-$time").hashCode(), notification)
-        val alarmMeds = names.mapIndexed { index, label -> Medication(index.toString(), label, "", listOf(time)) }
+        val stored = Store.load(c).associateBy { it.id }
+        val alarmMeds = ids.mapNotNull { stored[it] }.ifEmpty { names.mapIndexed { index, label -> Medication("legacy-$index", label, "", listOf(time)) } }
         Ntfy.sendEvent(c, "alarm", time, alarmMeds)
         SmartEscalation.schedule(c, time)
         AlarmScheduler.scheduleAll(c, Store.load(c))
@@ -69,8 +97,9 @@ class ActionReceiver : BroadcastReceiver() {
         val action = i.getStringExtra("action") ?: return
         val time = i.getStringExtra("time") ?: return
         val names = i.getStringExtra("names")?.split("|#|") ?: emptyList()
-        val meds = Store.load(c).filter { time in it.times }
-        val resolvedMeds = meds.ifEmpty { names.mapIndexed { index, label -> Medication(index.toString(), label, "", listOf(time)) } }
+        val ids = i.getStringExtra("ids")?.split("|#|") ?: emptyList()
+        val stored = Store.load(c).associateBy { it.id }
+        val resolvedMeds = ids.mapNotNull { stored[it] }.ifEmpty { names.mapIndexed { index, label -> Medication("legacy-$index", label, "", listOf(time)) } }
         if (action == "snooze") { AlarmScheduler.snoozeGroup(c, time, resolvedMeds, 30); SmartEscalation.schedule(c, time) }
         else { SmartEscalation.cancel(c, time); CareBatonStore.resolve(c, time) }
         Ntfy.sendEvent(c, if (action == "snooze") "snoozed" else action, time, resolvedMeds)
