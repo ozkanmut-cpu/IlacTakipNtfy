@@ -46,7 +46,6 @@ object AlarmScheduler {
         }
     }
 
-    /** Schedule only the earliest valid program occurrence at this clock time. */
     private fun scheduleNextForTime(c: Context, time: String, meds: List<Medication>): Boolean {
         val parsed = runCatching { LocalTime.parse(time) }.getOrNull() ?: return false
         val now = ZonedDateTime.now()
@@ -124,13 +123,7 @@ class ActionReceiver : BroadcastReceiver() {
         val ids = i.getStringExtra("ids")?.split("|#|") ?: emptyList()
         val stored = Store.load(c).associateBy { it.id }
         val resolvedMeds = ids.mapNotNull { stored[it] }.ifEmpty { names.mapIndexed { index, label -> Medication("legacy-$index", label, "", listOf(time)) } }
-        if (action == "snooze") {
-            SmartEscalation.cancel(c, time)
-            AlarmScheduler.snoozeGroup(c, time, resolvedMeds, 30)
-        } else {
-            SmartEscalation.cancel(c, time)
-            CareBatonStore.resolve(c, time)
-        }
+        if (action == "snooze") AlarmScheduler.snoozeGroup(c, time, resolvedMeds, 30)
         Ntfy.sendEvent(c, if (action == "snooze") "snoozed" else action, time, resolvedMeds)
     }
 }
@@ -144,7 +137,17 @@ class BootReceiver : BroadcastReceiver() {
 }
 
 object Ntfy {
+    private val terminalTypes = setOf("taken", "missed", "conflict_resolved_taken", "conflict_resolved_missed")
+
     fun sendEvent(c: Context, type: String, time: String, meds: List<Medication>) {
+        when {
+            type in terminalTypes -> {
+                SmartEscalation.cancel(c, time)
+                CareBatonStore.resolve(c, time)
+            }
+            type == "snoozed" -> SmartEscalation.cancel(c, time)
+        }
+
         val event = DoseEvent(
             UUID.randomUUID().toString(), type, time, Store.myName(c), Store.topic(c),
             System.currentTimeMillis(), meds, "pending", EventStore.nextRevision(c)
