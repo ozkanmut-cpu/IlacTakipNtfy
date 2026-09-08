@@ -16,7 +16,10 @@ object SyncEngine {
 
     fun lastSuccess(c: Context): Long = prefs(c).getLong(LAST_SUCCESS, 0L)
 
-    fun pullOnce(c: Context) = thread { pullBlocking(c.applicationContext) }
+    fun pullOnce(c: Context) = thread {
+        DosefolkSyncScheduler.ensure(c.applicationContext)
+        pullBlocking(c.applicationContext)
+    }
 
     fun pullBlocking(c: Context): Boolean {
         val context = c.applicationContext
