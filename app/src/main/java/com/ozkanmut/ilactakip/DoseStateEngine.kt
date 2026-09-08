@@ -1,6 +1,7 @@
 package com.ozkanmut.ilactakip
 
 import android.content.Context
+import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 
@@ -18,7 +19,8 @@ data class DoseSessionState(
     val status: DoseSessionStatus,
     val latestEvent: DoseEvent?,
     val medications: List<Medication>,
-    val conflictEvents: List<DoseEvent> = emptyList()
+    val conflictEvents: List<DoseEvent> = emptyList(),
+    val scheduledDate: String = LocalDate.now().toString()
 )
 
 object DoseStateEngine {
@@ -27,25 +29,28 @@ object DoseStateEngine {
         "conflict_resolved_taken", "conflict_resolved_missed"
     )
 
-    private fun todayStartMillis(): Long = LocalDate.now()
-        .atStartOfDay(ZoneId.systemDefault())
-        .toInstant()
-        .toEpochMilli()
+    private fun eventDate(event: DoseEvent): String {
+        if (event.scheduledDate.isNotBlank()) return event.scheduledDate
+        return if (event.timestamp > 0L) {
+            Instant.ofEpochMilli(event.timestamp).atZone(ZoneId.systemDefault()).toLocalDate().toString()
+        } else ""
+    }
 
     private fun ordered(events: List<DoseEvent>) = events.sortedWith(
         compareBy<DoseEvent> { it.timestamp }.thenBy { it.actorTopic }.thenBy { it.revision }.thenBy { it.eventId }
     )
 
-    fun stateForTime(c: Context, time: String): DoseSessionState {
-        val scheduleMeds = Store.load(c).filter { time in it.times && ProgramRuleStore.isActiveOn(c, it.id, LocalDate.now()) }
-        val events = ordered(EventStore.load(c)
-            .filter { it.timestamp >= todayStartMillis() && it.time == time })
-        return reduce(time, events, scheduleMeds)
+    fun stateForTime(c: Context, time: String, date: LocalDate = LocalDate.now()): DoseSessionState {
+        val dateKey = date.toString()
+        val scheduleMeds = Store.load(c).filter { time in it.times && ProgramRuleStore.isActiveOn(c, it.id, date) }
+        val events = ordered(EventStore.load(c).filter { eventDate(it) == dateKey && it.time == time })
+        return reduce(time, events, scheduleMeds, dateKey)
     }
 
     fun today(c: Context): List<DoseSessionState> {
-        val events = EventStore.load(c).filter { it.timestamp >= todayStartMillis() }
         val today = LocalDate.now()
+        val dateKey = today.toString()
+        val events = EventStore.load(c).filter { eventDate(it) == dateKey }
         val schedule = Store.load(c).filter { ProgramRuleStore.isActiveOn(c, it.id, today) }
         val eventTimes = events.map { it.time }.filter { it.isNotBlank() }
         val scheduleTimes = schedule.flatMap { it.times }
@@ -53,7 +58,8 @@ object DoseStateEngine {
             reduce(
                 time = time,
                 events = ordered(events.filter { it.time == time }),
-                scheduleMeds = schedule.filter { time in it.times }
+                scheduleMeds = schedule.filter { time in it.times },
+                scheduledDate = dateKey
             )
         }
     }
@@ -64,11 +70,11 @@ object DoseStateEngine {
             it.status == DoseSessionStatus.CONFLICT
     }
 
-    private fun reduce(time: String, events: List<DoseEvent>, scheduleMeds: List<Medication>): DoseSessionState {
-        if (events.isEmpty()) return DoseSessionState(time, DoseSessionStatus.UNKNOWN, null, scheduleMeds)
+    private fun reduce(time: String, events: List<DoseEvent>, scheduleMeds: List<Medication>, scheduledDate: String): DoseSessionState {
+        if (events.isEmpty()) return DoseSessionState(time, DoseSessionStatus.UNKNOWN, null, scheduleMeds, scheduledDate = scheduledDate)
 
         val relevant = events.filter { it.type in stateTypes }
-        if (relevant.isEmpty()) return DoseSessionState(time, DoseSessionStatus.UNKNOWN, events.lastOrNull(), scheduleMeds)
+        if (relevant.isEmpty()) return DoseSessionState(time, DoseSessionStatus.UNKNOWN, events.lastOrNull(), scheduleMeds, scheduledDate = scheduledDate)
 
         val latestAlarmIndex = relevant.indexOfLast { it.type == "alarm" }
         val sessionEvents = if (latestAlarmIndex >= 0) relevant.drop(latestAlarmIndex) else relevant
@@ -77,7 +83,7 @@ object DoseStateEngine {
         }
         if (latestExplicitResolution != null) {
             val status = if (latestExplicitResolution.type == "conflict_resolved_taken") DoseSessionStatus.TAKEN else DoseSessionStatus.MISSED
-            return DoseSessionState(time, status, latestExplicitResolution, medsFrom(latestExplicitResolution, scheduleMeds))
+            return DoseSessionState(time, status, latestExplicitResolution, medsFrom(latestExplicitResolution, scheduleMeds), scheduledDate = scheduledDate)
         }
 
         val terminal = sessionEvents.filter { it.type == "taken" || it.type == "missed" }
@@ -93,7 +99,8 @@ object DoseStateEngine {
                     status = DoseSessionStatus.CONFLICT,
                     latestEvent = conflicts.last(),
                     medications = medsFrom(conflicts.last(), scheduleMeds),
-                    conflictEvents = conflicts
+                    conflictEvents = conflicts,
+                    scheduledDate = scheduledDate
                 )
             }
         }
@@ -106,7 +113,7 @@ object DoseStateEngine {
             "alarm" -> DoseSessionStatus.PENDING
             else -> DoseSessionStatus.UNKNOWN
         }
-        return DoseSessionState(time, status, latest, medsFrom(latest, scheduleMeds))
+        return DoseSessionState(time, status, latest, medsFrom(latest, scheduleMeds), scheduledDate = scheduledDate)
     }
 
     private fun medsFrom(event: DoseEvent, fallback: List<Medication>): List<Medication> =
