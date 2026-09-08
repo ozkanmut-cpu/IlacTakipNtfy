@@ -26,6 +26,7 @@ fun VoiceAssistantScreen(context: Context) {
     var input by remember { mutableStateOf("") }
     var messages by remember { mutableStateOf(listOf(AssistantMessage(false, I18n.t("ai_ready")))) }
     var showImport by remember { mutableStateOf(false) }
+    var showProgram by remember { mutableStateOf(false) }
 
     fun submit(text: String) {
         val query = text.trim()
@@ -49,8 +50,13 @@ fun VoiceAssistantScreen(context: Context) {
         Text(I18n.t("ai_title"), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Text(I18n.t("ai_help"))
 
-        OutlinedButton(onClick = { showImport = true }, modifier = Modifier.fillMaxWidth()) {
-            Text(if (I18n.language() == "tr") "İlaç listesini içe aktar" else "Import medication list")
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { showImport = true }, modifier = Modifier.weight(1f)) {
+                Text(if (I18n.language() == "tr") "İçe aktar" else "Import")
+            }
+            OutlinedButton(onClick = { showProgram = true }, modifier = Modifier.weight(1f)) {
+                Text(if (I18n.language() == "tr") "Program" else "Schedule")
+            }
         }
 
         LazyColumn(
@@ -78,9 +84,7 @@ fun VoiceAssistantScreen(context: Context) {
                 modifier = Modifier.weight(1f),
                 placeholder = { Text(I18n.t("ai_example")) }
             )
-            Button(onClick = { submit(input) }, enabled = input.isNotBlank()) {
-                Text(I18n.t("send"))
-            }
+            Button(onClick = { submit(input) }, enabled = input.isNotBlank()) { Text(I18n.t("send")) }
         }
 
         Button(
@@ -94,9 +98,7 @@ fun VoiceAssistantScreen(context: Context) {
                 )
             },
             modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(I18n.t("speak"))
-        }
+        ) { Text(I18n.t("speak")) }
     }
 
     if (showImport) {
@@ -109,6 +111,12 @@ fun VoiceAssistantScreen(context: Context) {
                     else "${added.size} medication(s) were confirmed and added."
                 )
             }
+            Spacer(Modifier.height(24.dp))
+        }
+    }
+    if (showProgram) {
+        ModalBottomSheet(onDismissRequest = { showProgram = false }) {
+            ProgramRulesScreen(context, Store.load(context))
             Spacer(Modifier.height(24.dp))
         }
     }
