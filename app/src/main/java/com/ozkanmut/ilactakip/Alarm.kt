@@ -134,6 +134,8 @@ class ActionReceiver : BroadcastReceiver() {
 
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
+        if (i.action == Intent.ACTION_TIMEZONE_CHANGED) TravelGuard.onTimezonePossiblyChanged(c)
+        else TravelGuard.initialize(c)
         AlarmScheduler.scheduleAll(c, Store.load(c))
         DosefolkSyncScheduler.ensure(c)
         DosefolkSyncScheduler.kick(c)
