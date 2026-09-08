@@ -35,18 +35,9 @@ object AlarmScheduler {
 
     private fun scheduleAt(c: Context, time: String, meds: List<Medication>, triggerAtMillis: Long) {
         val alarmManager = c.getSystemService(AlarmManager::class.java)
-        val names = meds.joinToString("|#|") { med ->
-            med.name + if (med.dose.isBlank()) "" else " (${med.dose})"
-        }
-        val intent = Intent(c, AlarmReceiver::class.java)
-            .putExtra("time", time)
-            .putExtra("names", names)
-        val pendingIntent = PendingIntent.getBroadcast(
-            c,
-            ("group-$time").hashCode(),
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-        )
+        val names = meds.joinToString("|#|") { med -> med.name + if (med.dose.isBlank()) "" else " (${med.dose})" }
+        val intent = Intent(c, AlarmReceiver::class.java).putExtra("time", time).putExtra("names", names)
+        val pendingIntent = PendingIntent.getBroadcast(c, ("group-$time").hashCode(), intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         try {
             alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent)
         } catch (_: SecurityException) {
@@ -66,20 +57,12 @@ class AlarmReceiver : BroadcastReceiver() {
         val names = i.getStringExtra("names")?.split("|#|") ?: return
         val channel = "medication"
         val notificationManager = c.getSystemService(NotificationManager::class.java)
-
-        if (Build.VERSION.SDK_INT >= 26) {
-            notificationManager.createNotificationChannel(
-                NotificationChannel(channel, I18n.t("channel"), NotificationManager.IMPORTANCE_HIGH)
-            )
-        }
+        if (Build.VERSION.SDK_INT >= 26) notificationManager.createNotificationChannel(NotificationChannel(channel, I18n.t("channel"), NotificationManager.IMPORTANCE_HIGH))
 
         fun action(actionName: String): PendingIntent = PendingIntent.getBroadcast(
             c,
             (time + actionName).hashCode(),
-            Intent(c, ActionReceiver::class.java)
-                .putExtra("action", actionName)
-                .putExtra("time", time)
-                .putExtra("names", names.joinToString("|#|")),
+            Intent(c, ActionReceiver::class.java).putExtra("action", actionName).putExtra("time", time).putExtra("names", names.joinToString("|#|")),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
@@ -95,12 +78,9 @@ class AlarmReceiver : BroadcastReceiver() {
             .addAction(0, I18n.t("snooze30"), action("snooze"))
             .addAction(0, I18n.t("notif_missed"), action("missed"))
             .build()
-
         notificationManager.notify(("group-$time").hashCode(), notification)
 
-        val alarmMeds = names.mapIndexed { index, label ->
-            Medication(index.toString(), label, "", listOf(time))
-        }
+        val alarmMeds = names.mapIndexed { index, label -> Medication(index.toString(), label, "", listOf(time)) }
         Ntfy.sendEvent(c, "alarm", time, alarmMeds)
         AlarmScheduler.scheduleAll(c, Store.load(c))
     }
@@ -112,10 +92,7 @@ class ActionReceiver : BroadcastReceiver() {
         val time = i.getStringExtra("time") ?: return
         val names = i.getStringExtra("names")?.split("|#|") ?: emptyList()
         val meds = Store.load(c).filter { time in it.times }
-        val resolvedMeds = meds.ifEmpty {
-            names.mapIndexed { index, label -> Medication(index.toString(), label, "", listOf(time)) }
-        }
-
+        val resolvedMeds = meds.ifEmpty { names.mapIndexed { index, label -> Medication(index.toString(), label, "", listOf(time)) } }
         if (action == "snooze") AlarmScheduler.snoozeGroup(c, time, resolvedMeds, 30)
         Ntfy.sendEvent(c, if (action == "snooze") "snoozed" else action, time, resolvedMeds)
     }
@@ -125,6 +102,7 @@ class BootReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
         AlarmScheduler.scheduleAll(c, Store.load(c))
         Ntfy.retryPending(c)
+        SyncEngine.pullOnce(c)
     }
 }
 
@@ -162,9 +140,7 @@ object Ntfy {
         else -> I18n.t("event_alarm")
     }
 
-    fun sendTo(topic: String, title: String, message: String) = thread {
-        post(topic, title, message)
-    }
+    fun sendTo(topic: String, title: String, message: String) = thread { post(topic, title, message) }
 
     private fun post(topic: String, title: String, message: String): Boolean {
         return try {
