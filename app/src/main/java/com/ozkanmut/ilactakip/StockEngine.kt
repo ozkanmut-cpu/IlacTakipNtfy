@@ -39,6 +39,8 @@ object StockEngine {
     private fun consumptionUnits(c:Context,id:String):Int{val m=MedicationMetaStore.get(c,id)?:return 1;val countable=m.form in setOf(MedicationForm.TABLET,MedicationForm.INSULIN,MedicationForm.NEBULE,MedicationForm.INHALER,MedicationForm.DROP,MedicationForm.PATCH);return if(countable)(m.quantity?:1.0).roundToInt().coerceAtLeast(1) else 1}
     @Synchronized fun applyEvent(c:Context,event:DoseEvent){
         if(event.type !in setOf("taken","prn_taken","undo_taken")||alreadyProcessed(c,event.eventId))return
+        val ownerId=event.ownerId.ifBlank{event.actorTopic}
+        if(ownerId.isNotBlank() && ownerId!=OwnerScopeStore.localOwnerId(c)) return
         val current=load(c).associateBy{it.medicationId}.toMutableMap();val changed=mutableListOf<MedicationStock>();val restore=event.type=="undo_taken"
         event.medications.distinctBy{it.id}.forEach{med->val s=current[med.id]?:return@forEach;val units=consumptionUnits(c,med.id);val remaining=if(restore)s.remainingDoses+units else (s.remainingDoses-units).coerceAtLeast(0);val u=s.copy(remainingDoses=remaining,updatedAt=event.timestamp);current[med.id]=u;changed+=u}
         if(changed.isNotEmpty()){save(c,current.values.toList());changed.forEach{LowStockNotifier.evaluate(c,it);StockSync.publishToCircle(c,it)}};markProcessed(c,event.eventId)
