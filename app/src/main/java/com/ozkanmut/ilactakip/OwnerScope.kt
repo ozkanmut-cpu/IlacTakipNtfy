@@ -4,11 +4,6 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 
-/**
- * Separates the medication owner from the device/user performing an action.
- * Local medications keep living in Store; remote programs and rules are cached here and never
- * enter the local alarm list.
- */
 object OwnerScopeStore {
     private const val PREFS = "dosefolk_owner_scope"
     private const val KEY_REMOTE = "remote_programs"
@@ -16,6 +11,9 @@ object OwnerScopeStore {
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private fun ownerKey(medicationId: String) = "owner|$medicationId"
     private fun ruleStampKey(ownerId: String, medicationId: String) = "rule_stamp|$ownerId|$medicationId"
+    private fun ruleRevisionKey(ownerId: String, medicationId: String) = "rule_rev|$ownerId|$medicationId"
+    private fun ruleActorKey(ownerId: String, medicationId: String) = "rule_actor|$ownerId|$medicationId"
+    private fun ruleEventKey(ownerId: String, medicationId: String) = "rule_event|$ownerId|$medicationId"
 
     fun localOwnerId(c: Context): String = Store.topic(c)
 
@@ -68,12 +66,23 @@ object OwnerScopeStore {
     }
 
     @Synchronized
-    fun applyRemoteRule(c: Context, ownerId: String, rule: ProgramRule, timestamp: Long): Boolean {
+    fun applyRemoteRule(c: Context, ownerId: String, rule: ProgramRule, event: DoseEvent): Boolean {
         if (ownerId.isBlank() || rule.medicationId.isBlank() || ownerId == localOwnerId(c)) return false
         val p = prefs(c)
-        val stampKey = ruleStampKey(ownerId, rule.medicationId)
-        val previous = p.getLong(stampKey, 0L)
-        if (timestamp in 1 until previous) return false
+        val medId = rule.medicationId
+        val storedRevision = p.getLong(ruleRevisionKey(ownerId, medId), 0L)
+        val storedActor = p.getString(ruleActorKey(ownerId, medId), "").orEmpty()
+        val storedEvent = p.getString(ruleEventKey(ownerId, medId), "").orEmpty()
+        val legacyStamp = p.getLong(ruleStampKey(ownerId, medId), 0L)
+        val accept = if (event.revision > 0L || storedRevision > 0L) {
+            when {
+                event.revision != storedRevision -> event.revision > storedRevision
+                event.actorTopic != storedActor -> event.actorTopic > storedActor
+                else -> event.eventId > storedEvent
+            }
+        } else event.timestamp >= legacyStamp
+        if (!accept) return false
+
         val normalized = rule.copy(
             weekdays = rule.weekdays.filter { it in 1..7 }.toSet(),
             everyNDays = rule.everyNDays.coerceAtLeast(1)
@@ -84,7 +93,10 @@ object OwnerScopeStore {
         if (index >= 0) current[index] = scoped else current += scoped
         saveRemoteRules(c, current)
         p.edit()
-            .putLong(stampKey, timestamp.coerceAtLeast(System.currentTimeMillis()))
+            .putLong(ruleStampKey(ownerId, medId), event.timestamp)
+            .putLong(ruleRevisionKey(ownerId, medId), event.revision)
+            .putString(ruleActorKey(ownerId, medId), event.actorTopic)
+            .putString(ruleEventKey(ownerId, medId), event.eventId)
             .putString(ownerKey(normalized.medicationId), ownerId)
             .commit()
         return true
