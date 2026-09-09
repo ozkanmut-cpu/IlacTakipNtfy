@@ -93,6 +93,7 @@ object SyncEngine {
                 }
             }
             "program_added","program_updated","program_deleted" -> ProgramSync.applyRemote(c,event)
+            "program_rule_updated" -> ProgramRuleStore.applyRemote(c,event)
         }
     }
 }
