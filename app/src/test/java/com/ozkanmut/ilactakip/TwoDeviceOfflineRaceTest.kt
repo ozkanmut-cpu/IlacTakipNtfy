@@ -33,7 +33,8 @@ class TwoDeviceOfflineRaceTest {
             "dosefolk_undo_recovery",
             "dosefolk_remote_event_receipts",
             "dosefolk_delivery_ledger",
-            "dosefolk_alert_outbox"
+            "dosefolk_alert_outbox",
+            "dosefolk_stock"
         ).forEach { c.getSharedPreferences(it, Context.MODE_PRIVATE).edit().clear().commit() }
         Store.save(c, listOf(med))
     }
@@ -116,12 +117,40 @@ class TwoDeviceOfflineRaceTest {
         val remoteOld = event("remote-old-missed", "missed", "phone-b", base, 9L)
         val localNew = event("local-new-taken", "taken", Store.topic(c), base + 5 * 60_000L, 2L, syncState = "pending")
 
-        // Arrival order intentionally reversed to simulate catch-up after reconnect.
         EventStore.append(c, localNew)
         EventStore.append(c, remoteOld)
 
         val state = DoseStateEngine.stateForTime(c, "08:00")
         assertEquals(DoseSessionStatus.CONFLICT, state.status)
         assertEquals(2, state.conflictEvents.size)
+    }
+
+    @Test
+    fun sameDoseTakenOnTwoDevices_consumesStockOnlyOnce() {
+        val base = System.currentTimeMillis()
+        StockEngine.configure(c, med, packSize = 10, currentDoses = 10, lowThreshold = 2)
+        val localTaken = event("local-taken-stock", "taken", Store.topic(c), base, 1L, syncState = "pending")
+        val remoteTaken = event("remote-taken-stock", "taken", "phone-b", base + 1_000L, 7L)
+
+        StockEngine.applyEvent(c, localTaken)
+        StockEngine.applyEvent(c, remoteTaken)
+
+        assertEquals(9, StockEngine.forMedication(c, med.id)?.remainingDoses)
+    }
+
+    @Test
+    fun undoAfterCrossDeviceDuplicateTaken_restoresStockOnlyOnce() {
+        val base = System.currentTimeMillis()
+        StockEngine.configure(c, med, packSize = 10, currentDoses = 10, lowThreshold = 2)
+        val localTaken = event("local-taken-stock", "taken", Store.topic(c), base, 1L, syncState = "pending")
+        val remoteTaken = event("remote-taken-stock", "taken", "phone-b", base + 1_000L, 7L)
+        val undo = event("undo-stock", "undo_taken", Store.topic(c), base + 2_000L, 8L, syncState = "pending")
+
+        StockEngine.applyEvent(c, localTaken)
+        StockEngine.applyEvent(c, remoteTaken)
+        StockEngine.applyEvent(c, undo)
+        StockEngine.applyEvent(c, undo.copy(eventId = "undo-stock-replay"))
+
+        assertEquals(10, StockEngine.forMedication(c, med.id)?.remainingDoses)
     }
 }
