@@ -88,8 +88,10 @@ fun PairingCard(c: Context, people: List<Person>, save: (List<Person>) -> Unit) 
     val qr = remember(payload) { qrBitmap(payload) }
 
     fun finishPair(targetTopic: String) {
+        val wasRevoked = RevokedPeerFence.isRevoked(c, targetTopic)
         val updated = people + Person(UUID.randomUUID().toString(), name.trim(), targetTopic)
         save(updated)
+        if (wasRevoked) PairingLifecycle.completeRePair(c, targetTopic)
         CircleInitialSync.publishToPeer(c, targetTopic)
         name = ""
         topic = ""
