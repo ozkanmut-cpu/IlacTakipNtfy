@@ -6,14 +6,16 @@ import org.json.JSONObject
 
 /**
  * Separates the medication owner from the device/user performing an action.
- * Local medications keep living in Store; remote programs are cached here and never
+ * Local medications keep living in Store; remote programs and rules are cached here and never
  * enter the local alarm list.
  */
 object OwnerScopeStore {
     private const val PREFS = "dosefolk_owner_scope"
     private const val KEY_REMOTE = "remote_programs"
+    private const val KEY_REMOTE_RULES = "remote_rules"
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private fun ownerKey(medicationId: String) = "owner|$medicationId"
+    private fun ruleStampKey(ownerId: String, medicationId: String) = "rule_stamp|$ownerId|$medicationId"
 
     fun localOwnerId(c: Context): String = Store.topic(c)
 
@@ -41,12 +43,20 @@ object OwnerScopeStore {
     fun remoteMedications(c: Context, ownerId: String): List<Medication> =
         loadRemote(c).filter { it.first == ownerId }.map { it.second }
 
+    fun remoteRule(c: Context, ownerId: String, medicationId: String): ProgramRule =
+        loadRemoteRules(c).firstOrNull { it.ownerId == ownerId && it.rule.medicationId == medicationId }?.rule
+            ?: ProgramRule(medicationId)
+
     @Synchronized
     fun applyRemoteProgram(c: Context, ownerId: String, type: String, medication: Medication) {
         if (ownerId.isBlank() || medication.id.isBlank() || ownerId == localOwnerId(c)) return
         val all = loadRemote(c).toMutableList()
         when (type) {
-            "program_deleted" -> all.removeAll { it.first == ownerId && it.second.id == medication.id }
+            "program_deleted" -> {
+                all.removeAll { it.first == ownerId && it.second.id == medication.id }
+                val rules = loadRemoteRules(c).filterNot { it.ownerId == ownerId && it.rule.medicationId == medication.id }
+                saveRemoteRules(c, rules)
+            }
             "program_added", "program_updated" -> {
                 val index = all.indexOfFirst { it.first == ownerId && it.second.id == medication.id }
                 val scoped = ownerId to medication
@@ -56,6 +66,31 @@ object OwnerScopeStore {
         saveRemote(c, all)
         prefs(c).edit().putString(ownerKey(medication.id), ownerId).commit()
     }
+
+    @Synchronized
+    fun applyRemoteRule(c: Context, ownerId: String, rule: ProgramRule, timestamp: Long): Boolean {
+        if (ownerId.isBlank() || rule.medicationId.isBlank() || ownerId == localOwnerId(c)) return false
+        val p = prefs(c)
+        val stampKey = ruleStampKey(ownerId, rule.medicationId)
+        val previous = p.getLong(stampKey, 0L)
+        if (timestamp in 1 until previous) return false
+        val normalized = rule.copy(
+            weekdays = rule.weekdays.filter { it in 1..7 }.toSet(),
+            everyNDays = rule.everyNDays.coerceAtLeast(1)
+        )
+        val current = loadRemoteRules(c).toMutableList()
+        val index = current.indexOfFirst { it.ownerId == ownerId && it.rule.medicationId == normalized.medicationId }
+        val scoped = ScopedRule(ownerId, normalized)
+        if (index >= 0) current[index] = scoped else current += scoped
+        saveRemoteRules(c, current)
+        p.edit()
+            .putLong(stampKey, timestamp.coerceAtLeast(System.currentTimeMillis()))
+            .putString(ownerKey(normalized.medicationId), ownerId)
+            .commit()
+        return true
+    }
+
+    private data class ScopedRule(val ownerId: String, val rule: ProgramRule)
 
     private fun loadRemote(c: Context): List<Pair<String, Medication>> {
         val raw = prefs(c).getString(KEY_REMOTE, "[]") ?: "[]"
@@ -85,5 +120,48 @@ object OwnerScopeStore {
                 .put("times", JSONArray(med.times)))
         }
         prefs(c).edit().putString(KEY_REMOTE, a.toString()).commit()
+    }
+
+    private fun loadRemoteRules(c: Context): List<ScopedRule> {
+        val raw = prefs(c).getString(KEY_REMOTE_RULES, "[]") ?: "[]"
+        return runCatching {
+            val a = JSONArray(raw)
+            (0 until a.length()).mapNotNull { i ->
+                val o = a.optJSONObject(i) ?: return@mapNotNull null
+                val owner = o.optString("ownerId")
+                val medicationId = o.optString("medicationId")
+                val days = o.optJSONArray("weekdays") ?: JSONArray()
+                if (owner.isBlank() || medicationId.isBlank()) return@mapNotNull null
+                ScopedRule(
+                    owner,
+                    ProgramRule(
+                        medicationId = medicationId,
+                        weekdays = (0 until days.length()).map { days.optInt(it) }.filter { it in 1..7 }.toSet(),
+                        startDate = o.optString("startDate").takeIf { it.isNotBlank() },
+                        endDate = o.optString("endDate").takeIf { it.isNotBlank() },
+                        everyNDays = o.optInt("everyNDays", 1).coerceAtLeast(1),
+                        anchorDate = o.optString("anchorDate").takeIf { it.isNotBlank() },
+                        routineLabel = o.optString("routineLabel")
+                    )
+                )
+            }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun saveRemoteRules(c: Context, items: List<ScopedRule>) {
+        val a = JSONArray()
+        items.forEach { item ->
+            val r = item.rule
+            a.put(JSONObject()
+                .put("ownerId", item.ownerId)
+                .put("medicationId", r.medicationId)
+                .put("weekdays", JSONArray(r.weekdays.sorted()))
+                .put("startDate", r.startDate ?: "")
+                .put("endDate", r.endDate ?: "")
+                .put("everyNDays", r.everyNDays)
+                .put("anchorDate", r.anchorDate ?: "")
+                .put("routineLabel", r.routineLabel))
+        }
+        prefs(c).edit().putString(KEY_REMOTE_RULES, a.toString()).commit()
     }
 }
