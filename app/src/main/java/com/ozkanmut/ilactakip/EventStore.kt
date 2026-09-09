@@ -56,6 +56,14 @@ object EventStore {
     fun appendIfAbsent(c: Context, event: DoseEvent): Boolean {
         val current = load(c).toMutableList()
         if (current.any { it.eventId == event.eventId }) return false
+
+        // EventStore is the durability boundary, so every accepted logical
+        // revision must advance the local Lamport clock here as well. Callers
+        // should not have to remember a separate observeRevision() step.
+        // Advancing before the event write is crash-safe: a skipped revision is
+        // harmless, while reusing an already-observed revision is not.
+        observeRevision(c, event.revision)
+
         current.add(0, event)
         save(c, compact(current))
         return true
