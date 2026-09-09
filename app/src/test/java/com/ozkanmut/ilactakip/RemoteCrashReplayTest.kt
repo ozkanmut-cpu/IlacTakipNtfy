@@ -2,6 +2,7 @@ package com.ozkanmut.ilactakip
 
 import android.app.NotificationManager
 import android.content.Context
+import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.testing.WorkManagerTestInitHelper
 import org.junit.Assert.assertEquals
@@ -53,16 +54,34 @@ class RemoteCrashReplayTest {
         ownerId = Store.topic(c)
     )
 
+    private fun showMedicationAlarm() {
+        AlarmReceiver().onReceive(
+            c,
+            Intent(c, AlarmReceiver::class.java)
+                .putExtra("time", "08:00")
+                .putExtra("names", "${med.name} (${med.dose})")
+                .putExtra("ids", med.id)
+                .putExtra("scheduledDate", date)
+                .putExtra("deliveryId", "crash-visible-alarm-$date")
+        )
+    }
+
     /** Simulates a crash after durable event persistence and stock side effect but before receipt. */
     @Test
     fun replayAfterCrash_doesNotDoubleConsumeStock_andCompletesTerminalCleanup() {
+        showMedicationAlarm()
+        val manager = c.getSystemService(NotificationManager::class.java)
+        assertEquals(1, manager.activeNotifications.count { it.id == ("group-$date-08:00").hashCode() })
+
         val event = remote("remote-crash-taken", "taken")
 
+        // Crash point: event and stock have become durable, but lifecycle cleanup and receipt have not.
         EventStore.append(c, event)
         OwnerScopeStore.remember(c, event)
         StockEngine.applyEvent(c, event)
         assertEquals(9, StockEngine.forMedication(c, med.id)?.remainingDoses)
         assertFalse(RemoteEventReceiptStore.processed(c, event.eventId))
+        assertEquals(1, manager.activeNotifications.count { it.id == ("group-$date-08:00").hashCode() })
 
         // Replay after process restart: idempotent stock + remaining UI/lifecycle cleanup.
         EventStore.append(c, event)
@@ -74,7 +93,6 @@ class RemoteCrashReplayTest {
         assertEquals(9, StockEngine.forMedication(c, med.id)?.remainingDoses)
         assertTrue(RemoteEventReceiptStore.processed(c, event.eventId))
         assertEquals(DoseSessionStatus.TAKEN, DoseStateEngine.stateForTime(c, "08:00", LocalDate.now()).status)
-        val manager = c.getSystemService(NotificationManager::class.java)
         assertEquals(0, manager.activeNotifications.count { it.id == ("group-$date-08:00").hashCode() })
     }
 
