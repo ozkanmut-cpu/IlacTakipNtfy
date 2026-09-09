@@ -38,11 +38,6 @@ object SmartEscalation {
         if (people.size > 1) scheduleStage(c, time, scheduledDate, 1, base + 15 * 60_000L)
     }
 
-    /**
-     * Rebuilds only operational escalation alarms lost with AlarmManager state.
-     * AttentionBudget is intentionally preserved so a reboot never re-sends a
-     * caregiver stage that was already delivered before the restart.
-     */
     fun restore(c: Context) {
         CareBatonStore.cleanup(c)
         DoseStateEngine.unresolved(c).forEach { state ->
@@ -58,8 +53,6 @@ object SmartEscalation {
                     }
                 }
                 DoseSessionStatus.SNOOZED -> {
-                    // The explicit snooze alarm is restored separately. Do not
-                    // escalate before the user's snooze window ends.
                     if (baton != null) deferUntil(c, state.time, baton.expiresAt, scheduledDate)
                     else cancelAlarms(c, state.time, scheduledDate)
                 }
@@ -133,8 +126,15 @@ class EscalationReceiver : BroadcastReceiver() {
                 } else {
                     if (medNames.isBlank()) "The $time medication session is still unresolved." else "$time • $medNames is still unresolved."
                 }
-                Ntfy.sendTo(c, target.topic, title, body)
+
+                // Persist the alert first under a deterministic stage ID, then
+                // durably mark the attention budget, and only then let WorkManager
+                // drain the queue. Crash at any boundary converges without creating
+                // a second caregiver alert row or silently losing the first one.
+                val alertId = "escalation|$scheduledDate|$time|${target.topic}|$stage"
+                AlertOutbox.enqueue(c.applicationContext, target.topic, title, body, id = alertId, kick = false)
                 AttentionBudget.mark(c, time, target.topic, stage, scheduledDate)
+                DosefolkSyncScheduler.kick(c)
             } finally { pendingResult.finish() }
         }.start()
     }
@@ -149,13 +149,13 @@ object AttentionBudget {
         !prefs(c).getBoolean(key(time, topic, stage, scheduledDate), false)
 
     fun mark(c: Context, time: String, topic: String, stage: Int, scheduledDate: String = LocalDate.now().toString()) {
-        prefs(c).edit().putBoolean(key(time, topic, stage, scheduledDate), true).apply()
+        prefs(c).edit().putBoolean(key(time, topic, stage, scheduledDate), true).commit()
     }
 
     fun clear(c: Context, time: String, scheduledDate: String = LocalDate.now().toString()) {
         val prefix = "$scheduledDate|$time|"
         val editor = prefs(c).edit()
         prefs(c).all.keys.filter { it.startsWith(prefix) }.forEach { editor.remove(it) }
-        editor.apply()
+        editor.commit()
     }
 }
