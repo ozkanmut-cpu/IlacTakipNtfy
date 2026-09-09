@@ -79,7 +79,7 @@ object AlarmScheduler {
         catch (_: SecurityException) { alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent) }
     }
 
-    private fun scheduleSnoozeUntil(c: Context, time: String, meds: List<Medication>, triggerAtMillis: Long, scheduledDate: String = LocalDate.now().toString()): Long {
+    internal fun scheduleSnoozeUntil(c: Context, time: String, meds: List<Medication>, triggerAtMillis: Long, scheduledDate: String = LocalDate.now().toString()): Long {
         val safeTrigger = maxOf(System.currentTimeMillis() + 1_000L, triggerAtMillis)
         scheduleAt(c, time, meds, safeTrigger, snoozeKey(time, scheduledDate), true, scheduledDate)
         return safeTrigger
@@ -96,6 +96,10 @@ object AlarmScheduler {
         }
         return true
     }
+
+    /** Pure timestamp helper. It deliberately does not schedule an alarm. */
+    fun snoozeGroup(c: Context, time: String, meds: List<Medication>, minutes: Int, scheduledDate: String = LocalDate.now().toString()): Long =
+        System.currentTimeMillis() + minutes.coerceAtLeast(1) * 60_000L
 
     fun restoreActiveSnoozes(c: Context) {
         SnoozeRecovery.reconcileToday(c)
