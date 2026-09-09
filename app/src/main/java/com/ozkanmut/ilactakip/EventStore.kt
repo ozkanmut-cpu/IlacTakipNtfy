@@ -73,7 +73,8 @@ object EventStore {
         save(c, compact(load(c).map { if (it.eventId == eventId) it.copy(syncState = "synced") else it }))
     }
 
-    fun pending(c: Context): List<DoseEvent> = load(c).filter { it.syncState != "synced" }
+    /** Pending work is exposed oldest-first so bounded reconnect batches cannot starve old events. */
+    fun pending(c: Context): List<DoseEvent> = load(c).filter { it.syncState != "synced" }.asReversed()
 
     fun load(c: Context): List<DoseEvent> {
         val raw = prefs(c).getString(KEY_EVENTS, "[]") ?: "[]"
