@@ -42,20 +42,8 @@ object ProgramRuleStore {
                 // save() and applyRemote() share the same object lock, so the local
                 // event can be captured here before any remote rule is allowed to
                 // race in. Persist the exact event ordering metadata that was sent.
-                val localTopic = Store.topic(c)
-                val emitted = EventStore.load(c).firstOrNull { event ->
-                    event.type == "program_rule_updated" &&
-                        event.actorTopic == localTopic &&
-                        event.medications.firstOrNull()?.id == normalized.medicationId
-                }
-                if (emitted != null) {
-                    prefs(c).edit()
-                        .putLong(STAMP_PREFIX + normalized.medicationId, emitted.timestamp)
-                        .putLong(REV_PREFIX + normalized.medicationId, emitted.revision)
-                        .putString(ACTOR_PREFIX + normalized.medicationId, emitted.actorTopic)
-                        .putString(EVENT_PREFIX + normalized.medicationId, emitted.eventId)
-                        .commit()
-                }
+                val emitted = latestLocalRuleEvent(c, normalized.medicationId)
+                if (emitted != null) persistOrdering(c, normalized.medicationId, emitted)
             }
         }
     }
@@ -75,6 +63,12 @@ object ProgramRuleStore {
 
         val p = prefs(c)
         val id = rule.medicationId
+
+        // Crash recovery: Ntfy.sendEvent durably appends the local rule event before
+        // save() writes ordering metadata. If the process dies in that tiny window,
+        // recover the metadata from EventStore before judging any remote edit.
+        reconcileLocalOrdering(c, id)
+
         val storedRevision = p.getLong(REV_PREFIX + id, 0L)
         val storedActor = p.getString(ACTOR_PREFIX + id, "").orEmpty()
         val storedEvent = p.getString(EVENT_PREFIX + id, "").orEmpty()
@@ -90,13 +84,46 @@ object ProgramRuleStore {
 
         val normalized = normalize(rule)
         persist(c, listOf(normalized) + load(c).filterNot { it.medicationId == normalized.medicationId })
-        p.edit()
-            .putLong(STAMP_PREFIX + normalized.medicationId, event.timestamp)
-            .putLong(REV_PREFIX + normalized.medicationId, event.revision)
-            .putString(ACTOR_PREFIX + normalized.medicationId, event.actorTopic)
-            .putString(EVENT_PREFIX + normalized.medicationId, event.eventId)
-            .commit()
+        persistOrdering(c, normalized.medicationId, event)
         AlarmScheduler.scheduleAll(c, Store.load(c), observeProgramChanges = false)
+    }
+
+    private fun latestLocalRuleEvent(c: Context, medicationId: String): DoseEvent? {
+        val localTopic = Store.topic(c)
+        return EventStore.load(c)
+            .asSequence()
+            .filter { event ->
+                event.type == "program_rule_updated" &&
+                    event.actorTopic == localTopic &&
+                    event.medications.firstOrNull()?.id == medicationId
+            }
+            .maxWithOrNull(DoseEventOrder.comparator)
+    }
+
+    private fun reconcileLocalOrdering(c: Context, medicationId: String) {
+        val local = latestLocalRuleEvent(c, medicationId) ?: return
+        val p = prefs(c)
+        val storedRevision = p.getLong(REV_PREFIX + medicationId, 0L)
+        val storedActor = p.getString(ACTOR_PREFIX + medicationId, "").orEmpty()
+        val storedEvent = p.getString(EVENT_PREFIX + medicationId, "").orEmpty()
+        val storedStamp = p.getLong(STAMP_PREFIX + medicationId, 0L)
+        val localIsNewer = if (local.revision > 0L || storedRevision > 0L) {
+            when {
+                local.revision != storedRevision -> local.revision > storedRevision
+                local.actorTopic != storedActor -> local.actorTopic > storedActor
+                else -> local.eventId > storedEvent
+            }
+        } else local.timestamp > storedStamp
+        if (localIsNewer) persistOrdering(c, medicationId, local)
+    }
+
+    private fun persistOrdering(c: Context, medicationId: String, event: DoseEvent) {
+        prefs(c).edit()
+            .putLong(STAMP_PREFIX + medicationId, event.timestamp)
+            .putLong(REV_PREFIX + medicationId, event.revision)
+            .putString(ACTOR_PREFIX + medicationId, event.actorTopic)
+            .putString(EVENT_PREFIX + medicationId, event.eventId)
+            .commit()
     }
 
     fun isActiveOn(c: Context, medicationId: String, date: LocalDate): Boolean {
