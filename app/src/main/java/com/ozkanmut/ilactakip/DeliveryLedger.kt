@@ -16,6 +16,12 @@ object DeliveryLedger {
     fun delivered(c: Context, eventId: String, topic: String): Boolean =
         prefs(c).getBoolean(key(eventId, topic), false)
 
+    private fun belongsToEvent(ledgerKey: String, eventId: String): Boolean =
+        ledgerKey.startsWith("$eventId|")
+
+    private fun belongsToAnyEvent(ledgerKey: String, eventIds: Set<String>): Boolean =
+        eventIds.any { belongsToEvent(ledgerKey, it) }
+
     @Synchronized
     fun markDelivered(c: Context, eventId: String, topic: String) {
         val p = prefs(c)
@@ -24,7 +30,9 @@ object DeliveryLedger {
 
         val existingKeys = p.all.keys.toList()
         val pendingIds = EventStore.pending(c).mapTo(mutableSetOf()) { it.eventId }
-        val protectedKeys = existingKeys.filter { ledgerEventId(it) in pendingIds }.toSet()
+        // eventId may itself contain '|', e.g. deterministic alarm delivery IDs.
+        // Never parse with substringBefore('|'); match the full pending eventId prefix.
+        val protectedKeys = existingKeys.filter { belongsToAnyEvent(it, pendingIds) }.toSet()
         val removable = existingKeys.filterNot { it in protectedKeys }
         val projectedSize = existingKeys.size + 1
         val removeCount = (projectedSize - MAX_KEYS + 500).coerceAtLeast(0)
@@ -33,8 +41,6 @@ object DeliveryLedger {
         removable.take(removeCount).forEach { editor.remove(it) }
         editor.commit()
     }
-
-    private fun ledgerEventId(key: String): String = key.substringBefore('|')
 
     /**
      * Self-heals the crash window between EventStore.markSynced() and clearEvent().
@@ -46,7 +52,7 @@ object DeliveryLedger {
         val p = prefs(c)
         if (p.all.isEmpty()) return
         val pendingIds = EventStore.pending(c).mapTo(mutableSetOf()) { it.eventId }
-        val stale = p.all.keys.filter { ledgerEventId(it) !in pendingIds }
+        val stale = p.all.keys.filterNot { belongsToAnyEvent(it, pendingIds) }
         if (stale.isEmpty()) return
         val editor = p.edit()
         stale.forEach(editor::remove)
@@ -59,6 +65,18 @@ object DeliveryLedger {
         val p = prefs(c)
         val editor = p.edit()
         p.all.keys.filter { it.startsWith(prefix) }.forEach { editor.remove(it) }
+        editor.commit()
+    }
+
+    @Synchronized
+    fun dropTopic(c: Context, topic: String) {
+        if (topic.isBlank()) return
+        val suffix = "|$topic"
+        val p = prefs(c)
+        val matching = p.all.keys.filter { it.endsWith(suffix) }
+        if (matching.isEmpty()) return
+        val editor = p.edit()
+        matching.forEach(editor::remove)
         editor.commit()
     }
 }
