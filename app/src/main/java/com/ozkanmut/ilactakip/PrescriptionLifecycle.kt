@@ -1,7 +1,6 @@
 package com.ozkanmut.ilactakip
 
 import android.content.Context
-import java.text.Normalizer
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.util.Locale
@@ -35,15 +34,7 @@ object PrescriptionLifecycle {
 
     private fun medicationKey(r: PrescriptionRecord): String {
         if (r.medicationId.isNotBlank()) return "id:${r.medicationId}"
-        val ascii = Normalizer.normalize(r.medicationName, Normalizer.Form.NFD)
-            .replace(Regex("\\p{M}+"), "")
-            .lowercase(Locale.ROOT)
-            .replace(Regex("\\([^)]*\\)"), " ")
-            .replace(Regex("\\b\\d+(?:[.,/]\\d+)?\\s*(mg|mcg|ug|g|gr|ml|u/ml|iu/ml|%)\\b", RegexOption.IGNORE_CASE), " ")
-            .replace(Regex("\\b(tablet|tb|kapsul|capsule|flakon|flk|ampul|neb|nebul|solusyon|damla|inhaler|krem|jel|pomad)\\b", RegexOption.IGNORE_CASE), " ")
-            .replace(Regex("[^a-z0-9]+"), " ")
-            .trim()
-        return "name:$ascii"
+        return "name:${MedicationIdentity.canonical(r.medicationName)}"
     }
 
     private fun cycleDate(r: PrescriptionRecord): LocalDate =
