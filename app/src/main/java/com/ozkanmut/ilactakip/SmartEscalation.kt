@@ -21,12 +21,14 @@ object SmartEscalation {
 
     fun schedule(c: Context, time: String, scheduledDate: String = LocalDate.now().toString()) {
         cancelAlarms(c, time, scheduledDate)
+        AlertOutbox.dropEscalationSession(c.applicationContext, time, scheduledDate)
         AttentionBudget.clear(c, time, scheduledDate)
         scheduleFresh(c, time, scheduledDate)
     }
 
     fun cancel(c: Context, time: String, scheduledDate: String = LocalDate.now().toString()) {
         cancelAlarms(c, time, scheduledDate)
+        AlertOutbox.dropEscalationSession(c.applicationContext, time, scheduledDate)
         AttentionBudget.clear(c, time, scheduledDate)
     }
 
