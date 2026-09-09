@@ -46,6 +46,36 @@ class AlarmActionEscalationTest {
         .putExtra("ids", med.id)
         .putExtra("scheduledDate", date)
 
+    private fun pendingAlarm() {
+        EventStore.append(c, DoseEvent(
+            eventId = "alarm-1",
+            type = "alarm",
+            time = "08:00",
+            actor = Store.myName(c),
+            actorTopic = Store.topic(c),
+            timestamp = System.currentTimeMillis(),
+            medications = listOf(med),
+            syncState = "synced",
+            revision = 1L,
+            scheduledDate = date,
+            ownerId = Store.topic(c)
+        ))
+    }
+
+    private fun remoteBatonEvent(id: String, type: String) = DoseEvent(
+        eventId = id,
+        type = type,
+        time = "08:00",
+        actor = "Remote caregiver",
+        actorTopic = "care-remote",
+        timestamp = System.currentTimeMillis(),
+        medications = emptyList(),
+        syncState = "synced",
+        revision = 1L,
+        scheduledDate = date,
+        ownerId = Store.topic(c)
+    )
+
     @Test
     fun takenNotificationAction_recordsTakenAndClearsActiveCareBaton() {
         val now = System.currentTimeMillis()
@@ -93,19 +123,7 @@ class AlarmActionEscalationTest {
 
     @Test
     fun careBatonRelease_removesClaimAndKeepsDoseUnresolved() {
-        EventStore.append(c, DoseEvent(
-            eventId = "alarm-1",
-            type = "alarm",
-            time = "08:00",
-            actor = Store.myName(c),
-            actorTopic = Store.topic(c),
-            timestamp = System.currentTimeMillis(),
-            medications = listOf(med),
-            syncState = "synced",
-            revision = 1L,
-            scheduledDate = date,
-            ownerId = Store.topic(c)
-        ))
+        pendingAlarm()
         CareBatonStore.claim(c, "08:00", minutes = 30, scheduledDate = date)
         assertNotNull(CareBatonStore.active(c, "08:00", date))
 
@@ -113,5 +131,40 @@ class AlarmActionEscalationTest {
 
         assertEquals(null, CareBatonStore.active(c, "08:00", date))
         assertEquals(DoseSessionStatus.PENDING, DoseStateEngine.stateForTime(c, "08:00", LocalDate.now()).status)
+    }
+
+    @Test
+    fun remoteCareClaimReplay_keepsSingleClaim() {
+        val claim = remoteBatonEvent("remote-claim", "care_claimed")
+
+        CareBatonStore.applyRemoteClaim(c, claim)
+        CareBatonStore.applyRemoteClaim(c, claim)
+
+        assertEquals(1, CareBatonStore.load(c).count { it.time == "08:00" && it.scheduledDate == date })
+        assertEquals("care-remote", CareBatonStore.active(c, "08:00", date)?.actorTopic)
+    }
+
+    @Test
+    fun remoteCareRelease_resumesUnresolvedDose_andReplayDoesNotResetBudgetAgain() {
+        pendingAlarm()
+        val claim = remoteBatonEvent("remote-claim", "care_claimed")
+        CareBatonStore.applyRemoteClaim(c, claim)
+        assertNotNull(CareBatonStore.active(c, "08:00", date))
+
+        val release = remoteBatonEvent("remote-release", "care_released")
+        CareBatonStore.applyRemoteRelease(c, release)
+
+        assertEquals(null, CareBatonStore.active(c, "08:00", date))
+        assertEquals(DoseSessionStatus.PENDING, DoseStateEngine.stateForTime(c, "08:00", LocalDate.now()).status)
+
+        // Simulate a caregiver stage being consumed after the first successful release.
+        // A replay of the same release must be a no-op and must not clear the budget again.
+        AttentionBudget.mark(c, "08:00", "care-topic", 0, date)
+        assertFalse(AttentionBudget.allow(c, "08:00", "care-topic", 0, date))
+
+        CareBatonStore.applyRemoteRelease(c, release)
+
+        assertFalse(AttentionBudget.allow(c, "08:00", "care-topic", 0, date))
+        assertEquals(null, CareBatonStore.active(c, "08:00", date))
     }
 }
