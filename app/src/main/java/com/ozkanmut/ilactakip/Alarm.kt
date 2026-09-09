@@ -93,12 +93,27 @@ object AlarmScheduler {
     }
 }
 
+object AlarmDeliveryGuard {
+    fun shouldDeliver(c: Context, time: String, scheduledDate: String, ids: List<String>, isSnooze: Boolean): Boolean {
+        if (isSnooze) return true
+        val date = runCatching { LocalDate.parse(scheduledDate) }.getOrNull() ?: return false
+        val current = Store.load(c)
+        val candidates = if (ids.isNotEmpty()) current.filter { it.id in ids } else current.filter { time in it.times }
+        return candidates.any { med -> time in med.times && ProgramRuleStore.isActiveOn(c, med.id, date) }
+    }
+}
+
 class AlarmReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
         val time = i.getStringExtra("time") ?: return
         val names = i.getStringExtra("names")?.split("|#|") ?: return
-        val ids = i.getStringExtra("ids")?.split("|#|") ?: emptyList()
+        val ids = i.getStringExtra("ids")?.split("|#|")?.filter { it.isNotBlank() } ?: emptyList()
         val scheduledDate = i.getStringExtra("scheduledDate") ?: LocalDate.now().toString()
+        val isSnooze = i.getBooleanExtra("isSnooze", false)
+        if (!AlarmDeliveryGuard.shouldDeliver(c, time, scheduledDate, ids, isSnooze)) {
+            AlarmScheduler.scheduleAll(c, Store.load(c))
+            return
+        }
         val channel = "medication"
         val notificationManager = c.getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= 26) notificationManager.createNotificationChannel(NotificationChannel(channel, I18n.t("channel"), NotificationManager.IMPORTANCE_HIGH))
