@@ -17,6 +17,8 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
+      - name: Run reliability unit tests
+        run: gradle testDebugUnitTest
       - name: Build debug APK
         run: gradle assembleDebug
       - uses: actions/upload-artifact@v4
