@@ -18,7 +18,7 @@ class IncomingEventGuardTest {
     @Before
     fun setUp() {
         c = ApplicationProvider.getApplicationContext()
-        listOf("ilac_takip", "dosefolk_events", "dosefolk_remote_event_receipts", "dosefolk_permissions")
+        listOf("ilac_takip", "dosefolk_events", "dosefolk_remote_event_receipts", "dosefolk_permissions", "dosefolk_revoked_peers")
             .forEach { c.getSharedPreferences(it, Context.MODE_PRIVATE).edit().clear().commit() }
     }
 
@@ -58,7 +58,7 @@ class IncomingEventGuardTest {
     }
 
     @Test
-    fun revokedPeerEvent_isRejectedBeforePersistence() {
+    fun revokedPeerEvent_isRejectedAndReceiptedBeforeRePair() {
         val topic = "peer-revoked"
         val person = Person("person-1", "Peer", topic)
         Store.savePeople(c, listOf(person))
@@ -70,6 +70,7 @@ class IncomingEventGuardTest {
         )
         assertTrue(IncomingEventGuard.shouldProcess(c, authorized))
 
+        RevokedPeerFence.markRevoked(c, topic)
         Store.savePeople(c, emptyList())
         PermissionPolicy.clearPeer(c, topic)
         RevocationCleanup.clearPeer(c, topic)
@@ -77,6 +78,18 @@ class IncomingEventGuardTest {
         val delayed = authorized.copy(eventId = "delayed-after-revoke", revision = 2L)
         assertFalse(IncomingEventGuard.shouldProcess(c, delayed))
         assertFalse(EventStore.contains(c, delayed.eventId))
+        assertTrue(RemoteEventReceiptStore.processed(c, delayed.eventId))
+    }
+
+    @Test
+    fun tombstonedTopic_blocksEvenIfAccidentallyReinsertedBeforeDrain() {
+        val topic = "peer-tombstoned"
+        RevokedPeerFence.markRevoked(c, topic)
+        Store.savePeople(c, listOf(Person("person-2", "Peer", topic)))
+        val delayed = selfEvent("old-unseen").copy(actorTopic = topic, ownerId = Store.topic(c))
+
+        assertFalse(IncomingEventGuard.shouldProcess(c, delayed))
+        assertTrue(RemoteEventReceiptStore.processed(c, delayed.eventId))
     }
 
     @Test
