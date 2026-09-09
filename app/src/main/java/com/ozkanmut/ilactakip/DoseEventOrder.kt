@@ -1,17 +1,27 @@
 package com.ozkanmut.ilactakip
 
 /**
- * Canonical ordering for v9 dose events.
- * Logical revision is the causal clock; stable IDs break ties deterministically.
- * Wall-clock time is only the final fallback so device clock skew cannot change convergence.
+ * Canonical ordering for dose events.
+ *
+ * v9+ events use Lamport revision first so wall-clock skew cannot change convergence.
+ * Legacy events have revision=0; when comparing two legacy events we preserve the
+ * historical timestamp-first semantics so old persisted data is not reordered by
+ * actor/event IDs after an upgrade.
  */
 object DoseEventOrder {
-    val global: Comparator<DoseEvent> = compareBy<DoseEvent> { it.revision }
-        .thenBy { it.actorTopic }
-        .thenBy { it.eventId }
-        .thenBy { it.timestamp }
+    val global: Comparator<DoseEvent> = Comparator { a, b ->
+        if (a.revision == 0L && b.revision == 0L) {
+            compareValuesBy(a, b, { it.timestamp }, { it.actorTopic }, { it.eventId })
+        } else {
+            compareValuesBy(a, b, { it.revision }, { it.actorTopic }, { it.eventId }, { it.timestamp })
+        }
+    }
 
-    val withinActor: Comparator<DoseEvent> = compareBy<DoseEvent> { it.revision }
-        .thenBy { it.eventId }
-        .thenBy { it.timestamp }
+    val withinActor: Comparator<DoseEvent> = Comparator { a, b ->
+        if (a.revision == 0L && b.revision == 0L) {
+            compareValuesBy(a, b, { it.timestamp }, { it.eventId })
+        } else {
+            compareValuesBy(a, b, { it.revision }, { it.eventId }, { it.timestamp })
+        }
+    }
 }
