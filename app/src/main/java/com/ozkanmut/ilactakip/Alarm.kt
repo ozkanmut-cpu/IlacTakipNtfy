@@ -215,6 +215,7 @@ object Ntfy {
                 type == "snoozed" -> { SmartEscalation.cancel(c, time, scheduledDate); DoseNotificationLifecycle.cancel(c, time, scheduledDate) }
             }
             OwnerScopeStore.remember(c, event)
+            PrnUsageLedger.observe(c, event)
             StockEngine.applyEvent(c, event)
             UndoRecovery.recoverEvent(c, event)
             thread { deliverEventBlocking(c.applicationContext, event) }
