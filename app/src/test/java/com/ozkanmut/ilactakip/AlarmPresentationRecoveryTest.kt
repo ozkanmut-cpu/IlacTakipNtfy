@@ -6,6 +6,7 @@ import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.testing.WorkManagerTestInitHelper
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -46,22 +47,24 @@ class AlarmPresentationRecoveryTest {
         .putExtra("isSnooze", false)
         .putExtra("deliveryId", deliveryId)
 
+    private fun alarmEvent(deliveryId: String, revision: Long = 7L) = DoseEvent(
+        eventId = deliveryId,
+        type = "alarm",
+        time = "08:00",
+        actor = "Local",
+        actorTopic = Store.topic(c),
+        timestamp = System.currentTimeMillis(),
+        medications = listOf(med),
+        syncState = "pending",
+        revision = revision,
+        scheduledDate = date,
+        ownerId = OwnerScopeStore.localOwnerId(c)
+    )
+
     @Test
     fun persistedAlarmWithoutPresentationReceipt_isPresentedOnRedeliveryWithoutRevisionChurn() {
         val deliveryId = "group-08:00|123456789"
-        EventStore.append(c, DoseEvent(
-            eventId = deliveryId,
-            type = "alarm",
-            time = "08:00",
-            actor = "Local",
-            actorTopic = Store.topic(c),
-            timestamp = System.currentTimeMillis(),
-            medications = listOf(med),
-            syncState = "pending",
-            revision = 7L,
-            scheduledDate = date,
-            ownerId = OwnerScopeStore.localOwnerId(c)
-        ))
+        EventStore.append(c, alarmEvent(deliveryId))
         assertEquals(7L, c.getSharedPreferences("dosefolk_events", Context.MODE_PRIVATE).getLong("local_revision", 0L))
 
         AlarmReceiver().onReceive(c, alarmIntent(deliveryId))
@@ -76,5 +79,45 @@ class AlarmPresentationRecoveryTest {
 
         assertEquals(1, EventStore.load(c).count { it.eventId == deliveryId && it.type == "alarm" })
         assertEquals(7L, c.getSharedPreferences("dosefolk_events", Context.MODE_PRIVATE).getLong("local_revision", 0L))
+    }
+
+    @Test
+    fun terminalDecisionBeforeRedelivery_doesNotResurrectNotificationAndCompletesReceipt() {
+        val deliveryId = "group-08:00|terminal-race"
+        EventStore.append(c, alarmEvent(deliveryId, 7L))
+        EventStore.append(c, DoseEvent(
+            eventId = "taken-after-alarm",
+            type = "taken",
+            time = "08:00",
+            actor = "Local",
+            actorTopic = Store.topic(c),
+            timestamp = System.currentTimeMillis() + 1,
+            medications = listOf(med),
+            syncState = "pending",
+            revision = 8L,
+            scheduledDate = date,
+            ownerId = OwnerScopeStore.localOwnerId(c)
+        ))
+
+        AlarmReceiver().onReceive(c, alarmIntent(deliveryId))
+
+        val manager = c.getSystemService(NotificationManager::class.java)
+        assertEquals(0, manager.activeNotifications.count { it.id == ("group-$date-08:00").hashCode() })
+        assertTrue(AlarmPresentationLedger.isPresented(c, deliveryId))
+    }
+
+    @Test
+    fun orderedReceiptRetention_evictsOnlyOldestReceipt() {
+        repeat(AlarmPresentationLedger.MAX_IDS + 1) { index ->
+            AlarmPresentationLedger.markPresented(c, "delivery-$index")
+        }
+
+        val ids = AlarmPresentationLedger.orderedIds(c)
+        assertEquals(AlarmPresentationLedger.MAX_IDS, ids.size)
+        assertFalse(ids.contains("delivery-0"))
+        assertTrue(ids.contains("delivery-1"))
+        assertTrue(ids.contains("delivery-${AlarmPresentationLedger.MAX_IDS}"))
+        assertEquals("delivery-1", ids.first())
+        assertEquals("delivery-${AlarmPresentationLedger.MAX_IDS}", ids.last())
     }
 }
