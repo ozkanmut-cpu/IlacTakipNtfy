@@ -48,11 +48,12 @@ class AlarmActionEscalationTest {
         .putExtra("ids", med.id)
         .putExtra("scheduledDate", date)
 
-    private fun alarmIntent(deliveryId: String = "alarm-delivery-$date") = Intent(c, AlarmReceiver::class.java)
+    private fun alarmIntent(deliveryId: String = "alarm-delivery-$date", isSnooze: Boolean = false) = Intent(c, AlarmReceiver::class.java)
         .putExtra("time", "08:00")
         .putExtra("names", "${med.name} (${med.dose})")
         .putExtra("ids", med.id)
         .putExtra("scheduledDate", date)
+        .putExtra("isSnooze", isSnooze)
         .putExtra("deliveryId", deliveryId)
 
     private fun pendingAlarm() {
@@ -187,6 +188,41 @@ class AlarmActionEscalationTest {
         assertEquals(1, manager.activeNotifications.count { it.id == ("group-$date-08:00").hashCode() })
         SyncEngine.applyRemoteState(c, remoteDoseEvent("remote-snooze", "snoozed", System.currentTimeMillis() + 30 * 60_000L))
         assertEquals(0, manager.activeNotifications.count { it.id == ("group-$date-08:00").hashCode() })
+    }
+
+    @Test
+    fun delayedRegularAlarm_afterRemoteTerminal_cannotResurrectNotification() {
+        pendingAlarm()
+        val remote = remoteDoseEvent("remote-taken-race", "taken")
+        EventStore.append(c, remote)
+        SyncEngine.applyRemoteState(c, remote)
+        val beforeAlarmEvents = EventStore.load(c).count { it.type == "alarm" && it.scheduledDate == date && it.time == "08:00" }
+
+        AlarmReceiver().onReceive(c, alarmIntent("stale-regular-after-terminal"))
+
+        val manager = c.getSystemService(NotificationManager::class.java)
+        assertEquals(0, manager.activeNotifications.count { it.id == ("group-$date-08:00").hashCode() })
+        assertEquals(beforeAlarmEvents, EventStore.load(c).count { it.type == "alarm" && it.scheduledDate == date && it.time == "08:00" })
+        assertEquals(DoseSessionStatus.TAKEN, DoseStateEngine.stateForTime(c, "08:00", LocalDate.now()).status)
+    }
+
+    @Test
+    fun delayedSnoozeAlarm_afterRemoteTerminal_cannotResurrectNotification() {
+        pendingAlarm()
+        val snooze = remoteDoseEvent("remote-snooze-race", "snoozed", System.currentTimeMillis() + 30 * 60_000L)
+        EventStore.append(c, snooze)
+        SyncEngine.applyRemoteState(c, snooze)
+        val terminal = remoteDoseEvent("remote-taken-after-snooze", "taken")
+        EventStore.append(c, terminal)
+        SyncEngine.applyRemoteState(c, terminal)
+        val beforeAlarmEvents = EventStore.load(c).count { it.type == "alarm" && it.scheduledDate == date && it.time == "08:00" }
+
+        AlarmReceiver().onReceive(c, alarmIntent("stale-snooze-after-terminal", isSnooze = true))
+
+        val manager = c.getSystemService(NotificationManager::class.java)
+        assertEquals(0, manager.activeNotifications.count { it.id == ("group-$date-08:00").hashCode() })
+        assertEquals(beforeAlarmEvents, EventStore.load(c).count { it.type == "alarm" && it.scheduledDate == date && it.time == "08:00" })
+        assertEquals(DoseSessionStatus.TAKEN, DoseStateEngine.stateForTime(c, "08:00", LocalDate.now()).status)
     }
 
     @Test
