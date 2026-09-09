@@ -13,6 +13,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.time.LocalDate
 import java.time.LocalTime
+import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -24,12 +25,13 @@ object AlarmScheduler {
 
     fun scheduleAll(c: Context, meds: List<Medication>, observeProgramChanges: Boolean = true) {
         if (observeProgramChanges) ProgramSync.observeLocal(c, meds)
+        val zone = TravelGuard.effectiveMedicationZone(c)
         val p = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val previous = p.getStringSet(KEY_TIMES, emptySet()).orEmpty().toSet()
         val scheduled = mutableSetOf<String>()
         meds.flatMap { med -> med.times.map { it to med } }
             .groupBy({ it.first }, { it.second })
-            .forEach { (time, list) -> if (scheduleNextForTime(c, time, list)) scheduled += time }
+            .forEach { (time, list) -> if (scheduleNextForTime(c, time, list, zone)) scheduled += time }
         (previous - scheduled).forEach { cancelGroup(c, it) }
         p.edit().putStringSet(KEY_TIMES, scheduled).apply()
     }
@@ -44,17 +46,17 @@ object AlarmScheduler {
         if (pendingIntent != null) { alarmManager.cancel(pendingIntent); pendingIntent.cancel() }
     }
 
-    private fun scheduleNextForTime(c: Context, time: String, meds: List<Medication>): Boolean {
+    private fun scheduleNextForTime(c: Context, time: String, meds: List<Medication>, zone: ZoneId): Boolean {
         val parsed = runCatching { LocalTime.parse(time) }.getOrNull() ?: return false
-        val now = ZonedDateTime.now()
+        val now = ZonedDateTime.now(zone)
         val candidates = meds.mapNotNull { med ->
             var from = now.toLocalDate()
-            if (!from.atTime(parsed).atZone(now.zone).isAfter(now)) from = from.plusDays(1)
+            if (!from.atTime(parsed).atZone(zone).isAfter(now)) from = from.plusDays(1)
             ProgramRuleStore.nextActiveDate(c, med, from)?.let { date -> med to date }
         }
         val earliest = candidates.minOfOrNull { it.second } ?: return false
         val due = candidates.filter { it.second == earliest }.map { it.first }
-        val trigger = earliest.atTime(parsed).atZone(now.zone).toInstant().toEpochMilli()
+        val trigger = earliest.atTime(parsed).atZone(zone).toInstant().toEpochMilli()
         scheduleAt(c, time, due, trigger, "group-$time", false, earliest.toString())
         return true
     }
