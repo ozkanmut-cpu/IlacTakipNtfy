@@ -46,8 +46,7 @@ object PairingLifecycle {
     private fun cleanupPeer(c: Context, topic: String, dropOutbox: Boolean) {
         Store.savePeople(c, Store.people(c).filterNot { it.topic == topic })
         PermissionPolicy.clearPeer(c, topic)
-        RemoteCapabilityStore.clearOwner(c, topic)
-        OwnerScopeStore.clearOwner(c, topic)
+        RevocationCleanup.clearPeer(c, topic)
         if (dropOutbox) AlertOutbox.dropTopic(c, topic)
     }
 }
