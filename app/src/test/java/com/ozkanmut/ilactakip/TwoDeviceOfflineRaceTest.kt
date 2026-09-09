@@ -111,7 +111,7 @@ class TwoDeviceOfflineRaceTest {
     }
 
     @Test
-    fun delayedOlderRemoteTerminal_outsideConflictWindow_doesNotOverrideNewerLocalTerminal() {
+    fun delayedOppositeRemoteTerminal_remainsConflictDespiteClockDistance() {
         val base = System.currentTimeMillis()
         val remoteOld = event("remote-old-missed", "missed", "phone-b", base, 9L)
         val localNew = event("local-new-taken", "taken", Store.topic(c), base + 5 * 60_000L, 2L, syncState = "pending")
@@ -121,7 +121,7 @@ class TwoDeviceOfflineRaceTest {
         EventStore.append(c, remoteOld)
 
         val state = DoseStateEngine.stateForTime(c, "08:00")
-        assertEquals(DoseSessionStatus.TAKEN, state.status)
-        assertEquals("local-new-taken", state.latestEvent?.eventId)
+        assertEquals(DoseSessionStatus.CONFLICT, state.status)
+        assertEquals(2, state.conflictEvents.size)
     }
 }
