@@ -63,10 +63,6 @@ object OwnerScopeStore {
             else -> return
         }
 
-        // Remote program state, optional rule deletion, and owner binding share the
-        // same SharedPreferences file. Commit them together so a process death can
-        // never expose a half-applied program mutation. ProgramSync's ordering
-        // checkpoint is intentionally separate; replay is idempotent and finishes it.
         val edit = prefs(c).edit().putString(KEY_REMOTE, encodeRemote(all))
         if (rules != null) edit.putString(KEY_REMOTE_RULES, encodeRemoteRules(rules))
         edit.putString(ownerKey(medication.id), ownerId).commit()
@@ -98,8 +94,12 @@ object OwnerScopeStore {
         val index = current.indexOfFirst { it.ownerId == ownerId && it.rule.medicationId == normalized.medicationId }
         val scoped = ScopedRule(ownerId, normalized)
         if (index >= 0) current[index] = scoped else current += scoped
-        saveRemoteRules(c, current)
+
+        // Persist the rule body, its ordering checkpoint, and owner binding in one
+        // commit. If the process dies before commit nothing is visible; if commit
+        // succeeds, replay observes the checkpoint and is a no-op.
         p.edit()
+            .putString(KEY_REMOTE_RULES, encodeRemoteRules(current))
             .putLong(ruleStampKey(ownerId, medId), event.timestamp)
             .putLong(ruleRevisionKey(ownerId, medId), event.revision)
             .putString(ruleActorKey(ownerId, medId), event.actorTopic)
