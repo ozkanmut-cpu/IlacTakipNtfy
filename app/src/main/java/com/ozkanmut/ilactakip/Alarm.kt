@@ -116,6 +116,13 @@ object ActionDeliveryGuard {
     }
 }
 
+object DoseNotificationLifecycle {
+    fun cancel(c: Context, time: String, scheduledDate: String) {
+        c.getSystemService(NotificationManager::class.java)
+            .cancel(("group-$scheduledDate-$time").hashCode())
+    }
+}
+
 class AlarmReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
         val time = i.getStringExtra("time") ?: return
@@ -178,7 +185,9 @@ class BootReceiver : BroadcastReceiver() {
 
 object Ntfy {
     private val terminalTypes = setOf("taken", "missed", "conflict_resolved_taken", "conflict_resolved_missed")
+    private val directActionTypes = setOf("taken", "missed", "snoozed")
     private val eventLocks = ConcurrentHashMap<String, Any>()
+    private val actionLocks = ConcurrentHashMap<String, Any>()
 
     fun sendEvent(
         c: Context,
@@ -189,21 +198,29 @@ object Ntfy {
         snoozeUntil: Long = 0L,
         eventId: String? = null
     ): Boolean {
-        val ownerId = OwnerScopeStore.ownerFor(c, meds)
-        val meta = meds.mapNotNull { med -> if (ownerId == OwnerScopeStore.localOwnerId(c)) MedicationMetaStore.get(c, med.id) else MedicationMetaStore.remote(c, ownerId, med.id) }
-        val event = DoseEvent(eventId ?: UUID.randomUUID().toString(), type, time, Store.myName(c), Store.topic(c),System.currentTimeMillis(), meds, "pending", EventStore.nextRevision(c), scheduledDate, snoozeUntil, ownerId, meta)
-        if (!EventStore.appendIfAbsent(c, event)) return false
+        val actionLock = actionLocks.computeIfAbsent("$scheduledDate|$time") { Any() }
+        return synchronized(actionLock) {
+            if (type in directActionTypes) {
+                val action = if (type == "snoozed") "snooze" else type
+                if (!ActionDeliveryGuard.shouldApply(c, action, time, scheduledDate)) return@synchronized false
+            }
 
-        when {
-            type in terminalTypes -> { AlarmScheduler.cancelSnooze(c, time, scheduledDate); SmartEscalation.cancel(c, time, scheduledDate); CareBatonStore.resolve(c, time, scheduledDate) }
-            type == "snoozed" -> SmartEscalation.cancel(c, time, scheduledDate)
+            val ownerId = OwnerScopeStore.ownerFor(c, meds)
+            val meta = meds.mapNotNull { med -> if (ownerId == OwnerScopeStore.localOwnerId(c)) MedicationMetaStore.get(c, med.id) else MedicationMetaStore.remote(c, ownerId, med.id) }
+            val event = DoseEvent(eventId ?: UUID.randomUUID().toString(), type, time, Store.myName(c), Store.topic(c),System.currentTimeMillis(), meds, "pending", EventStore.nextRevision(c), scheduledDate, snoozeUntil, ownerId, meta)
+            if (!EventStore.appendIfAbsent(c, event)) return@synchronized false
+
+            when {
+                type in terminalTypes -> { AlarmScheduler.cancelSnooze(c, time, scheduledDate); SmartEscalation.cancel(c, time, scheduledDate); CareBatonStore.resolve(c, time, scheduledDate); DoseNotificationLifecycle.cancel(c, time, scheduledDate) }
+                type == "snoozed" -> { SmartEscalation.cancel(c, time, scheduledDate); DoseNotificationLifecycle.cancel(c, time, scheduledDate) }
+            }
+            OwnerScopeStore.remember(c, event)
+            StockEngine.applyEvent(c, event)
+            UndoRecovery.recoverEvent(c, event)
+            thread { deliverEventBlocking(c.applicationContext, event) }
+            DosefolkSyncScheduler.kick(c)
+            true
         }
-        OwnerScopeStore.remember(c, event)
-        StockEngine.applyEvent(c, event)
-        UndoRecovery.recoverEvent(c, event)
-        thread { deliverEventBlocking(c.applicationContext, event) }
-        DosefolkSyncScheduler.kick(c)
-        return true
     }
 
     fun retryPending(c: Context) { DosefolkSyncScheduler.kick(c) }
