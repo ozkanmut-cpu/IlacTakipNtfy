@@ -43,4 +43,10 @@ class EventStoreLamportTest {
         EventStore.append(c, event("seed-7", 99L))
         assertEquals(8L, EventStore.nextRevision(c))
     }
+
+    @Test(expected = IllegalStateException::class)
+    fun maxRevision_failsFastInsteadOfWrappingNegative() {
+        EventStore.observeRevision(c, Long.MAX_VALUE)
+        EventStore.nextRevision(c)
+    }
 }
