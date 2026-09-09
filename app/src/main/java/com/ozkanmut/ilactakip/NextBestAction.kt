@@ -1,6 +1,7 @@
 package com.ozkanmut.ilactakip
 
 import android.content.Context
+import java.time.LocalDate
 import java.time.LocalTime
 import java.time.temporal.ChronoUnit
 
@@ -11,7 +12,8 @@ data class NextBestAction(
     val title: String,
     val detail: String,
     val time: String? = null,
-    val medications: List<Medication> = emptyList()
+    val medications: List<Medication> = emptyList(),
+    val scheduledDate: String = LocalDate.now().toString()
 )
 
 /**
@@ -34,7 +36,8 @@ object NextBestActionEngine {
                 uiText("Çelişkili kayıt var", "Conflicting records"),
                 uiText("${s.time} dozu için iki farklı durum kaydedildi.", "Two different states were recorded for the ${s.time} dose."),
                 s.time,
-                s.medications
+                s.medications,
+                s.scheduledDate
             )
         }
 
@@ -46,7 +49,8 @@ object NextBestActionEngine {
                 uiText("Şimdi ilgilen", "Needs attention now"),
                 s.medications.joinToString(", ") { it.name }.ifBlank { uiText("İlaç zamanı", "Medication time") },
                 s.time,
-                s.medications
+                s.medications,
+                s.scheduledDate
             )
         }
 
