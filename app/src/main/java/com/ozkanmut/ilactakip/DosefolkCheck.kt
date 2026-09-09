@@ -1,12 +1,14 @@
 package com.ozkanmut.ilactakip
 
 import android.Manifest
+import android.app.ActivityManager
 import android.app.AlarmManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
+import android.os.PowerManager
 import android.provider.Settings
 import java.time.LocalDate
 
@@ -85,6 +87,45 @@ object DosefolkCheck {
             }
         }
 
+        // Do not nag users who only use local reminders. Battery/background limits mainly
+        // threaten ntfy/WorkManager catch-up, so surface them only when Circle is in use.
+        if (Store.people(context).isNotEmpty()) {
+            if (Build.VERSION.SDK_INT >= 28) {
+                val activityManager = context.getSystemService(ActivityManager::class.java)
+                if (activityManager.isBackgroundRestricted) {
+                    result += DosefolkIssue(
+                        id = "background_restricted",
+                        title = tr("Arka plan çalışması kısıtlı", "Background activity is restricted"),
+                        detail = tr(
+                            "Android Dosefolk'un Circle güncellemelerini arka planda geciktirebilir. Uygulama pil/arka plan ayarını 'Kısıtlanmamış' veya eşdeğer seçeneğe getir.",
+                            "Android may delay Dosefolk Circle updates in the background. Set the app's battery/background setting to Unrestricted or the equivalent option."
+                        )
+                    ) { c -> openAppDetails(c) }
+                }
+            }
+
+            if (Build.VERSION.SDK_INT >= 23) {
+                val power = context.getSystemService(PowerManager::class.java)
+                if (!power.isIgnoringBatteryOptimizations(context.packageName)) {
+                    result += DosefolkIssue(
+                        id = "battery_optimization",
+                        title = tr("Pil optimizasyonu Circle'ı geciktirebilir", "Battery optimization may delay Circle"),
+                        detail = tr(
+                            "Telefon Dosefolk'u uykuya alırsa ntfy senkronu gecikebilir. Pil optimizasyonu listesinden Dosefolk için kısıtlamayı kaldır.",
+                            "If Android puts Dosefolk to sleep, ntfy sync may be delayed. Remove Dosefolk from battery optimization restrictions."
+                        )
+                    ) { c ->
+                        runCatching {
+                            c.startActivity(
+                                Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                            )
+                        }.onFailure { openAppDetails(c) }
+                    }
+                }
+            }
+        }
+
         val pending = EventStore.pending(context).size
         if (pending > 0) {
             result += DosefolkIssue(
@@ -149,6 +190,14 @@ object DosefolkCheck {
         }
 
         return result
+    }
+
+    private fun openAppDetails(c: Context) {
+        c.startActivity(
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+                .setData(Uri.parse("package:${c.packageName}"))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
     }
 
     private fun tr(tr: String, en: String) = if (I18n.language() == "tr") tr else en
