@@ -94,6 +94,7 @@ fun CircleReliabilityCard(c: Context, people: List<Person>, externalRefresh: Int
                                     PermissionPolicy.set(c, person.topic, CirclePermission.EDIT_STOCK, value)
                                     localRefresh++; onChanged()
                                 }
+                                RemoteProgramSection(c, person, externalRefresh + localRefresh)
                             }
                         }
                     }
@@ -258,9 +259,3 @@ object OfflineTrustReceipt {
 private fun formatTime(ms: Long): String = DateTimeFormatter.ofPattern("dd.MM HH:mm")
     .withZone(ZoneId.systemDefault())
     .format(Instant.ofEpochMilli(ms))
-
-private fun formatDuration(minutes: Long): String {
-    val h = minutes / 60
-    val m = minutes % 60
-    return if (h > 0) "${h}s ${m}dk" else "${m}dk"
-}
