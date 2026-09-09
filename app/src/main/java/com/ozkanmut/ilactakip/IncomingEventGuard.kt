@@ -34,6 +34,15 @@ object IncomingEventGuard {
             return false
         }
 
+        // A revoked relationship is a durable trust boundary. While the topic is
+        // tombstoned, consume old catch-up IDs as rejected receipts. This lets a
+        // later prepareRePair() drain the old relationship backlog without ever
+        // persisting or applying its side effects.
+        if (RevokedPeerFence.isRevoked(c, event.actorTopic)) {
+            RemoteEventReceiptStore.markProcessed(c, event.eventId)
+            return false
+        }
+
         return PermissionPolicy.acceptRemote(c, event)
     }
 }
