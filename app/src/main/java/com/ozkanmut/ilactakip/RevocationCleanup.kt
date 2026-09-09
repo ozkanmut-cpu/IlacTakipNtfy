@@ -8,6 +8,7 @@ object RevocationCleanup {
     fun clearPeer(c: Context, topic: String) {
         if (topic.isBlank()) return
         clearRemoteCapabilities(c, topic)
+        CapabilityEventGate.clearPeer(c, topic)
         clearOwnerScope(c, topic)
     }
 
