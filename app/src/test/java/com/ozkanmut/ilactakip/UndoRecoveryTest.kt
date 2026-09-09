@@ -50,7 +50,7 @@ class UndoRecoveryTest {
         assertTrue(UndoRecovery.recoverEvent(c, undo))
         val pi = PendingIntent.getBroadcast(
             c,
-            "snooze-08:00".hashCode(),
+            AlarmScheduler.snoozeKey("08:00", today.toString()).hashCode(),
             Intent(c, AlarmReceiver::class.java),
             PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
         )
