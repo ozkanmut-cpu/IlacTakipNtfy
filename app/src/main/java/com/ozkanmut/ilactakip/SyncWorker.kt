@@ -23,6 +23,7 @@ class DosefolkSyncWorker(appContext: Context, params: WorkerParameters) : Worker
         // Local maintenance does not need network success and is idempotent.
         SgkStockAutoImporter.reconcile(applicationContext)
         PrescriptionNotifier.evaluate(applicationContext)
+        DeliveryLedger.pruneCompleted(applicationContext)
 
         // Each pass intentionally sends at most one bounded outbound batch. If more
         // durable events remain, Result.retry() schedules the next pass with backoff
