@@ -3,6 +3,9 @@ package com.ozkanmut.ilactakip
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
 import java.util.UUID
 
 data class PrnMedication(
@@ -21,6 +24,53 @@ data class PrnCheck(
     val lastTakenAt: Long? = null,
     val takenToday: Int = 0
 )
+
+data class PrnUsage(val eventId:String,val medicationId:String,val timestamp:Long)
+
+object PrnUsageLedger {
+    private const val PREFS="dosefolk_prn_usage"
+    private const val KEY="usage"
+    private const val KEY_BACKFILLED="backfilled_v1"
+    private fun prefs(c:Context)=c.getSharedPreferences(PREFS,Context.MODE_PRIVATE)
+
+    @Synchronized fun observe(c:Context,event:DoseEvent){
+        if(event.type!="prn_taken"||event.eventId.isBlank())return
+        val ownerId=event.ownerId.ifBlank{event.actorTopic}
+        if(ownerId.isNotBlank()&&ownerId!=OwnerScopeStore.localOwnerId(c))return
+        val rows=loadRaw(c).toMutableList()
+        event.medications.distinctBy{it.id}.filter{it.id.isNotBlank()}.forEach{med->
+            if(rows.none{it.eventId==event.eventId&&it.medicationId==med.id}) rows+=PrnUsage(event.eventId,med.id,event.timestamp)
+        }
+        save(c,compact(rows))
+    }
+
+    @Synchronized fun ensureBackfilled(c:Context){
+        val p=prefs(c)
+        if(p.getBoolean(KEY_BACKFILLED,false))return
+        EventStore.load(c).filter{it.type=="prn_taken"}.forEach{observe(c,it)}
+        p.edit().putBoolean(KEY_BACKFILLED,true).commit()
+    }
+
+    fun usages(c:Context,medicationId:String):List<PrnUsage>{
+        ensureBackfilled(c)
+        return loadRaw(c).filter{it.medicationId==medicationId}
+    }
+
+    private fun compact(rows:List<PrnUsage>):List<PrnUsage>{
+        val cutoff=LocalDate.now().minusDays(7).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val recent=rows.filter{it.timestamp>=cutoff}
+        val latestOlder=rows.filter{it.timestamp<cutoff}.groupBy{it.medicationId}.values.mapNotNull{group->group.maxByOrNull{it.timestamp}}
+        return (recent+latestOlder).distinctBy{"${it.eventId}|${it.medicationId}"}
+    }
+
+    private fun loadRaw(c:Context):List<PrnUsage>{
+        val raw=prefs(c).getString(KEY,"[]")?:"[]"
+        return runCatching{val a=JSONArray(raw);(0 until a.length()).mapNotNull{i->a.optJSONObject(i)?.let{o->
+            val eventId=o.optString("eventId");val medId=o.optString("medicationId");if(eventId.isBlank()||medId.isBlank())null else PrnUsage(eventId,medId,o.optLong("timestamp"))
+        }}}.getOrDefault(emptyList())
+    }
+    private fun save(c:Context,rows:List<PrnUsage>){val a=JSONArray();rows.forEach{u->a.put(JSONObject().put("eventId",u.eventId).put("medicationId",u.medicationId).put("timestamp",u.timestamp))};prefs(c).edit().putString(KEY,a.toString()).commit()}
+}
 
 /**
  * PRN rules are user-entered guardrails only. Dosefolk never invents clinical limits.
@@ -63,14 +113,12 @@ object PrnEngine {
     }
 
     fun check(c: Context, item: PrnMedication, now: Long = System.currentTimeMillis()): PrnCheck {
-        val events = EventStore.load(c).filter { e ->
-            e.type == "prn_taken" && e.medications.any { it.id == item.medicationId }
-        }
-        val last = events.maxByOrNull { it.timestamp }
-        val startOfDay = java.time.LocalDate.now()
-            .atStartOfDay(java.time.ZoneId.systemDefault())
-            .toInstant().toEpochMilli()
-        val todayCount = events.count { it.timestamp >= startOfDay }
+        val usages = PrnUsageLedger.usages(c,item.medicationId)
+        val last = usages.maxByOrNull { it.timestamp }
+        val nowDate = Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault()).toLocalDate()
+        val startOfDay = nowDate.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val endOfDay = nowDate.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val todayCount = usages.count { it.timestamp in startOfDay until endOfDay }
 
         item.minimumIntervalMinutes?.let { min ->
             if (last != null && now - last.timestamp < min * 60_000L) {
