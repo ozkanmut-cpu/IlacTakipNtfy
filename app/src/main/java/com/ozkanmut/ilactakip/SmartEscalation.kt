@@ -76,7 +76,11 @@ object SmartEscalation {
 
     private fun cancelAlarms(c: Context, time: String, scheduledDate: String) {
         val alarmManager = c.getSystemService(AlarmManager::class.java)
-        for (stage in 0..1) alarmManager.cancel(pendingIntent(c, time, scheduledDate, stage))
+        for (stage in 0..1) {
+            val pi = pendingIntent(c, time, scheduledDate, stage)
+            alarmManager.cancel(pi)
+            pi.cancel()
+        }
     }
 
     private fun scheduleStage(c: Context, time: String, scheduledDate: String, stage: Int, trigger: Long) {
