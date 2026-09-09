@@ -156,6 +156,20 @@ class ProgramRescheduleRaceTest {
     @Test
     fun explicitSnooze_isNotSilentlyDroppedByProgramRaceGuard() {
         val date = LocalDate.now().toString()
+        EventStore.append(c, DoseEvent(
+            eventId = "active-snooze",
+            type = "snoozed",
+            time = "08:00",
+            actor = "me",
+            actorTopic = Store.topic(c),
+            timestamp = System.currentTimeMillis(),
+            medications = listOf(med),
+            syncState = "synced",
+            revision = 2L,
+            scheduledDate = date,
+            snoozeUntil = System.currentTimeMillis() + 30 * 60_000L,
+            ownerId = Store.topic(c)
+        ))
         Store.save(c, listOf(med.copy(times = listOf("09:00"))))
         assertTrue(AlarmDeliveryGuard.shouldDeliver(c, "08:00", date, listOf(med.id), isSnooze = true))
     }
