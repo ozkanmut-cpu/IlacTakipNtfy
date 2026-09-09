@@ -42,6 +42,26 @@ class ProgramRescheduleRaceTest {
         PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
     )
 
+    private fun remoteProgramEvent(
+        eventId: String,
+        actorTopic: String,
+        revision: Long,
+        timestamp: Long,
+        medication: Medication,
+        ownerId: String = "remote-owner"
+    ) = DoseEvent(
+        eventId = eventId,
+        type = "program_updated",
+        time = medication.times.firstOrNull() ?: "program",
+        actor = actorTopic,
+        actorTopic = actorTopic,
+        timestamp = timestamp,
+        medications = listOf(medication),
+        syncState = "synced",
+        revision = revision,
+        ownerId = ownerId
+    )
+
     @Test
     fun movingMedication_replacesOldAlarmWithNewAlarm() {
         AlarmScheduler.scheduleAll(c, Store.load(c), observeProgramChanges = false)
@@ -115,5 +135,54 @@ class ProgramRescheduleRaceTest {
         val date = LocalDate.now().toString()
         Store.save(c, listOf(med.copy(times = listOf("09:00"))))
         assertTrue(AlarmDeliveryGuard.shouldDeliver(c, "08:00", date, listOf(med.id), isSnooze = true))
+    }
+
+    @Test
+    fun newerRevisionWinsEvenWhenItsWallClockIsOlder() {
+        val first = med.copy(name = "Old edit", times = listOf("08:00"))
+        val second = med.copy(name = "New edit", times = listOf("09:00"))
+
+        ProgramSync.applyRemote(c, remoteProgramEvent("e5", "device-a", 5L, 900_000L, first))
+        ProgramSync.applyRemote(c, remoteProgramEvent("e6", "device-a", 6L, 100_000L, second))
+
+        assertEquals("New edit", OwnerScopeStore.remoteMedications(c, "remote-owner").single().name)
+        assertEquals(listOf("09:00"), OwnerScopeStore.remoteMedications(c, "remote-owner").single().times)
+    }
+
+    @Test
+    fun staleRevisionCannotWinWithFutureSkewedWallClock() {
+        val newest = med.copy(name = "Newest", times = listOf("09:00"))
+        val stale = med.copy(name = "Stale future clock", times = listOf("10:00"))
+
+        ProgramSync.applyRemote(c, remoteProgramEvent("e9", "device-a", 9L, 100_000L, newest))
+        ProgramSync.applyRemote(c, remoteProgramEvent("e8", "device-a", 8L, 9_000_000L, stale))
+
+        assertEquals("Newest", OwnerScopeStore.remoteMedications(c, "remote-owner").single().name)
+    }
+
+    @Test
+    fun concurrentEqualRevisionsConvergeRegardlessOfArrivalOrder() {
+        val fromA = remoteProgramEvent("event-a", "device-a", 12L, 900_000L, med.copy(name = "A"))
+        val fromB = remoteProgramEvent("event-b", "device-b", 12L, 100_000L, med.copy(name = "B"))
+
+        ProgramSync.applyRemote(c, fromA)
+        ProgramSync.applyRemote(c, fromB)
+        val forward = OwnerScopeStore.remoteMedications(c, "remote-owner").single().name
+
+        c.getSharedPreferences("dosefolk_program_sync", Context.MODE_PRIVATE).edit().clear().commit()
+        c.getSharedPreferences("dosefolk_owner_scope", Context.MODE_PRIVATE).edit().clear().commit()
+
+        ProgramSync.applyRemote(c, fromB)
+        ProgramSync.applyRemote(c, fromA)
+        val reverse = OwnerScopeStore.remoteMedications(c, "remote-owner").single().name
+
+        assertEquals(forward, reverse)
+        assertEquals("B", reverse)
+    }
+
+    @Test
+    fun observedRemoteRevisionAdvancesNextLocalRevision() {
+        EventStore.observeRevision(c, 42L)
+        assertEquals(43L, EventStore.nextRevision(c))
     }
 }
