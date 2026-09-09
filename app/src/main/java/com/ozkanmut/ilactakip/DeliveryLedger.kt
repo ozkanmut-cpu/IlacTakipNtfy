@@ -26,7 +26,7 @@ object DeliveryLedger {
         if (keys.size >= MAX_KEYS) {
             keys.take(keys.size - MAX_KEYS + 500).forEach { editor.remove(it) }
         }
-        editor.apply()
+        editor.commit()
     }
 
     @Synchronized
@@ -35,6 +35,6 @@ object DeliveryLedger {
         val p = prefs(c)
         val editor = p.edit()
         p.all.keys.filter { it.startsWith(prefix) }.forEach { editor.remove(it) }
-        editor.apply()
+        editor.commit()
     }
 }
