@@ -35,7 +35,9 @@ object NaturalActionRouter {
             val upcoming=PrescriptionLifecycle.upcoming(c,days=45).take(5)
             return if(upcoming.isEmpty())tr("Önümüzdeki 45 gün için kayıtlı yeniden temin zamanı görünmüyor.","No recorded refill date is coming up in the next 45 days.") else tr("Yaklaşan yeniden temin tarihleri:\n","Upcoming refill dates:\n")+upcoming.joinToString("\n"){"${it.medicationName}: ${it.eligibleDate()}"}
         }
-        if(listOf("bugün","bugun","today","ilaçlarımı içtim","ilaclarimi ictim","ne kaldı","ne kaldi").any{q.contains(it)}){
+        val todayQuery = q in setOf("bugün","bugun","today","ne kaldı","ne kaldi") ||
+            listOf("bugün ne kaldı","bugun ne kaldi","bugünkü ilaçlar","bugunku ilaclar","bugün ilaçlarım","bugun ilaclarim","ilaçlarımı içtim mi","ilaclarimi ictim mi","today's medications","what is left today","what's left today").any{q.contains(it)}
+        if(todayQuery){
             val states=DoseStateEngine.today(c)
             if(states.isEmpty())return tr("Bugün için planlı ilaç görünmüyor.","No medication is scheduled for today.")
             return states.joinToString("\n"){s->"${s.time} — ${when(s.status){DoseSessionStatus.TAKEN->tr("İçildi","Taken");DoseSessionStatus.MISSED->tr("İçilmedi","Missed");DoseSessionStatus.SNOOZED->tr("Ertelendi","Snoozed");DoseSessionStatus.CONFLICT->tr("Çakışma","Conflict");else->tr("Bekliyor","Pending")}}"}
