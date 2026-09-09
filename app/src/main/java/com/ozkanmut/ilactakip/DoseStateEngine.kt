@@ -78,10 +78,21 @@ object DoseStateEngine {
 
         val latestAlarmIndex = relevant.indexOfLast { it.type == "alarm" }
         val sessionEvents = if (latestAlarmIndex >= 0) relevant.drop(latestAlarmIndex) else relevant
+
+        // An explicit human conflict resolution is authoritative for this dose session.
+        // Remote wall clocks are not trusted for causal ordering: a stale event from a
+        // device whose clock is ahead must not reopen a conflict after it was resolved.
         val latestExplicitResolution = sessionEvents.lastOrNull {
             it.type == "conflict_resolved_taken" || it.type == "conflict_resolved_missed"
         }
-        if (latestExplicitResolution != null && sessionEvents.last().timestamp <= latestExplicitResolution.timestamp) {
+        if (latestExplicitResolution != null) {
+            val laterUndo = sessionEvents.lastOrNull { it.type == "undo_taken" || it.type == "undo_missed" }
+            val resolutionUndone = laterUndo != null &&
+                laterUndo.actorTopic == latestExplicitResolution.actorTopic &&
+                laterUndo.revision > latestExplicitResolution.revision
+            if (resolutionUndone) {
+                return DoseSessionState(time, DoseSessionStatus.PENDING, laterUndo, medsFrom(laterUndo, scheduleMeds), scheduledDate = scheduledDate)
+            }
             val status = if (latestExplicitResolution.type == "conflict_resolved_taken") DoseSessionStatus.TAKEN else DoseSessionStatus.MISSED
             return DoseSessionState(time, status, latestExplicitResolution, medsFrom(latestExplicitResolution, scheduleMeds), scheduledDate = scheduledDate)
         }
@@ -95,19 +106,19 @@ object DoseStateEngine {
         val lastTaken = terminal.lastOrNull { it.type == "taken" }
         val lastMissed = terminal.lastOrNull { it.type == "missed" }
 
+        // Opposite terminal reports from different devices are contradictory facts
+        // about the same scheduled dose. Do not use phone wall-clock distance to decide
+        // whether the contradiction exists; clocks can be skewed by minutes or hours.
         if (lastTaken != null && lastMissed != null && lastTaken.actorTopic != lastMissed.actorTopic) {
-            val delta = kotlin.math.abs(lastTaken.timestamp - lastMissed.timestamp)
-            if (delta <= 120_000L) {
-                val conflicts = ordered(listOf(lastTaken, lastMissed))
-                return DoseSessionState(
-                    time = time,
-                    status = DoseSessionStatus.CONFLICT,
-                    latestEvent = conflicts.last(),
-                    medications = medsFrom(conflicts.last(), scheduleMeds),
-                    conflictEvents = conflicts,
-                    scheduledDate = scheduledDate
-                )
-            }
+            val conflicts = ordered(listOf(lastTaken, lastMissed))
+            return DoseSessionState(
+                time = time,
+                status = DoseSessionStatus.CONFLICT,
+                latestEvent = conflicts.last(),
+                medications = medsFrom(conflicts.last(), scheduleMeds),
+                conflictEvents = conflicts,
+                scheduledDate = scheduledDate
+            )
         }
 
         val status = when (latest.type) {
