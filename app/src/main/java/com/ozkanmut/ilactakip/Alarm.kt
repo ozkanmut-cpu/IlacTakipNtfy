@@ -35,9 +35,7 @@ object AlarmScheduler {
     }
 
     private fun cancelGroup(c: Context, time: String) = cancelByKey(c, "group-$time")
-    fun cancelSnooze(c: Context, time: String, scheduledDate: String = LocalDate.now().toString()) =
-        cancelByKey(c, snoozeKey(time, scheduledDate))
-
+    fun cancelSnooze(c: Context, time: String, scheduledDate: String = LocalDate.now().toString()) = cancelByKey(c, snoozeKey(time, scheduledDate))
     internal fun snoozeKey(time: String, scheduledDate: String) = "snooze-$scheduledDate-$time"
 
     private fun cancelByKey(c: Context, key: String) {
@@ -78,17 +76,18 @@ object AlarmScheduler {
         return safeTrigger
     }
 
-    fun snoozeGroup(c: Context, time: String, meds: List<Medication>, minutes: Int, scheduledDate: String = LocalDate.now().toString()): Long = scheduleSnoozeUntil(c, time, meds, System.currentTimeMillis() + minutes.coerceAtLeast(1) * 60_000L, scheduledDate)
+    fun snoozeGroup(c: Context, time: String, meds: List<Medication>, minutes: Int, scheduledDate: String = LocalDate.now().toString()): Long {
+        val trigger = System.currentTimeMillis() + minutes * 60_000L
+        scheduleSnoozeUntil(c, time, meds, trigger, scheduledDate)
+        return trigger
+    }
 
     fun restoreActiveSnoozes(c: Context) {
-        val now = System.currentTimeMillis()
-        EventStore.load(c).asSequence().filter { it.type == "snoozed" && it.snoozeUntil > now && it.scheduledDate.isNotBlank() }.distinctBy { "${it.scheduledDate}|${it.time}" }.forEach { event ->
-            val date = runCatching { LocalDate.parse(event.scheduledDate) }.getOrNull() ?: return@forEach
-            val state = DoseStateEngine.stateForTime(c, event.time, date)
-            if (state.status == DoseSessionStatus.SNOOZED) {
-                val meds = event.medications.ifEmpty { state.medications }
-                if (meds.isNotEmpty()) scheduleSnoozeUntil(c, event.time, meds, event.snoozeUntil, event.scheduledDate)
-            }
+        val events = EventStore.load(c)
+        val current = Store.load(c).associateBy { it.id }
+        SnoozeRecovery.activeSnoozes(events).forEach { event ->
+            val meds = event.medications.mapNotNull { current[it.id] }.ifEmpty { event.medications }
+            if (meds.isNotEmpty()) scheduleSnoozeUntil(c, event.time, meds, event.snoozeUntil, event.scheduledDate)
         }
     }
 }
@@ -110,10 +109,7 @@ class AlarmReceiver : BroadcastReceiver() {
         val ids = i.getStringExtra("ids")?.split("|#|")?.filter { it.isNotBlank() } ?: emptyList()
         val scheduledDate = i.getStringExtra("scheduledDate") ?: LocalDate.now().toString()
         val isSnooze = i.getBooleanExtra("isSnooze", false)
-        if (!AlarmDeliveryGuard.shouldDeliver(c, time, scheduledDate, ids, isSnooze)) {
-            AlarmScheduler.scheduleAll(c, Store.load(c))
-            return
-        }
+        if (!AlarmDeliveryGuard.shouldDeliver(c, time, scheduledDate, ids, isSnooze)) { AlarmScheduler.scheduleAll(c, Store.load(c)); return }
         val channel = "medication"
         val notificationManager = c.getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= 26) notificationManager.createNotificationChannel(NotificationChannel(channel, I18n.t("channel"), NotificationManager.IMPORTANCE_HIGH))
@@ -143,10 +139,17 @@ class ActionReceiver : BroadcastReceiver() {
     }
 }
 
+object RecoveryPolicy {
+    fun shouldRebuildRegularAlarms(action: String?, timezoneConfirmationPending: Boolean): Boolean =
+        action != Intent.ACTION_TIMEZONE_CHANGED || !timezoneConfirmationPending
+}
+
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
         if (i.action == Intent.ACTION_TIMEZONE_CHANGED) TravelGuard.onTimezonePossiblyChanged(c) else TravelGuard.initialize(c)
-        AlarmScheduler.scheduleAll(c, Store.load(c))
+        val timezonePending = TravelGuard.pendingNotice(c) != null
+        if (RecoveryPolicy.shouldRebuildRegularAlarms(i.action, timezonePending)) AlarmScheduler.scheduleAll(c, Store.load(c))
+        // Snoozes and active escalation are absolute recovery obligations; preserve them across reboot/time changes.
         AlarmScheduler.restoreActiveSnoozes(c)
         UndoRecovery.recoverCurrent(c)
         SmartEscalation.restore(c)
@@ -165,10 +168,7 @@ object Ntfy {
             type == "snoozed" -> SmartEscalation.cancel(c, time, scheduledDate)
         }
         val ownerId = OwnerScopeStore.ownerFor(c, meds)
-        val meta = meds.mapNotNull { med ->
-            if (ownerId == OwnerScopeStore.localOwnerId(c)) MedicationMetaStore.get(c, med.id)
-            else MedicationMetaStore.remote(c, ownerId, med.id)
-        }
+        val meta = meds.mapNotNull { med -> if (ownerId == OwnerScopeStore.localOwnerId(c)) MedicationMetaStore.get(c, med.id) else MedicationMetaStore.remote(c, ownerId, med.id) }
         val event = DoseEvent(UUID.randomUUID().toString(), type, time, Store.myName(c), Store.topic(c),System.currentTimeMillis(), meds, "pending", EventStore.nextRevision(c), scheduledDate, snoozeUntil, ownerId, meta)
         EventStore.append(c, event)
         OwnerScopeStore.remember(c, event)
@@ -179,7 +179,6 @@ object Ntfy {
     }
 
     fun retryPending(c: Context) { DosefolkSyncScheduler.kick(c) }
-
     fun flushPendingBlocking(c: Context): Boolean {
         val pending = EventStore.pending(c).take(100)
         if (pending.isEmpty()) return true
@@ -203,7 +202,6 @@ object Ntfy {
     }
 
     fun sendTo(c: Context, topic: String, title: String, message: String) { AlertOutbox.enqueue(c.applicationContext, topic, title, message) }
-
     private fun post(topic: String, title: String, message: String, priority: String): Boolean = try {
         val connection = URL("https://ntfy.sh/$topic").openConnection() as HttpURLConnection
         connection.requestMethod="POST";connection.doOutput=true;connection.connectTimeout=10_000;connection.readTimeout=10_000
