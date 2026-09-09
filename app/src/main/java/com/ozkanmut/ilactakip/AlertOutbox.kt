@@ -69,6 +69,14 @@ object AlertOutbox {
         save(c, load(c).filterNot { it.topic == topic })
     }
 
+    /** Remove only caregiver escalation rows for one resolved dose session. */
+    @Synchronized
+    fun dropEscalationSession(c: Context, time: String, scheduledDate: String) {
+        if (time.isBlank() || scheduledDate.isBlank()) return
+        val prefix = "escalation|$scheduledDate|$time|"
+        save(c, load(c).filterNot { it.id.startsWith(prefix) })
+    }
+
     internal fun batchForFlush(all: List<PendingAlert>): List<PendingAlert> =
         all.takeLast(FLUSH_BATCH).asReversed()
 
@@ -79,9 +87,6 @@ object AlertOutbox {
      * 3) remove the row immediately after a confirmed 2xx;
      * 4) after an ambiguous crash/network failure, probe ntfy's cache for the
      *    sequence ID before deciding whether a resend is necessary.
-     *
-     * This preserves at-least-once safety without blindly duplicating alerts when
-     * the server accepted a POST but the app died before recording the response.
      */
     @Synchronized
     fun flushBlocking(c: Context): Boolean {
