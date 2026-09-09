@@ -35,8 +35,6 @@ object CapabilitySync {
 object ScopedNtfy {
     fun sendProgramChange(c: Context, ownerTopic: String, type: String, medication: Medication) {
         if (ownerTopic.isBlank() || type !in setOf("program_added","program_updated","program_deleted")) return
-        // For remote edits the authoritative metadata lives in the owner-scoped cache. Carry it with
-        // program events so form/unit/package information cannot silently disappear on another device.
         val meta = MedicationMetaStore.remote(c, ownerTopic, medication.id)
         val event = DoseEvent(
             eventId=UUID.randomUUID().toString(), type=type, time=medication.times.firstOrNull()?:"program",
@@ -66,10 +64,33 @@ object ScopedNtfy {
         TextButton(onClick={expanded=!expanded}){Text(if(I18n.language()=="tr"){if(expanded)"İlaç programını gizle" else "İlaç programı (${meds.size})"}else{if(expanded)"Hide medication program" else "Medication program (${meds.size})"})}
         if(expanded){
             if(meds.isEmpty()) Text(if(I18n.language()=="tr")"Henüz bu kişiden program verisi gelmedi." else "No program data received from this person yet.",style=MaterialTheme.typography.bodySmall)
-            meds.forEach{med-> val rule=OwnerScopeStore.remoteRule(c,person.topic,med.id); val meta=MedicationMetaStore.remote(c,person.topic,med.id)
-                Card(Modifier.fillMaxWidth()){Column(Modifier.padding(10.dp),verticalArrangement=Arrangement.spacedBy(4.dp)){Text(med.name,fontWeight=FontWeight.Bold); if(med.dose.isNotBlank())Text(med.dose); meta?.doseLabel()?.takeIf{it.isNotBlank()}?.let{Text(it,style=MaterialTheme.typography.bodySmall)}; Text(med.times.joinToString(" • ").ifBlank{if(I18n.language()=="tr")"Saat yok" else "No fixed time"}); ProgramRuleStore.describeRule(rule).takeIf{it.isNotBlank()}?.let{Text(it,style=MaterialTheme.typography.bodySmall)}
-                    if(canEdit) Row(horizontalArrangement=Arrangement.spacedBy(6.dp)){TextButton(onClick={editing=med}){Text(if(I18n.language()=="tr")"Düzenle" else "Edit")}; TextButton(onClick={editingRule=med}){Text(if(I18n.language()=="tr")"Kural" else "Rule")}; TextButton(onClick={ScopedNtfy.sendProgramChange(c,person.topic,"program_deleted",med);localRefresh++}){Text(if(I18n.language()=="tr")"Sil" else "Delete")}}
-                }}
+            meds.forEach{med->
+                val rule=OwnerScopeStore.remoteRule(c,person.topic,med.id)
+                val meta=MedicationMetaStore.remote(c,person.topic,med.id)
+                val stock=remember(refreshKey,localRefresh,person.topic,med.id){StockEngine.remoteForMedication(c,person.topic,med.id)}
+                Card(Modifier.fillMaxWidth()){
+                    Column(Modifier.padding(10.dp),verticalArrangement=Arrangement.spacedBy(4.dp)){
+                        Text(med.name,fontWeight=FontWeight.Bold)
+                        if(med.dose.isNotBlank())Text(med.dose)
+                        meta?.doseLabel()?.takeIf{it.isNotBlank()}?.let{Text(it,style=MaterialTheme.typography.bodySmall)}
+                        Text(med.times.joinToString(" • ").ifBlank{if(I18n.language()=="tr")"Saat yok" else "No fixed time"})
+                        ProgramRuleStore.describeRule(rule).takeIf{it.isNotBlank()}?.let{Text(it,style=MaterialTheme.typography.bodySmall)}
+                        stock?.let{s->
+                            Text(
+                                if(I18n.language()=="tr") "Stok: ${s.remainingDoses} / kutu ${s.packSize} doz"
+                                else "Stock: ${s.remainingDoses} / pack ${s.packSize} doses",
+                                style=MaterialTheme.typography.bodySmall,
+                                fontWeight=if(s.remainingDoses<=s.lowThreshold) FontWeight.Bold else FontWeight.Normal
+                            )
+                            if(s.remainingDoses<=s.lowThreshold) Text(if(I18n.language()=="tr")"⚠ Düşük stok" else "⚠ Low stock",fontWeight=FontWeight.Bold)
+                        }
+                        if(canEdit) Row(horizontalArrangement=Arrangement.spacedBy(6.dp)){
+                            TextButton(onClick={editing=med}){Text(if(I18n.language()=="tr")"Düzenle" else "Edit")}
+                            TextButton(onClick={editingRule=med}){Text(if(I18n.language()=="tr")"Kural" else "Rule")}
+                            TextButton(onClick={ScopedNtfy.sendProgramChange(c,person.topic,"program_deleted",med);localRefresh++}){Text(if(I18n.language()=="tr")"Sil" else "Delete")}
+                        }
+                    }
+                }
             }
             if(canEdit) OutlinedButton(onClick={adding=true},modifier=Modifier.fillMaxWidth()){Text(if(I18n.language()=="tr")"Bu kişiye ilaç ekle" else "Add medication for this person")} else Text(if(I18n.language()=="tr")"Program düzenleme için bu kişinin sana yetki vermesi gerekir." else "This person must grant you program-edit permission before you can change it.",style=MaterialTheme.typography.bodySmall)
         }
