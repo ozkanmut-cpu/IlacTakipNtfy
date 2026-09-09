@@ -98,8 +98,10 @@ object AlarmScheduler {
 
 object AlarmDeliveryGuard {
     fun shouldDeliver(c: Context, time: String, scheduledDate: String, ids: List<String>, isSnooze: Boolean): Boolean {
-        if (isSnooze) return true
         val date = runCatching { LocalDate.parse(scheduledDate) }.getOrNull() ?: return false
+        val state = DoseStateEngine.stateForTime(c, time, date).status
+        if (isSnooze) return state == DoseSessionStatus.SNOOZED
+        if (state !in setOf(DoseSessionStatus.UNKNOWN, DoseSessionStatus.PENDING)) return false
         val current = Store.load(c)
         val candidates = if (ids.isNotEmpty()) current.filter { it.id in ids } else current.filter { time in it.times }
         return candidates.any { med -> time in med.times && ProgramRuleStore.isActiveOn(c, med.id, date) }
