@@ -45,6 +45,9 @@ object EventStore {
         save(c, current.take(MAX_EVENTS))
     }
 
+    fun contains(c: Context, eventId: String): Boolean =
+        eventId.isNotBlank() && load(c).any { it.eventId == eventId }
+
     @Synchronized
     fun markSynced(c: Context, eventId: String) {
         save(c, load(c).map { if (it.eventId == eventId) it.copy(syncState = "synced") else it })
