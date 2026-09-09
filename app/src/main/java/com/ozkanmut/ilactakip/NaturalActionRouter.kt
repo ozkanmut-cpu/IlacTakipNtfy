@@ -1,6 +1,7 @@
 package com.ozkanmut.ilactakip
 
 import android.content.Context
+import java.time.LocalDate
 import java.time.LocalTime
 import java.util.Locale
 
@@ -29,6 +30,8 @@ object NaturalActionRouter {
             return tr("Değişiklik iptal edildi.", "Change cancelled.")
         }
 
+        parseDoseCorrection(c, lower)?.let { return it }
+
         parseProgramChange(c, q)?.let { change ->
             pending = change
             val days = if (change.weekdays.isEmpty()) tr("her gün", "every day") else weekdayLabel(change.weekdays)
@@ -40,6 +43,26 @@ object NaturalActionRouter {
 
         parseNewBox(c, lower)?.let { return it }
         return null
+    }
+
+    private fun parseDoseCorrection(c: Context, lower: String): String? {
+        val timeMatch = Regex("(?<!\\d)([01]?\\d|2[0-3])[:.]([0-5]\\d)(?!\\d)").find(lower)
+        val time = timeMatch?.let { String.format("%02d:%02d", it.groupValues[1].toInt(), it.groupValues[2].toInt()) }
+            ?: DoseStateEngine.today(c).filter { it.status == DoseSessionStatus.TAKEN || it.status == DoseSessionStatus.MISSED }.maxByOrNull { it.latestEvent?.timestamp ?: 0L }?.time
+            ?: return null
+        val date = LocalDate.now().toString()
+        return when {
+            listOf("geri al", "gerial", "undo").any { lower.contains(it) } -> {
+                if (DoseCorrectionEngine.undo(c, time, date)) tr("$time kaydı geri alındı.", "$time record was undone.") else tr("$time için geri alınabilir bir kayıt yok.", "There is no undoable record for $time.")
+            }
+            listOf("içildi olarak düzelt", "icildi olarak duzelt", "içtim olarak düzelt", "taken olarak düzelt", "correct to taken").any { lower.contains(it) } -> {
+                if (DoseCorrectionEngine.correctToTaken(c, time, date)) tr("$time kaydı İçildi olarak düzeltildi.", "$time was corrected to Taken.") else tr("$time kaydı düzeltilemedi.", "$time could not be corrected.")
+            }
+            listOf("içilmedi olarak düzelt", "icilmedi olarak duzelt", "missed olarak düzelt", "correct to missed").any { lower.contains(it) } -> {
+                if (DoseCorrectionEngine.correctToMissed(c, time, date)) tr("$time kaydı İçilmedi olarak düzeltildi.", "$time was corrected to Missed.") else tr("$time kaydı düzeltilemedi.", "$time could not be corrected.")
+            }
+            else -> null
+        }
     }
 
     private fun parseProgramChange(c: Context, raw: String): PendingProgramChange? {
@@ -76,7 +99,7 @@ object NaturalActionRouter {
     }
 
     private fun parseNewBox(c: Context, lower: String): String? {
-        val trigger = listOf("yeni kutu", "new box").firstOrNull { lower.contains(it) } ?: return null
+        listOf("yeni kutu", "new box").firstOrNull { lower.contains(it) } ?: return null
         val med = Store.load(c).sortedByDescending { it.name.length }.firstOrNull { lower.contains(it.name.lowercase(Locale.getDefault())) } ?: return null
         val updated = StockEngine.openNewBox(c, med.id)
             ?: return tr("${med.name} için önce paket boyutunu stok ekranında bir kez tanımla.", "Set the pack size for ${med.name} once in Stock first.")
