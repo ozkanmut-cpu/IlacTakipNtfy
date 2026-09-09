@@ -67,7 +67,8 @@ object SyncEngine {
         return DoseEvent(
             eventId, type, time, o.optString("actor"), o.optString("actorTopic"), timestamp,
             meds, "synced", o.optLong("revision",0L),
-            o.optString("scheduledDate", fallbackDate).ifBlank { fallbackDate }
+            o.optString("scheduledDate", fallbackDate).ifBlank { fallbackDate },
+            o.optLong("snoozeUntil", 0L)
         )
     }
 
@@ -79,8 +80,14 @@ object SyncEngine {
             "taken","missed","conflict_resolved_taken","conflict_resolved_missed" -> {
                 CareBatonStore.resolve(c,event.time,scheduledDate)
                 SmartEscalation.cancel(c,event.time,scheduledDate)
+                AlarmScheduler.cancelSnooze(c,event.time)
             }
-            "snoozed" -> SmartEscalation.cancel(c,event.time,scheduledDate)
+            "snoozed" -> {
+                SmartEscalation.cancel(c,event.time,scheduledDate)
+                if (event.snoozeUntil > System.currentTimeMillis() && event.medications.isNotEmpty()) {
+                    AlarmScheduler.scheduleSnoozeUntil(c,event.time,event.medications,event.snoozeUntil,scheduledDate)
+                }
+            }
         }
     }
 }
