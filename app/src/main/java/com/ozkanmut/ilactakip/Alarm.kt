@@ -142,13 +142,17 @@ object DoseNotificationLifecycle {
 class AlarmReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
         val time = i.getStringExtra("time") ?: return
-        val names = i.getStringExtra("names")?.split("|#|") ?: return
-        val ids = i.getStringExtra("ids")?.split("|#|")?.filter { it.isNotBlank() } ?: emptyList()
+        val intentNames = i.getStringExtra("names")?.split("|#|") ?: return
+        val intentIds = i.getStringExtra("ids")?.split("|#|")?.filter { it.isNotBlank() } ?: emptyList()
         val scheduledDate = i.getStringExtra("scheduledDate") ?: LocalDate.now().toString()
-        val isSnooze = i.getBooleanExtra("isSnooze", false)
+        val intentIsSnooze = i.getBooleanExtra("isSnooze", false)
         val deliveryId = i.getStringExtra("deliveryId")?.takeIf { it.isNotBlank() }
-            ?: "legacy-alarm|$scheduledDate|$time|${if (isSnooze) "snooze" else "regular"}|${ids.sorted().joinToString(",")}"        
+            ?: "legacy-alarm|$scheduledDate|$time|${if (intentIsSnooze) "snooze" else "regular"}|${intentIds.sorted().joinToString(",")}"        
         val canonical = AlarmPresentationLedger.canonicalAlarmForRedelivery(c, deliveryId, time, scheduledDate)
+        val canonicalMeds = canonical?.medications.orEmpty()
+        val ids = if (canonicalMeds.isNotEmpty()) canonicalMeds.map { it.id }.filter { it.isNotBlank() } else intentIds
+        val names = if (canonicalMeds.isNotEmpty()) canonicalMeds.map { med -> med.name + if (med.dose.isBlank()) "" else " (${med.dose})" } else intentNames
+        val isSnooze = canonical?.snoozeUntil?.let { it > 0L } ?: intentIsSnooze
 
         if (!AlarmDeliveryGuard.shouldDeliver(c, time, scheduledDate, ids, isSnooze)) {
             if (canonical != null) AlarmPresentationLedger.markPresented(c, deliveryId)
@@ -157,7 +161,7 @@ class AlarmReceiver : BroadcastReceiver() {
         }
 
         val stored = Store.load(c).associateBy { it.id }
-        val alarmMeds = ids.mapNotNull { stored[it] }.ifEmpty { names.mapIndexed { index, label -> Medication("legacy-$index", label, "", listOf(time)) } }
+        val alarmMeds = if (canonicalMeds.isNotEmpty()) canonicalMeds else ids.mapNotNull { stored[it] }.ifEmpty { names.mapIndexed { index, label -> Medication("legacy-$index", label, "", listOf(time)) } }
 
         if (canonical != null) {
             if (AlarmPresentationLedger.isPresented(c, deliveryId)) return
