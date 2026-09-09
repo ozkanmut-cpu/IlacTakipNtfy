@@ -36,6 +36,23 @@ object DeliveryLedger {
 
     private fun ledgerEventId(key: String): String = key.substringBefore('|')
 
+    /**
+     * Self-heals the crash window between EventStore.markSynced() and clearEvent().
+     * Receipts for still-pending events are preserved; receipts whose event is no
+     * longer pending are residue only and can be removed without causing a resend.
+     */
+    @Synchronized
+    fun pruneCompleted(c: Context) {
+        val p = prefs(c)
+        if (p.all.isEmpty()) return
+        val pendingIds = EventStore.pending(c).mapTo(mutableSetOf()) { it.eventId }
+        val stale = p.all.keys.filter { ledgerEventId(it) !in pendingIds }
+        if (stale.isEmpty()) return
+        val editor = p.edit()
+        stale.forEach(editor::remove)
+        editor.commit()
+    }
+
     @Synchronized
     fun clearEvent(c: Context, eventId: String) {
         val prefix = "$eventId|"
