@@ -4,8 +4,6 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
-import java.time.LocalDate
-import java.time.ZoneId
 import java.util.UUID
 
 data class PrnMedication(
@@ -41,7 +39,7 @@ object PrnUsageLedger {
         event.medications.distinctBy{it.id}.filter{it.id.isNotBlank()}.forEach{med->
             if(rows.none{it.eventId==event.eventId&&it.medicationId==med.id}) rows+=PrnUsage(event.eventId,med.id,event.timestamp)
         }
-        save(c,compact(rows))
+        save(c,compact(c,rows))
     }
 
     @Synchronized fun ensureBackfilled(c:Context){
@@ -56,8 +54,9 @@ object PrnUsageLedger {
         return loadRaw(c).filter{it.medicationId==medicationId}
     }
 
-    private fun compact(rows:List<PrnUsage>):List<PrnUsage>{
-        val cutoff=LocalDate.now().minusDays(7).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+    private fun compact(c:Context,rows:List<PrnUsage>):List<PrnUsage>{
+        val zone=TravelGuard.effectiveMedicationZone(c)
+        val cutoff=Instant.ofEpochMilli(System.currentTimeMillis()).atZone(zone).toLocalDate().minusDays(7).atStartOfDay(zone).toInstant().toEpochMilli()
         val recent=rows.filter{it.timestamp>=cutoff}
         val latestOlder=rows.filter{it.timestamp<cutoff}.groupBy{it.medicationId}.values.mapNotNull{group->group.maxByOrNull{it.timestamp}}
         return (recent+latestOlder).distinctBy{"${it.eventId}|${it.medicationId}"}
@@ -101,7 +100,8 @@ object PrnEngine {
             name = medication.name,
             doseNote = medication.dose,
             minimumIntervalMinutes = minimumIntervalMinutes?.takeIf { it > 0 },
-            maximumPerDay = maximumPerDay?.takeIf { it > 0 }
+            maximumPerDay = maximumPerDay?.takeIf { it > 0 },
+            createdAt = System.currentTimeMillis()
         )
         upsert(c, item)
         return item
@@ -115,9 +115,10 @@ object PrnEngine {
     fun check(c: Context, item: PrnMedication, now: Long = System.currentTimeMillis()): PrnCheck {
         val usages = PrnUsageLedger.usages(c,item.medicationId)
         val last = usages.maxByOrNull { it.timestamp }
-        val nowDate = Instant.ofEpochMilli(now).atZone(ZoneId.systemDefault()).toLocalDate()
-        val startOfDay = nowDate.atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-        val endOfDay = nowDate.plusDays(1).atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
+        val zone = TravelGuard.effectiveMedicationZone(c)
+        val nowDate = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+        val startOfDay = nowDate.atStartOfDay(zone).toInstant().toEpochMilli()
+        val endOfDay = nowDate.plusDays(1).atStartOfDay(zone).toInstant().toEpochMilli()
         val todayCount = usages.count { it.timestamp in startOfDay until endOfDay }
 
         item.minimumIntervalMinutes?.let { min ->
