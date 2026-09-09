@@ -33,6 +33,23 @@ object SyncCheckpointStore {
     }
 }
 
+/**
+ * Pure cursor reducer for streamed ntfy JSON lines.
+ *
+ * A malformed envelope must never move the cursor because we do not know which
+ * ntfy message it represented. A syntactically valid `message` envelope may move
+ * the cursor even if its inner payload is malformed or unsupported; otherwise a
+ * poison message would be replayed forever and block useful catch-up progress.
+ */
+object NtfyBatchCursor {
+    fun envelopeOrNull(line: String): JSONObject? = runCatching { JSONObject(line) }.getOrNull()
+
+    fun advance(current: String?, envelope: JSONObject): String? {
+        if (envelope.optString("event") != "message") return current
+        return envelope.optString("id").takeIf { it.isNotBlank() } ?: current
+    }
+}
+
 object SyncEngine {
     fun lastSuccess(c: Context): Long = SyncCheckpointStore.lastSuccess(c)
 
@@ -62,9 +79,10 @@ object SyncEngine {
                 var newestId: String? = null
                 connection.inputStream.bufferedReader().useLines { lines ->
                     lines.forEach { line ->
-                        val envelope = runCatching { JSONObject(line) }.getOrNull() ?: return@forEach
+                        val envelope = NtfyBatchCursor.envelopeOrNull(line) ?: return@forEach
+                        newestId = NtfyBatchCursor.advance(newestId, envelope)
                         if (envelope.optString("event") != "message") return@forEach
-                        envelope.optString("id").takeIf { it.isNotBlank() }?.let { newestId = it }
+
                         val payload = runCatching { JSONObject(envelope.optString("message")) }.getOrNull() ?: return@forEach
                         if (StockSync.applyIncoming(context, payload)) return@forEach
                         if (!IncomingEventGuard.supportedDosePayload(payload)) return@forEach
