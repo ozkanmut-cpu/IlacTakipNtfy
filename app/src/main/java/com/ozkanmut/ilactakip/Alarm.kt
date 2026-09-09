@@ -79,7 +79,7 @@ object AlarmScheduler {
         catch (_: SecurityException) { alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent) }
     }
 
-    fun scheduleSnoozeUntil(c: Context, time: String, meds: List<Medication>, triggerAtMillis: Long, scheduledDate: String = LocalDate.now().toString()): Long {
+    private fun scheduleSnoozeUntil(c: Context, time: String, meds: List<Medication>, triggerAtMillis: Long, scheduledDate: String = LocalDate.now().toString()): Long {
         val safeTrigger = maxOf(System.currentTimeMillis() + 1_000L, triggerAtMillis)
         scheduleAt(c, time, meds, safeTrigger, snoozeKey(time, scheduledDate), true, scheduledDate)
         return safeTrigger
@@ -95,12 +95,6 @@ object AlarmScheduler {
             return false
         }
         return true
-    }
-
-    fun snoozeGroup(c: Context, time: String, meds: List<Medication>, minutes: Int, scheduledDate: String = LocalDate.now().toString()): Long {
-        val trigger = System.currentTimeMillis() + minutes * 60_000L
-        scheduleSnoozeUntil(c, time, meds, trigger, scheduledDate)
-        return trigger
     }
 
     fun restoreActiveSnoozes(c: Context) {
