@@ -26,25 +26,27 @@ object IncomingEventGuard {
 
         val localTopic = Store.topic(c)
         if (event.actorTopic == localTopic) {
-            // A legitimate self-originated event must already exist locally,
-            // because local actions are persisted before they are sent to ntfy.
-            // Unknown self events are therefore treated as spoofed/replayed data.
             if (EventStore.contains(c, event.eventId)) {
                 RemoteEventReceiptStore.markProcessed(c, event.eventId)
             }
             return false
         }
 
-        // A revoked relationship is a durable trust boundary. While the topic is
-        // tombstoned, consume old catch-up IDs as rejected receipts. This lets a
-        // later prepareRePair() drain the old relationship backlog without ever
-        // persisting or applying its side effects.
         if (RevokedPeerFence.isRevoked(c, event.actorTopic)) {
             RemoteEventReceiptStore.markProcessed(c, event.eventId)
             return false
         }
 
         return PermissionPolicy.acceptRemote(c, event)
+    }
+}
+
+internal object RemoteReceiptRetention {
+    fun nextOrder(existing: List<String>, eventId: String, limit: Int): List<String> {
+        if (eventId.isBlank() || limit <= 0) return emptyList()
+        val ordered = existing.filter { it.isNotBlank() && it != eventId }.toMutableList()
+        ordered += eventId
+        return if (ordered.size > limit) ordered.takeLast(limit) else ordered
     }
 }
 
@@ -59,9 +61,9 @@ object RemoteEventReceiptStore {
     fun processed(c: Context, eventId: String): Boolean =
         eventId.isNotBlank() && prefs(c).getStringSet(KEY_SET, emptySet()).orEmpty().contains(eventId)
 
-    private fun orderedIds(c: Context, membership: Set<String>): MutableList<String> {
+    private fun orderedIds(c: Context, membership: Set<String>): List<String> {
         val raw = prefs(c).getString(KEY_ORDER, null)
-        if (raw == null) return membership.toMutableList() // one-time legacy migration; old order was unknowable
+        if (raw == null) return membership.toList()
         return runCatching {
             val a = JSONArray(raw)
             val ordered = (0 until a.length()).map { a.optString(it) }
@@ -70,7 +72,7 @@ object RemoteEventReceiptStore {
                 .toMutableList()
             membership.filterNot { it in ordered }.forEach { ordered += it }
             ordered
-        }.getOrElse { membership.toMutableList() }
+        }.getOrElse { membership.toList() }
     }
 
     @Synchronized
@@ -78,19 +80,11 @@ object RemoteEventReceiptStore {
         if (eventId.isBlank()) return
         val p = prefs(c)
         val membership = p.getStringSet(KEY_SET, emptySet()).orEmpty().toMutableSet()
-        val ordered = orderedIds(c, membership)
-
-        ordered.remove(eventId)
-        ordered += eventId
-        membership += eventId
-
-        while (ordered.size > MAX_IDS) {
-            val evicted = ordered.removeAt(0)
-            membership.remove(evicted)
-        }
+        val ordered = RemoteReceiptRetention.nextOrder(orderedIds(c, membership), eventId, MAX_IDS)
+        val kept = ordered.toSet()
 
         p.edit()
-            .putStringSet(KEY_SET, membership)
+            .putStringSet(KEY_SET, kept)
             .putString(KEY_ORDER, JSONArray(ordered).toString())
             .commit()
     }
