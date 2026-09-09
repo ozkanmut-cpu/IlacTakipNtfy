@@ -153,10 +153,11 @@ class AlarmReceiver : BroadcastReceiver() {
         val deliveryId = i.getStringExtra("deliveryId")?.takeIf { it.isNotBlank() }
             ?: "legacy-alarm|$scheduledDate|$time|${if (isSnooze) "snooze" else "regular"}|${ids.sorted().joinToString(",")}"        
 
-        val created = Ntfy.sendEvent(c, "alarm", time, alarmMeds, scheduledDate, eventId = deliveryId)
-        if (!created) {
-            val canonical = AlarmPresentationLedger.canonicalAlarmForRedelivery(c, deliveryId, time, scheduledDate) ?: return
-            if (canonical.type != "alarm" || AlarmPresentationLedger.isPresented(c, deliveryId)) return
+        val canonical = AlarmPresentationLedger.canonicalAlarmForRedelivery(c, deliveryId, time, scheduledDate)
+        if (canonical != null) {
+            if (AlarmPresentationLedger.isPresented(c, deliveryId)) return
+        } else if (!Ntfy.sendEvent(c, "alarm", time, alarmMeds, scheduledDate, eventId = deliveryId)) {
+            return
         }
 
         val channel = "medication"
