@@ -85,6 +85,21 @@ class AlarmActionEscalationTest {
         ownerId = Store.topic(c)
     )
 
+    private fun remoteDoseEvent(id: String, type: String, snoozeUntil: Long = 0L) = DoseEvent(
+        eventId = id,
+        type = type,
+        time = "08:00",
+        actor = "Remote caregiver",
+        actorTopic = "care-remote",
+        timestamp = System.currentTimeMillis(),
+        medications = listOf(med),
+        syncState = "synced",
+        revision = 2L,
+        scheduledDate = date,
+        snoozeUntil = snoozeUntil,
+        ownerId = Store.topic(c)
+    )
+
     @Test
     fun takenNotificationAction_recordsTakenAndClearsActiveCareBaton() {
         val now = System.currentTimeMillis()
@@ -103,7 +118,6 @@ class AlarmActionEscalationTest {
     @Test
     fun missedNotificationAction_recordsMissed() {
         ActionReceiver().onReceive(c, actionIntent("missed"))
-
         val state = DoseStateEngine.stateForTime(c, "08:00", LocalDate.now())
         assertEquals(DoseSessionStatus.MISSED, state.status)
     }
@@ -112,7 +126,6 @@ class AlarmActionEscalationTest {
     fun snoozeNotificationAction_recordsSnoozeWithFutureDeadline() {
         val before = System.currentTimeMillis()
         ActionReceiver().onReceive(c, actionIntent("snooze"))
-
         val state = DoseStateEngine.stateForTime(c, "08:00", LocalDate.now())
         assertEquals(DoseSessionStatus.SNOOZED, state.status)
         val event = state.latestEvent
@@ -122,12 +135,8 @@ class AlarmActionEscalationTest {
 
     @Test
     fun doubleTakenNotificationAction_onlyCreatesOneDoseConsumption() {
-        pendingAlarm()
-        StockEngine.configure(c, med, packSize = 10, currentDoses = 10, lowThreshold = 2)
-
-        ActionReceiver().onReceive(c, actionIntent("taken"))
-        ActionReceiver().onReceive(c, actionIntent("taken"))
-
+        pendingAlarm(); StockEngine.configure(c, med, packSize = 10, currentDoses = 10, lowThreshold = 2)
+        ActionReceiver().onReceive(c, actionIntent("taken")); ActionReceiver().onReceive(c, actionIntent("taken"))
         assertEquals(DoseSessionStatus.TAKEN, DoseStateEngine.stateForTime(c, "08:00", LocalDate.now()).status)
         assertEquals(1, EventStore.load(c).count { it.type == "taken" && it.time == "08:00" && it.scheduledDate == date })
         assertEquals(9, StockEngine.forMedication(c, med.id)?.remainingDoses)
@@ -135,11 +144,7 @@ class AlarmActionEscalationTest {
 
     @Test
     fun staleMissedAction_afterTaken_isIgnored() {
-        pendingAlarm()
-        ActionReceiver().onReceive(c, actionIntent("taken"))
-
-        ActionReceiver().onReceive(c, actionIntent("missed"))
-
+        pendingAlarm(); ActionReceiver().onReceive(c, actionIntent("taken")); ActionReceiver().onReceive(c, actionIntent("missed"))
         val state = DoseStateEngine.stateForTime(c, "08:00", LocalDate.now())
         assertEquals(DoseSessionStatus.TAKEN, state.status)
         assertEquals(0, EventStore.load(c).count { it.type == "missed" && it.time == "08:00" && it.scheduledDate == date })
@@ -147,13 +152,10 @@ class AlarmActionEscalationTest {
 
     @Test
     fun duplicateSnoozeAction_doesNotExtendDeadlineOrCreateSecondEvent() {
-        pendingAlarm()
-        ActionReceiver().onReceive(c, actionIntent("snooze"))
+        pendingAlarm(); ActionReceiver().onReceive(c, actionIntent("snooze"))
         val first = DoseStateEngine.stateForTime(c, "08:00", LocalDate.now()).latestEvent
         assertNotNull(first)
-
         ActionReceiver().onReceive(c, actionIntent("snooze"))
-
         val second = DoseStateEngine.stateForTime(c, "08:00", LocalDate.now()).latestEvent
         assertEquals(first?.eventId, second?.eventId)
         assertEquals(first?.snoozeUntil, second?.snoozeUntil)
@@ -165,32 +167,36 @@ class AlarmActionEscalationTest {
         AlarmReceiver().onReceive(c, alarmIntent("visible-notification"))
         val manager = c.getSystemService(NotificationManager::class.java)
         assertEquals(1, manager.activeNotifications.count { it.id == ("group-$date-08:00").hashCode() })
-
         ActionReceiver().onReceive(c, actionIntent("taken"))
+        assertEquals(0, manager.activeNotifications.count { it.id == ("group-$date-08:00").hashCode() })
+    }
 
+    @Test
+    fun remoteTerminalUpdate_clearsVisibleMedicationNotification() {
+        AlarmReceiver().onReceive(c, alarmIntent("remote-terminal-visible"))
+        val manager = c.getSystemService(NotificationManager::class.java)
+        assertEquals(1, manager.activeNotifications.count { it.id == ("group-$date-08:00").hashCode() })
+        SyncEngine.applyRemoteState(c, remoteDoseEvent("remote-taken", "taken"))
+        assertEquals(0, manager.activeNotifications.count { it.id == ("group-$date-08:00").hashCode() })
+    }
+
+    @Test
+    fun remoteSnoozeUpdate_clearsCurrentNotification() {
+        AlarmReceiver().onReceive(c, alarmIntent("remote-snooze-visible"))
+        val manager = c.getSystemService(NotificationManager::class.java)
+        assertEquals(1, manager.activeNotifications.count { it.id == ("group-$date-08:00").hashCode() })
+        SyncEngine.applyRemoteState(c, remoteDoseEvent("remote-snooze", "snoozed", System.currentTimeMillis() + 30 * 60_000L))
         assertEquals(0, manager.activeNotifications.count { it.id == ("group-$date-08:00").hashCode() })
     }
 
     @Test
     fun appAndNotificationRace_createsOnlyOneTerminalFact() {
         pendingAlarm()
-        val start = CountDownLatch(1)
-        val done = CountDownLatch(2)
-        val t1 = Thread {
-            start.await()
-            Ntfy.sendEvent(c, "taken", "08:00", listOf(med), date)
-            done.countDown()
-        }
-        val t2 = Thread {
-            start.await()
-            Ntfy.sendEvent(c, "missed", "08:00", listOf(med), date)
-            done.countDown()
-        }
+        val start = CountDownLatch(1); val done = CountDownLatch(2)
+        val t1 = Thread { start.await(); Ntfy.sendEvent(c, "taken", "08:00", listOf(med), date); done.countDown() }
+        val t2 = Thread { start.await(); Ntfy.sendEvent(c, "missed", "08:00", listOf(med), date); done.countDown() }
         t1.start(); t2.start(); start.countDown(); done.await()
-
-        val terminal = EventStore.load(c).filter {
-            it.time == "08:00" && it.scheduledDate == date && it.type in setOf("taken", "missed")
-        }
+        val terminal = EventStore.load(c).filter { it.time == "08:00" && it.scheduledDate == date && it.type in setOf("taken", "missed") }
         assertEquals(1, terminal.size)
         assertTrue(DoseStateEngine.stateForTime(c, "08:00", LocalDate.now()).status in setOf(DoseSessionStatus.TAKEN, DoseSessionStatus.MISSED))
     }
@@ -199,20 +205,15 @@ class AlarmActionEscalationTest {
     fun terminalAction_clearsAttentionBudgetSoOldEscalationCannotRemainConsumed() {
         AttentionBudget.mark(c, "08:00", "care-topic", 0, date)
         assertFalse(AttentionBudget.allow(c, "08:00", "care-topic", 0, date))
-
         ActionReceiver().onReceive(c, actionIntent("taken"))
-
         assertTrue(AttentionBudget.allow(c, "08:00", "care-topic", 0, date))
     }
 
     @Test
     fun careBatonRelease_removesClaimAndKeepsDoseUnresolved() {
-        pendingAlarm()
-        CareBatonStore.claim(c, "08:00", minutes = 30, scheduledDate = date)
+        pendingAlarm(); CareBatonStore.claim(c, "08:00", minutes = 30, scheduledDate = date)
         assertNotNull(CareBatonStore.active(c, "08:00", date))
-
         CareBatonStore.release(c, "08:00", date)
-
         assertEquals(null, CareBatonStore.active(c, "08:00", date))
         assertEquals(DoseSessionStatus.PENDING, DoseStateEngine.stateForTime(c, "08:00", LocalDate.now()).status)
     }
@@ -220,10 +221,7 @@ class AlarmActionEscalationTest {
     @Test
     fun remoteCareClaimReplay_keepsSingleClaim() {
         val claim = remoteBatonEvent("remote-claim", "care_claimed")
-
-        CareBatonStore.applyRemoteClaim(c, claim)
-        CareBatonStore.applyRemoteClaim(c, claim)
-
+        CareBatonStore.applyRemoteClaim(c, claim); CareBatonStore.applyRemoteClaim(c, claim)
         assertEquals(1, CareBatonStore.load(c).count { it.time == "08:00" && it.scheduledDate == date })
         assertEquals("care-remote", CareBatonStore.active(c, "08:00", date)?.actorTopic)
     }
@@ -234,18 +232,13 @@ class AlarmActionEscalationTest {
         val claim = remoteBatonEvent("remote-claim", "care_claimed")
         CareBatonStore.applyRemoteClaim(c, claim)
         assertNotNull(CareBatonStore.active(c, "08:00", date))
-
         val release = remoteBatonEvent("remote-release", "care_released")
         CareBatonStore.applyRemoteRelease(c, release)
-
         assertEquals(null, CareBatonStore.active(c, "08:00", date))
         assertEquals(DoseSessionStatus.PENDING, DoseStateEngine.stateForTime(c, "08:00", LocalDate.now()).status)
-
         AttentionBudget.mark(c, "08:00", "care-topic", 0, date)
         assertFalse(AttentionBudget.allow(c, "08:00", "care-topic", 0, date))
-
         CareBatonStore.applyRemoteRelease(c, release)
-
         assertFalse(AttentionBudget.allow(c, "08:00", "care-topic", 0, date))
         assertEquals(null, CareBatonStore.active(c, "08:00", date))
     }
