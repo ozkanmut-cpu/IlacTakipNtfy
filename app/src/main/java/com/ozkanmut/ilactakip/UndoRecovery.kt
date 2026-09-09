@@ -31,7 +31,7 @@ object UndoRecovery {
 
     fun recoverCurrent(c: Context): Int {
         var count = 0
-        DoseStateEngine.today().forEach { state ->
+        DoseStateEngine.today(c).forEach { state ->
             val event = state.latestEvent ?: return@forEach
             if (recoverEvent(c, event)) count++
         }
