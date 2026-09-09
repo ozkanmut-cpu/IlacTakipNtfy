@@ -95,6 +95,12 @@ class ReliabilityCoreTest {
         assertTrue("08:00" in scheduled)
     }
 
+    @Test fun expiredSnooze_recoveryNeverSchedulesInThePast() {
+        val now = 1_000_000L
+        assertEquals(now + 1_000L, SnoozeRecovery.recoveryTrigger(now - 60_000L, now))
+        assertEquals(now + 90_000L, SnoozeRecovery.recoveryTrigger(now + 90_000L, now))
+    }
+
     @Test fun prescriptionLifecycle_newestCycleSupersedesOlderFill() {
         val old = PrescriptionRecord(id = "old", medicationName = "Vasoxen 5 mg 28 tablet", fillDate = "01.06.2026", doseEndDate = "01.09.2026", continuous = true)
         val newer = PrescriptionRecord(id = "new", medicationName = "VASOXEN 5 MG 28 FILM TABLET", fillDate = "01.08.2026", doseEndDate = "01.11.2026", continuous = true)
