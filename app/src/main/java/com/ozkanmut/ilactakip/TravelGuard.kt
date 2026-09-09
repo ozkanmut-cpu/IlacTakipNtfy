@@ -55,6 +55,19 @@ object TravelGuard {
         return TravelNotice(from, to, p.getLong(DETECTED_AT, 0L))
     }
 
+    /**
+     * Medication-day semantics remain anchored to the previous timezone until the
+     * user explicitly acknowledges the timezone change. This keeps daily PRN
+     * limits and other date-bounded safety logic from silently shifting.
+     */
+    fun effectiveMedicationZone(c: Context): ZoneId {
+        val pending = pendingNotice(c)
+        if (pending != null) {
+            return runCatching { ZoneId.of(pending.fromZone) }.getOrElse { ZoneId.systemDefault() }
+        }
+        return ZoneId.systemDefault()
+    }
+
     fun acknowledge(c: Context) {
         prefs(c).edit().putBoolean(ACKED, true).apply()
         AlarmScheduler.scheduleAll(c, Store.load(c))
