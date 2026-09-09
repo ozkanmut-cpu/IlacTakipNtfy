@@ -15,28 +15,19 @@ object StockEngine {
     fun remoteAll(c:Context,ownerId:String):List<MedicationStock> = loadRemote(c).filter{it.first==ownerId}.map{it.second}
     fun remoteForMedication(c:Context,ownerId:String,medicationId:String)=remoteAll(c,ownerId).firstOrNull{it.medicationId==medicationId}
 
-    @Synchronized fun configure(c:Context,medication:Medication,packSize:Int,currentDoses:Int=packSize,lowThreshold:Int=5){if(packSize<=0)return;val s=MedicationStock(medication.id,medication.name,currentDoses.coerceAtLeast(0),packSize,lowThreshold.coerceAtLeast(0));save(c,listOf(s)+load(c).filterNot{it.medicationId==medication.id})}
-    @Synchronized fun openNewBox(c:Context,medicationId:String):MedicationStock?{val x=forMedication(c,medicationId)?:return null;val u=x.copy(remainingDoses=x.remainingDoses+x.packSize,updatedAt=System.currentTimeMillis());save(c,listOf(u)+load(c).filterNot{it.medicationId==medicationId});return u}
+    @Synchronized fun configure(c:Context,medication:Medication,packSize:Int,currentDoses:Int=packSize,lowThreshold:Int=5){if(packSize<=0)return;val s=MedicationStock(medication.id,medication.name,currentDoses.coerceAtLeast(0),packSize,lowThreshold.coerceAtLeast(0));save(c,listOf(s)+load(c).filterNot{it.medicationId==medication.id});StockSync.publishToCircle(c,s)}
+    @Synchronized fun openNewBox(c:Context,medicationId:String):MedicationStock?{val x=forMedication(c,medicationId)?:return null;val u=x.copy(remainingDoses=x.remainingDoses+x.packSize,updatedAt=System.currentTimeMillis());save(c,listOf(u)+load(c).filterNot{it.medicationId==medicationId});StockSync.publishToCircle(c,u);return u}
     fun lowStock(c:Context)=load(c).filter{it.remainingDoses<=it.lowThreshold}
 
     fun toJson(s:MedicationStock)=JSONObject().put("medicationId",s.medicationId).put("medicationName",s.medicationName).put("remainingDoses",s.remainingDoses).put("packSize",s.packSize).put("lowThreshold",s.lowThreshold).put("updatedAt",s.updatedAt)
     fun fromJson(o:JSONObject?):MedicationStock?{if(o==null)return null;val id=o.optString("medicationId");if(id.isBlank())return null;return MedicationStock(id,o.optString("medicationName"),o.optInt("remainingDoses").coerceAtLeast(0),o.optInt("packSize").coerceAtLeast(0),o.optInt("lowThreshold",5).coerceAtLeast(0),o.optLong("updatedAt"))}
 
-    /** Last-write-wins per owner+medication. Older ntfy history cannot roll stock backwards. */
-    @Synchronized fun applyRemoteSnapshot(c:Context,ownerId:String,stock:MedicationStock){
-        if(ownerId.isBlank()||ownerId==OwnerScopeStore.localOwnerId(c))return
-        saveRemoteSnapshot(c,ownerId,stock)
-    }
-    @Synchronized fun saveRemoteSnapshot(c:Context,ownerId:String,stock:MedicationStock){
-        if(ownerId.isBlank())return
-        val rows=loadRemote(c).toMutableList(); val i=rows.indexOfFirst{it.first==ownerId&&it.second.medicationId==stock.medicationId}
-        if(i>=0){if(rows[i].second.updatedAt>stock.updatedAt)return;rows[i]=ownerId to stock}else rows.add(ownerId to stock)
-        saveRemote(c,rows)
-    }
+    @Synchronized fun applyRemoteSnapshot(c:Context,ownerId:String,stock:MedicationStock){if(ownerId.isBlank()||ownerId==OwnerScopeStore.localOwnerId(c))return;saveRemoteSnapshot(c,ownerId,stock)}
+    @Synchronized fun saveRemoteSnapshot(c:Context,ownerId:String,stock:MedicationStock){if(ownerId.isBlank())return;val rows=loadRemote(c).toMutableList();val i=rows.indexOfFirst{it.first==ownerId&&it.second.medicationId==stock.medicationId};if(i>=0){if(rows[i].second.updatedAt>stock.updatedAt)return;rows[i]=ownerId to stock}else rows.add(ownerId to stock);saveRemote(c,rows)}
     @Synchronized fun clearRemoteOwner(c:Context,ownerId:String){saveRemote(c,loadRemote(c).filterNot{it.first==ownerId})}
 
     private fun consumptionUnits(c:Context,id:String):Int{val m=MedicationMetaStore.get(c,id)?:return 1;val countable=m.form in setOf(MedicationForm.TABLET,MedicationForm.INSULIN,MedicationForm.NEBULE,MedicationForm.INHALER,MedicationForm.DROP,MedicationForm.PATCH);return if(countable)(m.quantity?:1.0).roundToInt().coerceAtLeast(1) else 1}
-    @Synchronized fun applyEvent(c:Context,event:DoseEvent){if(event.type !in setOf("taken","prn_taken")||alreadyProcessed(c,event.eventId))return;val current=load(c).associateBy{it.medicationId}.toMutableMap();var changed=false;event.medications.distinctBy{it.id}.forEach{med->val s=current[med.id]?:return@forEach;current[med.id]=s.copy(remainingDoses=(s.remainingDoses-consumptionUnits(c,med.id)).coerceAtLeast(0),updatedAt=event.timestamp);changed=true};if(changed)save(c,current.values.toList());markProcessed(c,event.eventId)}
+    @Synchronized fun applyEvent(c:Context,event:DoseEvent){if(event.type !in setOf("taken","prn_taken")||alreadyProcessed(c,event.eventId))return;val current=load(c).associateBy{it.medicationId}.toMutableMap();val changed=mutableListOf<MedicationStock>();event.medications.distinctBy{it.id}.forEach{med->val s=current[med.id]?:return@forEach;val u=s.copy(remainingDoses=(s.remainingDoses-consumptionUnits(c,med.id)).coerceAtLeast(0),updatedAt=event.timestamp);current[med.id]=u;changed+=u};if(changed.isNotEmpty()){save(c,current.values.toList());changed.forEach{StockSync.publishToCircle(c,it)}};markProcessed(c,event.eventId)}
     private fun alreadyProcessed(c:Context,id:String)=processed(c).contains(id)
     private fun processed(c:Context):Set<String>{val raw=prefs(c).getString(KEY_PROCESSED,"[]")?:"[]";return runCatching{val a=JSONArray(raw);(0 until a.length()).map{a.optString(it)}.filter{it.isNotBlank()}.toSet()}.getOrDefault(emptySet())}
     private fun markProcessed(c:Context,id:String){prefs(c).edit().putString(KEY_PROCESSED,JSONArray((listOf(id)+processed(c)).distinct().take(2000)).toString()).apply()}
