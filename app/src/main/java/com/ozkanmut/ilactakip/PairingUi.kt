@@ -14,8 +14,10 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.text.selection.SelectionContainer
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -78,6 +80,7 @@ fun PairingCard(c: Context, people: List<Person>, save: (List<Person>) -> Unit) 
     var topic by remember { mutableStateOf("") }
     var showQr by remember { mutableStateOf(false) }
     var scanMessage by remember { mutableStateOf<String?>(null) }
+    var pendingRevoke by remember { mutableStateOf<Person?>(null) }
     val ownTopic = remember { Store.topic(c) }
     val payload = remember(ownTopic) { pairingPayload(c) }
     val qr = remember(payload) { qrBitmap(payload) }
@@ -165,6 +168,56 @@ fun PairingCard(c: Context, people: List<Person>, save: (List<Person>) -> Unit) 
             if (topic.isNotBlank() && people.any { it.topic == topic }) {
                 Text(if (I18n.language() == "tr") "Bu kişi zaten Circle'da." else "This person is already in Circle.", style = MaterialTheme.typography.bodySmall)
             }
+
+            if (people.isNotEmpty()) {
+                HorizontalDivider()
+                Text(if (I18n.language() == "tr") "Eşleşmeleri yönet" else "Manage pairings", fontWeight = FontWeight.Bold)
+                people.forEach { person ->
+                    Card(Modifier.fillMaxWidth()) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(12.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text(person.name, fontWeight = FontWeight.Bold)
+                                SelectionContainer { Text(person.topic, style = MaterialTheme.typography.bodySmall) }
+                            }
+                            TextButton(onClick = { pendingRevoke = person }) {
+                                Text(if (I18n.language() == "tr") "Çıkar" else "Remove")
+                            }
+                        }
+                    }
+                }
+            }
         }
+    }
+
+    pendingRevoke?.let { person ->
+        AlertDialog(
+            onDismissRequest = { pendingRevoke = null },
+            title = { Text(if (I18n.language() == "tr") "Circle'dan çıkar?" else "Remove from Circle?") },
+            text = {
+                Text(
+                    if (I18n.language() == "tr")
+                        "${person.name} artık bu telefonda yetkili olmayacak ve yeni Dosefolk kayıtları bu kişiye gönderilmeyecek."
+                    else
+                        "${person.name} will no longer be authorized on this phone and new Dosefolk records will no longer be sent to them."
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    PairingLifecycle.revoke(c, person)
+                    save(Store.people(c))
+                    pendingRevoke = null
+                    scanMessage = if (I18n.language() == "tr") "Eşleşme kaldırıldı ve yetkiler iptal edildi." else "Pairing removed and permissions revoked."
+                }) { Text(if (I18n.language() == "tr") "Çıkar" else "Remove") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingRevoke = null }) {
+                    Text(if (I18n.language() == "tr") "Vazgeç" else "Cancel")
+                }
+            }
+        )
     }
 }
