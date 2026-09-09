@@ -4,6 +4,7 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
+import java.net.URLEncoder
 import java.net.URL
 import java.util.UUID
 
@@ -12,8 +13,20 @@ data class PendingAlert(
     val topic: String,
     val title: String,
     val message: String,
-    val createdAt: Long
+    val createdAt: Long,
+    val inFlight: Boolean = false
 )
+
+internal object AlertDeliveryProbe {
+    fun containsSequence(lines: Sequence<String>, sequenceId: String): Boolean {
+        if (sequenceId.isBlank()) return false
+        return lines.any { line ->
+            runCatching { JSONObject(line) }.getOrNull()?.let { o ->
+                o.optString("event") == "message" && o.optString("sequence_id") == sequenceId
+            } == true
+        }
+    }
+}
 
 object AlertOutbox {
     private const val PREFS = "dosefolk_alert_outbox"
@@ -59,21 +72,85 @@ object AlertOutbox {
     internal fun batchForFlush(all: List<PendingAlert>): List<PendingAlert> =
         all.takeLast(FLUSH_BATCH).asReversed()
 
+    /**
+     * Crash-safe alert delivery:
+     * 1) mark a row in-flight durably before POST;
+     * 2) POST with a deterministic ntfy sequence ID;
+     * 3) remove the row immediately after a confirmed 2xx;
+     * 4) after an ambiguous crash/network failure, probe ntfy's cache for the
+     *    sequence ID before deciding whether a resend is necessary.
+     *
+     * This preserves at-least-once safety without blindly duplicating alerts when
+     * the server accepted a POST but the app died before recording the response.
+     */
     @Synchronized
     fun flushBlocking(c: Context): Boolean {
-        val all = load(c)
+        var all = load(c)
         if (all.isEmpty()) return true
 
-        val batch = batchForFlush(all)
-        val deliveredIds = mutableSetOf<String>()
-        for (alert in batch) {
-            if (!post(alert)) break
-            deliveredIds += alert.id
+        val batchIds = batchForFlush(all).map { it.id }
+        for (id in batchIds) {
+            var alert = all.firstOrNull { it.id == id } ?: continue
+
+            if (alert.inFlight) {
+                when (probeDelivered(alert)) {
+                    ProbeResult.DELIVERED -> {
+                        all = all.filterNot { it.id == alert.id }
+                        save(c, all)
+                        continue
+                    }
+                    ProbeResult.NOT_FOUND -> {
+                        alert = alert.copy(inFlight = false)
+                        all = all.map { if (it.id == alert.id) alert else it }
+                        save(c, all)
+                    }
+                    ProbeResult.UNKNOWN -> return false
+                }
+            }
+
+            alert = alert.copy(inFlight = true)
+            all = all.map { if (it.id == alert.id) alert else it }
+            save(c, all)
+
+            if (!post(alert)) {
+                // Keep inFlight=true. The next pass verifies server cache before
+                // any resend, because a lost HTTP response is delivery-ambiguous.
+                return false
+            }
+
+            all = all.filterNot { it.id == alert.id }
+            save(c, all)
         }
-        val remaining = all.filterNot { it.id in deliveredIds }
-        save(c, remaining)
-        return remaining.isEmpty()
+        return all.isEmpty()
     }
+
+    private enum class ProbeResult { DELIVERED, NOT_FOUND, UNKNOWN }
+
+    private fun probeDelivered(alert: PendingAlert): ProbeResult = try {
+        // Include a small buffer for clock rounding and server timestamp granularity.
+        val sinceSeconds = ((alert.createdAt - 5_000L).coerceAtLeast(0L) / 1000L).toString()
+        val encodedSince = URLEncoder.encode(sinceSeconds, "UTF-8")
+        val connection = URL("https://ntfy.sh/${alert.topic}/json?poll=1&since=$encodedSince").openConnection() as HttpURLConnection
+        connection.requestMethod = "GET"
+        connection.connectTimeout = 10_000
+        connection.readTimeout = 10_000
+        if (connection.responseCode !in 200..299) {
+            connection.errorStream?.close()
+            connection.disconnect()
+            ProbeResult.UNKNOWN
+        } else {
+            val truncated = connection.getHeaderField("X-Messages-Truncated") == "1"
+            val found = connection.inputStream.bufferedReader().useLines { lines ->
+                AlertDeliveryProbe.containsSequence(lines, alert.id)
+            }
+            connection.disconnect()
+            when {
+                found -> ProbeResult.DELIVERED
+                truncated -> ProbeResult.UNKNOWN
+                else -> ProbeResult.NOT_FOUND
+            }
+        }
+    } catch (_: Exception) { ProbeResult.UNKNOWN }
 
     private fun post(alert: PendingAlert): Boolean = try {
         val connection = URL("https://ntfy.sh/${alert.topic}").openConnection() as HttpURLConnection
@@ -84,6 +161,7 @@ object AlertOutbox {
         connection.setRequestProperty("Title", alert.title)
         connection.setRequestProperty("Priority", "high")
         connection.setRequestProperty("Content-Type", "text/plain; charset=utf-8")
+        connection.setRequestProperty("X-Sequence-ID", alert.id)
         connection.outputStream.use { it.write(alert.message.toByteArray()) }
         val ok = connection.responseCode in 200..299
         if (ok) connection.inputStream.close() else connection.errorStream?.close()
@@ -94,13 +172,30 @@ object AlertOutbox {
     private fun load(c: Context): List<PendingAlert> = runCatching {
         val a = JSONArray(prefs(c).getString(KEY, "[]") ?: "[]")
         (0 until a.length()).mapNotNull { i -> a.optJSONObject(i)?.let { o ->
-            PendingAlert(o.optString("id"), o.optString("topic"), o.optString("title"), o.optString("message"), o.optLong("createdAt"))
+            PendingAlert(
+                o.optString("id"),
+                o.optString("topic"),
+                o.optString("title"),
+                o.optString("message"),
+                o.optLong("createdAt"),
+                o.optBoolean("inFlight", false)
+            )
         } }
     }.getOrDefault(emptyList())
 
     private fun save(c: Context, alerts: List<PendingAlert>) {
         val a = JSONArray()
-        alerts.forEach { a.put(JSONObject().put("id", it.id).put("topic", it.topic).put("title", it.title).put("message", it.message).put("createdAt", it.createdAt)) }
+        alerts.forEach {
+            a.put(
+                JSONObject()
+                    .put("id", it.id)
+                    .put("topic", it.topic)
+                    .put("title", it.title)
+                    .put("message", it.message)
+                    .put("createdAt", it.createdAt)
+                    .put("inFlight", it.inFlight)
+            )
+        }
         prefs(c).edit().putString(KEY, a.toString()).commit()
     }
 }
