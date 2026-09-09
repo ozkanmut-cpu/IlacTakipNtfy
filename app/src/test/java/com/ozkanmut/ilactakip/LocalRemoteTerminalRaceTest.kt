@@ -83,7 +83,6 @@ class LocalRemoteTerminalRaceTest {
     @Test
     fun concurrentOppositeTerminalFacts_preserveConflictWithoutDoubleStockSideEffect() {
         AlarmReceiver().onReceive(c, alarmIntent())
-        // Same logical revision from independent devices models true concurrency.
         apply(event("local-taken", "taken", Store.topic(c), 2L))
         apply(event("remote-missed", "missed", "remote-device", 2L))
 
@@ -96,7 +95,7 @@ class LocalRemoteTerminalRaceTest {
     }
 
     @Test
-    fun localDecisionAfterObservedRemoteFact_getsHigherRevisionAndSettlesState() {
+    fun localDecisionAfterObservedRemoteFact_getsHigherRevisionButStillRequiresExplicitResolution() {
         AlarmReceiver().onReceive(c, alarmIntent())
         val remote = event("remote-missed", "missed", "remote-device", 2L)
         apply(remote)
@@ -105,7 +104,7 @@ class LocalRemoteTerminalRaceTest {
         assertEquals(3L, localRevision)
         apply(event("local-taken-after-observe", "taken", Store.topic(c), localRevision))
 
-        assertEquals(DoseSessionStatus.TAKEN, DoseStateEngine.stateForTime(c, "08:00", LocalDate.now()).status)
+        assertEquals(DoseSessionStatus.CONFLICT, DoseStateEngine.stateForTime(c, "08:00", LocalDate.now()).status)
         assertEquals(9, StockEngine.forMedication(c, med.id)?.remainingDoses)
     }
 }
