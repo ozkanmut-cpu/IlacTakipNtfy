@@ -13,11 +13,8 @@ object PairingLifecycle {
         val context = c.applicationContext
         if (person.topic.isBlank() || person.topic == Store.topic(context)) return
 
-        // Prevent already queued reminders/sync commands from being sent after revocation.
         AlertOutbox.dropTopic(context, person.topic)
 
-        // Tell the other device to remove this relationship too. This is best-effort; local
-        // security does not depend on the peer receiving it.
         val event = DoseEvent(
             eventId = UUID.randomUUID().toString(),
             type = "circle_revoked",
@@ -47,6 +44,7 @@ object PairingLifecycle {
         Store.savePeople(c, Store.people(c).filterNot { it.topic == topic })
         PermissionPolicy.clearPeer(c, topic)
         RevocationCleanup.clearPeer(c, topic)
+        MedicationMetaStore.clearRemoteOwner(c, topic)
         if (dropOutbox) AlertOutbox.dropTopic(c, topic)
     }
 }
