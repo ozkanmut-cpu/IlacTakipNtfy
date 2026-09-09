@@ -54,9 +54,6 @@ object ProgramRuleStore {
             AlarmScheduler.scheduleAll(c, Store.load(c), observeProgramChanges = false)
         }
 
-        // A pending operation means the rule body may already have been committed in
-        // a previous process lifetime while its sync event/checkpoint was not. Reuse
-        // the exact event id so replay cannot create a semantic duplicate or Lamport gap.
         if (pending != null) {
             val medName = Store.load(c).firstOrNull { it.id == id }?.name ?: "Program"
             val carrier = Medication(id, medName, encode(normalized).toString(), emptyList())
@@ -102,8 +99,15 @@ object ProgramRuleStore {
         if (!accept) return
 
         val normalized = normalize(rule)
-        persist(c, listOf(normalized) + load(c).filterNot { it.medicationId == normalized.medicationId })
-        persistOrdering(c, normalized.medicationId, event)
+        val updatedRules = listOf(normalized) + load(c).filterNot { it.medicationId == normalized.medicationId }
+        val encodedRules = encodeRules(updatedRules)
+        p.edit()
+            .putString(KEY, encodedRules)
+            .putLong(STAMP_PREFIX + id, event.timestamp)
+            .putLong(REV_PREFIX + id, event.revision)
+            .putString(ACTOR_PREFIX + id, event.actorTopic)
+            .putString(EVENT_PREFIX + id, event.eventId)
+            .commit()
         AlarmScheduler.scheduleAll(c, Store.load(c), observeProgramChanges = false)
     }
 
@@ -241,9 +245,13 @@ object ProgramRuleStore {
         }.getOrDefault(emptyList())
     }
 
-    private fun persist(c: Context, rules: List<ProgramRule>) {
+    private fun encodeRules(rules: List<ProgramRule>): String {
         val a = JSONArray()
         rules.forEach { a.put(toJson(it)) }
-        prefs(c).edit().putString(KEY, a.toString()).commit()
+        return a.toString()
+    }
+
+    private fun persist(c: Context, rules: List<ProgramRule>) {
+        prefs(c).edit().putString(KEY, encodeRules(rules)).commit()
     }
 }
