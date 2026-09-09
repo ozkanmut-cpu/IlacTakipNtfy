@@ -5,6 +5,7 @@ import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.testing.WorkManagerTestInitHelper
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -75,6 +76,16 @@ class DateBoundaryTravelTest {
         AlarmScheduler.restoreActiveSnoozes(c)
         val today = DoseStateEngine.stateForTime(c, "23:55", LocalDate.now())
         assertTrue(today.status == DoseSessionStatus.UNKNOWN || today.status == DoseSessionStatus.PENDING)
+    }
+
+    @Test
+    fun snoozePendingIntentKey_isDifferentAcrossDates() {
+        val yesterday = LocalDate.now().minusDays(1).toString()
+        val today = LocalDate.now().toString()
+        assertNotEquals(
+            AlarmScheduler.snoozeKey("23:55", yesterday),
+            AlarmScheduler.snoozeKey("23:55", today)
+        )
     }
 
     @Test
