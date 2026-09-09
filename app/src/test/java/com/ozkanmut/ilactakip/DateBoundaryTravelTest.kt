@@ -1,10 +1,12 @@
 package com.ozkanmut.ilactakip
 
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.testing.WorkManagerTestInitHelper
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -76,6 +78,35 @@ class DateBoundaryTravelTest {
         AlarmScheduler.restoreActiveSnoozes(c)
         val today = DoseStateEngine.stateForTime(c, "23:55", LocalDate.now())
         assertTrue(today.status == DoseSessionStatus.UNKNOWN || today.status == DoseSessionStatus.PENDING)
+    }
+
+    @Test
+    fun timezonePending_freezesRegularRebuildButStillRestoresActiveSnooze() {
+        val today = LocalDate.now().toString()
+        EventStore.append(c, DoseEvent(
+            eventId = "timezone-snooze",
+            type = "snoozed",
+            time = "23:55",
+            actor = "me",
+            actorTopic = "local",
+            timestamp = System.currentTimeMillis(),
+            medications = listOf(med),
+            syncState = "synced",
+            revision = 2L,
+            scheduledDate = today,
+            snoozeUntil = System.currentTimeMillis() + 30 * 60_000L
+        ))
+
+        assertFalse(RecoveryPolicy.shouldRebuildRegularAlarms(Intent.ACTION_TIMEZONE_CHANGED, true))
+        AlarmScheduler.restoreActiveSnoozes(c)
+
+        val pending = PendingIntent.getBroadcast(
+            c,
+            AlarmScheduler.snoozeKey("23:55", today).hashCode(),
+            Intent(c, AlarmReceiver::class.java),
+            PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
+        )
+        assertNotNull(pending)
     }
 
     @Test
