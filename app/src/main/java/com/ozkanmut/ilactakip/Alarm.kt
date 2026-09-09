@@ -79,10 +79,14 @@ object AlarmScheduler {
         catch (_: SecurityException) { alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent) }
     }
 
-    fun snoozeGroup(c: Context, time: String, meds: List<Medication>, minutes: Int, scheduledDate: String = LocalDate.now().toString()) {
-        val trigger = System.currentTimeMillis() + minutes.coerceAtLeast(1) * 60_000L
-        scheduleAt(c, time, meds, trigger, "snooze-$time", true, scheduledDate)
+    fun scheduleSnoozeUntil(c: Context, time: String, meds: List<Medication>, triggerAtMillis: Long, scheduledDate: String = LocalDate.now().toString()): Long {
+        val safeTrigger = maxOf(System.currentTimeMillis() + 1_000L, triggerAtMillis)
+        scheduleAt(c, time, meds, safeTrigger, "snooze-$time", true, scheduledDate)
+        return safeTrigger
     }
+
+    fun snoozeGroup(c: Context, time: String, meds: List<Medication>, minutes: Int, scheduledDate: String = LocalDate.now().toString()): Long =
+        scheduleSnoozeUntil(c, time, meds, System.currentTimeMillis() + minutes.coerceAtLeast(1) * 60_000L, scheduledDate)
 }
 
 class AlarmReceiver : BroadcastReceiver() {
@@ -134,8 +138,8 @@ class ActionReceiver : BroadcastReceiver() {
         val ids = i.getStringExtra("ids")?.split("|#|") ?: emptyList()
         val stored = Store.load(c).associateBy { it.id }
         val resolvedMeds = ids.mapNotNull { stored[it] }.ifEmpty { names.mapIndexed { index, label -> Medication("legacy-$index", label, "", listOf(time)) } }
-        if (action == "snooze") AlarmScheduler.snoozeGroup(c, time, resolvedMeds, 30, scheduledDate)
-        Ntfy.sendEvent(c, if (action == "snooze") "snoozed" else action, time, resolvedMeds, scheduledDate)
+        val snoozeUntil = if (action == "snooze") AlarmScheduler.snoozeGroup(c, time, resolvedMeds, 30, scheduledDate) else 0L
+        Ntfy.sendEvent(c, if (action == "snooze") "snoozed" else action, time, resolvedMeds, scheduledDate, snoozeUntil)
     }
 }
 
@@ -153,7 +157,7 @@ object Ntfy {
     private val terminalTypes = setOf("taken", "missed", "conflict_resolved_taken", "conflict_resolved_missed")
     private val eventLocks = ConcurrentHashMap<String, Any>()
 
-    fun sendEvent(c: Context, type: String, time: String, meds: List<Medication>, scheduledDate: String = LocalDate.now().toString()) {
+    fun sendEvent(c: Context, type: String, time: String, meds: List<Medication>, scheduledDate: String = LocalDate.now().toString(), snoozeUntil: Long = 0L) {
         when {
             type in terminalTypes -> {
                 AlarmScheduler.cancelSnooze(c, time)
@@ -165,7 +169,7 @@ object Ntfy {
 
         val event = DoseEvent(
             UUID.randomUUID().toString(), type, time, Store.myName(c), Store.topic(c),
-            System.currentTimeMillis(), meds, "pending", EventStore.nextRevision(c), scheduledDate
+            System.currentTimeMillis(), meds, "pending", EventStore.nextRevision(c), scheduledDate, snoozeUntil
         )
         EventStore.append(c, event)
         StockEngine.applyEvent(c, event)
@@ -196,12 +200,15 @@ object Ntfy {
             if (allDelivered && topics.all { DeliveryLedger.delivered(c, event.eventId, it) }) {
                 EventStore.markSynced(c, event.eventId)
                 DeliveryLedger.clearEvent(c, event.eventId)
+                eventLocks.remove(event.eventId, lock)
                 true
             } else false
         }
     }
 
-    fun sendTo(topic: String, title: String, message: String) = thread { post(topic, title, message, "high") }
+    fun sendTo(c: Context, topic: String, title: String, message: String) {
+        AlertOutbox.enqueue(c.applicationContext, topic, title, message)
+    }
 
     private fun post(topic: String, title: String, message: String, priority: String): Boolean = try {
         val connection = URL("https://ntfy.sh/$topic").openConnection() as HttpURLConnection
