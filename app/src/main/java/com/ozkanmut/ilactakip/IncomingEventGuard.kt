@@ -4,14 +4,6 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 
-/**
- * Guards ntfy catch-up processing against duplicate replays and forged unseen
- * events claiming to originate from this device.
- *
- * We intentionally mark a remote event as processed only after all side effects
- * complete. If the app crashes mid-processing, the event can be replayed safely
- * on the next pull instead of being lost.
- */
 object IncomingEventGuard {
     private const val MAX_PROTOCOL_VERSION = 9
 
@@ -42,27 +34,39 @@ object IncomingEventGuard {
 }
 
 internal object RemoteReceiptRetention {
-    fun nextOrder(existing: List<String>, eventId: String, limit: Int): List<String> {
-        if (eventId.isBlank() || limit <= 0) return emptyList()
-        val ordered = existing.filter { it.isNotBlank() && it != eventId }.toMutableList()
-        ordered += eventId
+    fun merge(existing: List<String>, additions: List<String>, limit: Int): List<String> {
+        if (limit <= 0) return emptyList()
+        val ordered = existing.filter { it.isNotBlank() }.distinct().toMutableList()
+        additions.filter { it.isNotBlank() }.forEach { id ->
+            ordered.remove(id)
+            ordered += id
+        }
         return if (ordered.size > limit) ordered.takeLast(limit) else ordered
     }
+
+    fun nextOrder(existing: List<String>, eventId: String, limit: Int): List<String> =
+        merge(existing, listOf(eventId), limit)
 }
 
 object RemoteEventReceiptStore {
     private const val PREFS = "dosefolk_remote_event_receipts"
     private const val KEY_SET = "processed_event_ids"
     private const val KEY_ORDER = "processed_event_order_v2"
+    private const val KEY_INFLIGHT_SET = "processed_event_ids_inflight"
+    private const val KEY_INFLIGHT_ORDER = "processed_event_order_inflight_v1"
     private const val MAX_IDS = 5000
 
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    fun processed(c: Context, eventId: String): Boolean =
-        eventId.isNotBlank() && prefs(c).getStringSet(KEY_SET, emptySet()).orEmpty().contains(eventId)
+    fun processed(c: Context, eventId: String): Boolean {
+        if (eventId.isBlank()) return false
+        val p = prefs(c)
+        return p.getStringSet(KEY_SET, emptySet()).orEmpty().contains(eventId) ||
+            p.getStringSet(KEY_INFLIGHT_SET, emptySet()).orEmpty().contains(eventId)
+    }
 
-    private fun orderedIds(c: Context, membership: Set<String>): List<String> {
-        val raw = prefs(c).getString(KEY_ORDER, null)
+    private fun orderedIds(c: Context, orderKey: String, membership: Set<String>): List<String> {
+        val raw = prefs(c).getString(orderKey, null)
         if (raw == null) return membership.toList()
         return runCatching {
             val a = JSONArray(raw)
@@ -75,17 +79,44 @@ object RemoteEventReceiptStore {
         }.getOrElse { membership.toList() }
     }
 
+    /**
+     * Processed IDs stay in an unbounded in-flight ledger until the ntfy cursor
+     * checkpoint for the whole catch-up batch is durably committed. This avoids
+     * a >5000-message batch evicting its own early receipts before crash recovery.
+     */
     @Synchronized
     fun markProcessed(c: Context, eventId: String) {
         if (eventId.isBlank()) return
         val p = prefs(c)
-        val membership = p.getStringSet(KEY_SET, emptySet()).orEmpty().toMutableSet()
-        val ordered = RemoteReceiptRetention.nextOrder(orderedIds(c, membership), eventId, MAX_IDS)
-        val kept = ordered.toSet()
+        val membership = p.getStringSet(KEY_INFLIGHT_SET, emptySet()).orEmpty().toMutableSet()
+        val ordered = RemoteReceiptRetention.nextOrder(
+            orderedIds(c, KEY_INFLIGHT_ORDER, membership),
+            eventId,
+            Int.MAX_VALUE
+        )
+        p.edit()
+            .putStringSet(KEY_INFLIGHT_SET, ordered.toSet())
+            .putString(KEY_INFLIGHT_ORDER, JSONArray(ordered).toString())
+            .commit()
+    }
+
+    /** Call only after SyncCheckpointStore.commitSuccessfulBatch(). */
+    @Synchronized
+    fun commitSuccessfulBatch(c: Context) {
+        val p = prefs(c)
+        val inflight = p.getStringSet(KEY_INFLIGHT_SET, emptySet()).orEmpty()
+        if (inflight.isEmpty()) return
+
+        val history = p.getStringSet(KEY_SET, emptySet()).orEmpty()
+        val historyOrder = orderedIds(c, KEY_ORDER, history)
+        val inflightOrder = orderedIds(c, KEY_INFLIGHT_ORDER, inflight)
+        val merged = RemoteReceiptRetention.merge(historyOrder, inflightOrder, MAX_IDS)
 
         p.edit()
-            .putStringSet(KEY_SET, kept)
-            .putString(KEY_ORDER, JSONArray(ordered).toString())
+            .putStringSet(KEY_SET, merged.toSet())
+            .putString(KEY_ORDER, JSONArray(merged).toString())
+            .remove(KEY_INFLIGHT_SET)
+            .remove(KEY_INFLIGHT_ORDER)
             .commit()
     }
 }
