@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -17,6 +18,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -95,14 +97,44 @@ object ScopedNtfy {
         OwnerScopeStore.applyRemoteProgram(c, ownerTopic, type, medication)
         AlertOutbox.enqueue(c.applicationContext, ownerTopic, "Dosefolk sync", EventStore.payload(event).toString())
     }
+
+    fun sendRuleChange(c: Context, ownerTopic: String, medication: Medication, rule: ProgramRule) {
+        if (ownerTopic.isBlank() || medication.id.isBlank()) return
+        val normalized = ProgramRuleStore.normalizeForSync(rule.copy(medicationId = medication.id))
+        val carrier = Medication(
+            id = medication.id,
+            name = medication.name,
+            dose = ProgramRuleStore.encode(normalized).toString(),
+            times = emptyList()
+        )
+        val now = System.currentTimeMillis()
+        val event = DoseEvent(
+            eventId = UUID.randomUUID().toString(),
+            type = "program_rule_updated",
+            time = "program",
+            actor = Store.myName(c),
+            actorTopic = Store.topic(c),
+            timestamp = now,
+            medications = listOf(carrier),
+            syncState = "synced",
+            revision = EventStore.nextRevision(c),
+            ownerId = ownerTopic
+        )
+        EventStore.append(c, event)
+        OwnerScopeStore.remember(c, event)
+        OwnerScopeStore.applyRemoteRule(c, ownerTopic, normalized, now)
+        AlertOutbox.enqueue(c.applicationContext, ownerTopic, "Dosefolk sync", EventStore.payload(event).toString())
+    }
 }
 
 @Composable
 fun RemoteProgramSection(c: Context, person: Person, refreshKey: Int) {
     var expanded by remember(person.id) { mutableStateOf(false) }
     var editing by remember { mutableStateOf<Medication?>(null) }
+    var editingRule by remember { mutableStateOf<Medication?>(null) }
     var adding by remember { mutableStateOf(false) }
-    val meds = remember(refreshKey, expanded, editing, adding, person.topic) {
+    var localRefresh by remember { mutableIntStateOf(0) }
+    val meds = remember(refreshKey, localRefresh, expanded, editing, adding, person.topic) {
         OwnerScopeStore.remoteMedications(c, person.topic)
     }
     val canEdit = RemoteCapabilityStore.allowedByOwner(c, person.topic, CirclePermission.EDIT_PROGRAM)
@@ -125,17 +157,23 @@ fun RemoteProgramSection(c: Context, person: Person, refreshKey: Int) {
                 )
             }
             meds.forEach { med ->
+                val rule = OwnerScopeStore.remoteRule(c, person.topic, med.id)
                 Card(Modifier.fillMaxWidth()) {
                     Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(med.name, fontWeight = FontWeight.Bold)
                         if (med.dose.isNotBlank()) Text(med.dose)
                         Text(med.times.joinToString(" • ").ifBlank { if (I18n.language() == "tr") "Saat yok" else "No fixed time" })
+                        ProgramRuleStore.describeRule(rule).takeIf { it.isNotBlank() }?.let {
+                            Text(it, style = MaterialTheme.typography.bodySmall)
+                        }
                         if (canEdit) {
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                                 TextButton(onClick = { editing = med }) { Text(if (I18n.language() == "tr") "Düzenle" else "Edit") }
-                                TextButton(onClick = { ScopedNtfy.sendProgramChange(c, person.topic, "program_deleted", med) }) {
-                                    Text(if (I18n.language() == "tr") "Sil" else "Delete")
-                                }
+                                TextButton(onClick = { editingRule = med }) { Text(if (I18n.language() == "tr") "Kural" else "Rule") }
+                                TextButton(onClick = {
+                                    ScopedNtfy.sendProgramChange(c, person.topic, "program_deleted", med)
+                                    localRefresh++
+                                }) { Text(if (I18n.language() == "tr") "Sil" else "Delete") }
                             }
                         }
                     }
@@ -158,12 +196,22 @@ fun RemoteProgramSection(c: Context, person: Person, refreshKey: Int) {
         RemoteMedicationDialog(c, med, onDismiss = { editing = null }) { updated ->
             ScopedNtfy.sendProgramChange(c, person.topic, "program_updated", updated)
             editing = null
+            localRefresh++
+        }
+    }
+    editingRule?.let { med ->
+        val initialRule = OwnerScopeStore.remoteRule(c, person.topic, med.id)
+        RemoteRuleDialog(initialRule, onDismiss = { editingRule = null }) { updated ->
+            ScopedNtfy.sendRuleChange(c, person.topic, med, updated)
+            editingRule = null
+            localRefresh++
         }
     }
     if (adding) {
         RemoteMedicationDialog(c, Medication(UUID.randomUUID().toString(), "", "", emptyList()), onDismiss = { adding = false }) { added ->
             ScopedNtfy.sendProgramChange(c, person.topic, "program_added", added)
             adding = false
+            localRefresh++
         }
     }
 }
@@ -198,6 +246,55 @@ private fun RemoteMedicationDialog(c: Context, initial: Medication, onDismiss: (
             Button(enabled = name.isNotBlank(), onClick = { onSave(initial.copy(name = name.trim(), dose = dose.trim(), times = times)) }) {
                 Text(if (I18n.language() == "tr") "Kaydet" else "Save")
             }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text(if (I18n.language() == "tr") "İptal" else "Cancel") } }
+    )
+}
+
+@Composable
+private fun RemoteRuleDialog(initial: ProgramRule, onDismiss: () -> Unit, onSave: (ProgramRule) -> Unit) {
+    var weekdays by remember(initial.medicationId) { mutableStateOf(initial.weekdays) }
+    var everyN by remember(initial.medicationId) { mutableStateOf(initial.everyNDays.toString()) }
+    var start by remember(initial.medicationId) { mutableStateOf(initial.startDate.orEmpty()) }
+    var end by remember(initial.medicationId) { mutableStateOf(initial.endDate.orEmpty()) }
+    var anchor by remember(initial.medicationId) { mutableStateOf(initial.anchorDate.orEmpty()) }
+    var routine by remember(initial.medicationId) { mutableStateOf(initial.routineLabel) }
+    val dayLabels = if (I18n.language() == "tr") listOf("Pzt", "Sal", "Çar", "Per", "Cum", "Cmt", "Paz") else listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(if (I18n.language() == "tr") "Program kuralı" else "Program rule") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(if (I18n.language() == "tr") "Günler (hiçbiri = her gün)" else "Days (none = every day)")
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    (1..4).forEach { day ->
+                        FilterChip(selected = day in weekdays, onClick = { weekdays = if (day in weekdays) weekdays - day else weekdays + day }, label = { Text(dayLabels[day - 1]) })
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    (5..7).forEach { day ->
+                        FilterChip(selected = day in weekdays, onClick = { weekdays = if (day in weekdays) weekdays - day else weekdays + day }, label = { Text(dayLabels[day - 1]) })
+                    }
+                }
+                OutlinedTextField(everyN, { everyN = it.filter(Char::isDigit) }, label = { Text(if (I18n.language() == "tr") "Kaç günde bir" else "Every N days") })
+                OutlinedTextField(start, { start = it }, label = { Text(if (I18n.language() == "tr") "Başlangıç YYYY-AA-GG" else "Start YYYY-MM-DD") })
+                OutlinedTextField(end, { end = it }, label = { Text(if (I18n.language() == "tr") "Bitiş YYYY-AA-GG" else "End YYYY-MM-DD") })
+                OutlinedTextField(anchor, { anchor = it }, label = { Text(if (I18n.language() == "tr") "Referans tarih YYYY-AA-GG" else "Anchor date YYYY-MM-DD") })
+                OutlinedTextField(routine, { routine = it }, label = { Text(if (I18n.language() == "tr") "Rutin etiketi" else "Routine label") })
+            }
+        },
+        confirmButton = {
+            Button(onClick = {
+                onSave(initial.copy(
+                    weekdays = weekdays,
+                    everyNDays = (everyN.toIntOrNull() ?: 1).coerceAtLeast(1),
+                    startDate = start.trim().takeIf { it.isNotBlank() },
+                    endDate = end.trim().takeIf { it.isNotBlank() },
+                    anchorDate = anchor.trim().takeIf { it.isNotBlank() },
+                    routineLabel = routine.trim()
+                ))
+            }) { Text(if (I18n.language() == "tr") "Kaydet" else "Save") }
         },
         dismissButton = { TextButton(onClick = onDismiss) { Text(if (I18n.language() == "tr") "İptal" else "Cancel") } }
     )
