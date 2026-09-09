@@ -6,24 +6,24 @@ import org.json.JSONObject
 
 /**
  * Keeps medication program changes in the same durable ntfy event stream as dose actions.
- * The first observation only establishes a baseline so upgrades do not broadcast every
- * existing medication as newly added.
+ * Local programs stay in Store. Remote programs are cached in OwnerScopeStore and never
+ * enter this device's own alarm list.
  */
 object ProgramSync {
     private const val PREFS = "dosefolk_program_sync"
     private const val KEY_BASELINE = "baseline"
     private const val KEY_INITIALIZED = "initialized"
-    private const val STORE_PREFS = "ilac_takip"
-    private const val STORE_MEDS = "meds"
 
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-    private fun stampKey(id: String) = "stamp|$id"
+    private fun stampKey(ownerId: String, id: String) = "stamp|$ownerId|$id"
 
     @Synchronized
     fun observeLocal(c: Context, meds: List<Medication>) {
         val p = prefs(c)
+        val ownerId = OwnerScopeStore.localOwnerId(c)
         if (!p.getBoolean(KEY_INITIALIZED, false)) {
             saveBaseline(c, meds)
+            meds.forEach { OwnerScopeStore.remember(c, localProgramEvent(c, it, ownerId)) }
             p.edit().putBoolean(KEY_INITIALIZED, true).commit()
             return
         }
@@ -33,56 +33,52 @@ object ProgramSync {
 
         (current.keys - old.keys).forEach { id ->
             val med = current.getValue(id)
-            p.edit().putLong(stampKey(id), now).commit()
+            p.edit().putLong(stampKey(ownerId, id), now).commit()
             Ntfy.sendEvent(c, "program_added", med.times.firstOrNull() ?: "program", listOf(med))
         }
         (old.keys - current.keys).forEach { id ->
             val med = old.getValue(id)
-            p.edit().putLong(stampKey(id), now).commit()
+            p.edit().putLong(stampKey(ownerId, id), now).commit()
             Ntfy.sendEvent(c, "program_deleted", med.times.firstOrNull() ?: "program", listOf(med))
         }
         (current.keys intersect old.keys).forEach { id ->
             val before = old.getValue(id)
             val after = current.getValue(id)
             if (before != after) {
-                p.edit().putLong(stampKey(id), now).commit()
+                p.edit().putLong(stampKey(ownerId, id), now).commit()
                 Ntfy.sendEvent(c, "program_updated", after.times.firstOrNull() ?: before.times.firstOrNull() ?: "program", listOf(after))
             }
         }
         saveBaseline(c, meds)
     }
 
-    /** Applies an authorized remote program event without creating a send-back loop. */
+    /** Applies an authorized remote program event without touching the local medication list. */
     @Synchronized
     fun applyRemote(c: Context, event: DoseEvent) {
         if (event.type !in setOf("program_added", "program_updated", "program_deleted")) return
         val med = event.medications.firstOrNull() ?: return
         if (med.id.isBlank()) return
+        val ownerId = event.ownerId.ifBlank { event.actorTopic }
+        if (ownerId.isBlank() || ownerId == OwnerScopeStore.localOwnerId(c)) return
         val p = prefs(c)
-        val lastStamp = p.getLong(stampKey(med.id), 0L)
+        val lastStamp = p.getLong(stampKey(ownerId, med.id), 0L)
         if (event.timestamp in 1 until lastStamp) return
 
-        val current = Store.load(c).toMutableList()
-        when (event.type) {
-            "program_deleted" -> current.removeAll { it.id == med.id }
-            "program_added", "program_updated" -> {
-                val index = current.indexOfFirst { it.id == med.id }
-                if (index >= 0) current[index] = med else current.add(med)
-            }
-        }
-        writeStore(c, current)
-        p.edit().putLong(stampKey(med.id), event.timestamp).putBoolean(KEY_INITIALIZED, true).commit()
-        saveBaseline(c, current)
-        AlarmScheduler.scheduleAll(c, current, observeProgramChanges = false)
+        OwnerScopeStore.applyRemoteProgram(c, ownerId, event.type, med)
+        p.edit().putLong(stampKey(ownerId, med.id), event.timestamp).commit()
     }
 
-    private fun writeStore(c: Context, meds: List<Medication>) {
-        val a = JSONArray()
-        meds.forEach { m ->
-            a.put(JSONObject().put("id", m.id).put("name", m.name).put("dose", m.dose).put("times", JSONArray(m.times)))
-        }
-        c.getSharedPreferences(STORE_PREFS, Context.MODE_PRIVATE).edit().putString(STORE_MEDS, a.toString()).commit()
-    }
+    private fun localProgramEvent(c: Context, med: Medication, ownerId: String) = DoseEvent(
+        eventId = "baseline-${med.id}",
+        type = "program_baseline",
+        time = med.times.firstOrNull() ?: "program",
+        actor = Store.myName(c),
+        actorTopic = Store.topic(c),
+        timestamp = System.currentTimeMillis(),
+        medications = listOf(med),
+        syncState = "synced",
+        ownerId = ownerId
+    )
 
     private fun loadBaseline(c: Context): List<Medication> {
         val raw = prefs(c).getString(KEY_BASELINE, "[]") ?: "[]"
