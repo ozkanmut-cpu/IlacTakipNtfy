@@ -47,14 +47,14 @@ class AlarmPresentationRecoveryTest {
         .putExtra("isSnooze", false)
         .putExtra("deliveryId", deliveryId)
 
-    private fun alarmEvent(deliveryId: String, revision: Long = 7L) = DoseEvent(
+    private fun alarmEvent(deliveryId: String, revision: Long = 7L, medications: List<Medication> = listOf(med)) = DoseEvent(
         eventId = deliveryId,
         type = "alarm",
         time = "08:00",
         actor = "Local",
         actorTopic = Store.topic(c),
         timestamp = System.currentTimeMillis(),
-        medications = listOf(med),
+        medications = medications,
         syncState = "pending",
         revision = revision,
         scheduledDate = date,
@@ -79,6 +79,29 @@ class AlarmPresentationRecoveryTest {
 
         assertEquals(1, EventStore.load(c).count { it.eventId == deliveryId && it.type == "alarm" })
         assertEquals(7L, c.getSharedPreferences("dosefolk_events", Context.MODE_PRIVATE).getLong("local_revision", 0L))
+    }
+
+    @Test
+    fun canonicalAlarmPayloadWinsOverStaleIntentExtrasOnRedelivery() {
+        val deliveryId = "group-08:00|stale-extras"
+        val canonicalMed = med.copy(name = "Canonical Med", dose = "2 tablets")
+        Store.save(c, listOf(canonicalMed))
+        EventStore.append(c, alarmEvent(deliveryId, medications = listOf(canonicalMed)))
+
+        val staleIntent = Intent(c, AlarmReceiver::class.java)
+            .putExtra("time", "08:00")
+            .putExtra("names", "Stale Med (1 tablet)")
+            .putExtra("ids", canonicalMed.id)
+            .putExtra("scheduledDate", date)
+            .putExtra("isSnooze", false)
+            .putExtra("deliveryId", deliveryId)
+
+        AlarmReceiver().onReceive(c, staleIntent)
+
+        val manager = c.getSystemService(NotificationManager::class.java)
+        val notification = manager.activeNotifications.first { it.id == ("group-$date-08:00").hashCode() }.notification
+        assertEquals("Canonical Med (2 tablets)", notification.extras.getCharSequence("android.text")?.toString())
+        assertTrue(AlarmPresentationLedger.isPresented(c, deliveryId))
     }
 
     @Test
