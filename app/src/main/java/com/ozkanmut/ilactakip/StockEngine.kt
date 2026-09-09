@@ -3,6 +3,7 @@ package com.ozkanmut.ilactakip
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
+import kotlin.math.roundToInt
 
 data class MedicationStock(
     val medicationId: String,
@@ -13,7 +14,6 @@ data class MedicationStock(
     val updatedAt: Long = System.currentTimeMillis()
 )
 
-/** Dose-based inventory. It never guesses package size; users configure it once, then New Box can reuse it. */
 object StockEngine {
     private const val PREFS = "dosefolk_stock"
     private const val KEY_STOCK = "stock"
@@ -40,6 +40,15 @@ object StockEngine {
 
     fun lowStock(c: Context): List<MedicationStock> = load(c).filter { it.remainingDoses <= it.lowThreshold }
 
+    private fun consumptionUnits(c: Context, medicationId: String): Int {
+        val meta = MedicationMetaStore.get(c, medicationId) ?: return 1
+        val countable = meta.form in setOf(
+            MedicationForm.TABLET, MedicationForm.INSULIN, MedicationForm.NEBULE,
+            MedicationForm.INHALER, MedicationForm.DROP, MedicationForm.PATCH
+        )
+        return if (countable) (meta.quantity ?: 1.0).roundToInt().coerceAtLeast(1) else 1
+    }
+
     /** Idempotent across devices: an event ID can reduce stock only once on this device. */
     @Synchronized
     fun applyEvent(c: Context, event: DoseEvent) {
@@ -48,8 +57,9 @@ object StockEngine {
         var changed = false
         event.medications.distinctBy { it.id }.forEach { med ->
             val stock = current[med.id] ?: return@forEach
+            val used = consumptionUnits(c, med.id)
             current[med.id] = stock.copy(
-                remainingDoses = (stock.remainingDoses - 1).coerceAtLeast(0),
+                remainingDoses = (stock.remainingDoses - used).coerceAtLeast(0),
                 updatedAt = event.timestamp
             )
             changed = true
