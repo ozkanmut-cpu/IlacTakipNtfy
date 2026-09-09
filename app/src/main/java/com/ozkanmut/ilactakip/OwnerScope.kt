@@ -102,6 +102,28 @@ object OwnerScopeStore {
         return true
     }
 
+    @Synchronized
+    fun applyRemoteRule(c: Context, ownerId: String, rule: ProgramRule, timestamp: Long): Boolean {
+        val event = EventStore.load(c).firstOrNull {
+            it.type == "program_rule_updated" &&
+                it.ownerId == ownerId &&
+                it.timestamp == timestamp &&
+                it.medications.firstOrNull()?.id == rule.medicationId
+        } ?: DoseEvent(
+            eventId = "legacy-rule-$ownerId-${rule.medicationId}-$timestamp",
+            type = "program_rule_updated",
+            time = "program",
+            actor = "",
+            actorTopic = "",
+            timestamp = timestamp,
+            medications = emptyList(),
+            syncState = "synced",
+            revision = 0L,
+            ownerId = ownerId
+        )
+        return applyRemoteRule(c, ownerId, rule, event)
+    }
+
     private data class ScopedRule(val ownerId: String, val rule: ProgramRule)
 
     private fun loadRemote(c: Context): List<Pair<String, Medication>> {
