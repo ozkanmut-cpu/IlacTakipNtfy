@@ -22,8 +22,7 @@ object SmartEscalation {
     fun schedule(c: Context, time: String, scheduledDate: String = LocalDate.now().toString()) {
         cancelAlarms(c, time, scheduledDate)
         AttentionBudget.clear(c, time, scheduledDate)
-        scheduleStage(c, time, scheduledDate, 0, System.currentTimeMillis() + FIRST_DELAY_MIN * 60_000L)
-        scheduleStage(c, time, scheduledDate, 1, System.currentTimeMillis() + SECOND_DELAY_MIN * 60_000L)
+        scheduleFresh(c, time, scheduledDate)
     }
 
     fun cancel(c: Context, time: String, scheduledDate: String = LocalDate.now().toString()) {
@@ -37,6 +36,42 @@ object SmartEscalation {
         val people = TemporaryCareStore.prioritizedPeople(c)
         if (people.isNotEmpty()) scheduleStage(c, time, scheduledDate, 0, base)
         if (people.size > 1) scheduleStage(c, time, scheduledDate, 1, base + 15 * 60_000L)
+    }
+
+    /**
+     * Rebuilds only operational escalation alarms lost with AlarmManager state.
+     * AttentionBudget is intentionally preserved so a reboot never re-sends a
+     * caregiver stage that was already delivered before the restart.
+     */
+    fun restore(c: Context) {
+        CareBatonStore.cleanup(c)
+        DoseStateEngine.unresolved(c).forEach { state ->
+            val scheduledDate = state.scheduledDate
+            val baton = CareBatonStore.active(c, state.time, scheduledDate)
+            when (state.status) {
+                DoseSessionStatus.PENDING,
+                DoseSessionStatus.CONFLICT -> {
+                    if (baton != null) deferUntil(c, state.time, baton.expiresAt, scheduledDate)
+                    else {
+                        cancelAlarms(c, state.time, scheduledDate)
+                        scheduleFresh(c, state.time, scheduledDate)
+                    }
+                }
+                DoseSessionStatus.SNOOZED -> {
+                    // The explicit snooze alarm is restored separately. Do not
+                    // escalate before the user's snooze window ends.
+                    if (baton != null) deferUntil(c, state.time, baton.expiresAt, scheduledDate)
+                    else cancelAlarms(c, state.time, scheduledDate)
+                }
+                else -> cancelAlarms(c, state.time, scheduledDate)
+            }
+        }
+    }
+
+    private fun scheduleFresh(c: Context, time: String, scheduledDate: String) {
+        val now = System.currentTimeMillis()
+        scheduleStage(c, time, scheduledDate, 0, now + FIRST_DELAY_MIN * 60_000L)
+        scheduleStage(c, time, scheduledDate, 1, now + SECOND_DELAY_MIN * 60_000L)
     }
 
     private fun cancelAlarms(c: Context, time: String, scheduledDate: String) {
