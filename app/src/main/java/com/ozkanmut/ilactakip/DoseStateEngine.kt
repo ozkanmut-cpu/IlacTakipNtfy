@@ -76,17 +76,26 @@ object DoseStateEngine {
             return DoseSessionState(time, DoseSessionStatus.PENDING, undo, medsFrom(undo, scheduleMeds), scheduledDate = scheduledDate)
         }
 
-        val lastTaken = effective.filter { it.type == "taken" }.maxWithOrNull(DoseEventOrder.global)
-        val lastMissed = effective.filter { it.type == "missed" }.maxWithOrNull(DoseEventOrder.global)
-        if (lastTaken != null && lastMissed != null && lastTaken.actorTopic != lastMissed.actorTopic) {
-            val conflicts = ordered(listOf(lastTaken, lastMissed))
-            return DoseSessionState(time, DoseSessionStatus.CONFLICT, conflicts.last(), medsFrom(conflicts.last(), scheduleMeds), conflicts, scheduledDate)
-        }
+        if (effective.isNotEmpty()) {
+            // Revision is a Lamport-style causal clock. Only opposing terminal
+            // facts at the same highest logical revision are truly concurrent.
+            // A higher revision is a later decision and must settle older facts.
+            val maxRevision = effective.maxOf { it.revision }
+            val top = effective.filter { it.revision == maxRevision }
+            val topTaken = top.filter { it.type == "taken" }
+            val topMissed = top.filter { it.type == "missed" }
 
-        val effectiveTerminal = lastTaken ?: lastMissed
-        if (effectiveTerminal != null) {
-            val status = if (effectiveTerminal.type == "taken") DoseSessionStatus.TAKEN else DoseSessionStatus.MISSED
-            return DoseSessionState(time, status, effectiveTerminal, medsFrom(effectiveTerminal, scheduleMeds), scheduledDate = scheduledDate)
+            if (topTaken.isNotEmpty() && topMissed.isNotEmpty()) {
+                val conflicts = ordered(listOf(
+                    topTaken.maxWithOrNull(DoseEventOrder.global)!!,
+                    topMissed.maxWithOrNull(DoseEventOrder.global)!!
+                ))
+                return DoseSessionState(time, DoseSessionStatus.CONFLICT, conflicts.last(), medsFrom(conflicts.last(), scheduleMeds), conflicts, scheduledDate)
+            }
+
+            val terminal = top.maxWithOrNull(DoseEventOrder.global)!!
+            val status = if (terminal.type == "taken") DoseSessionStatus.TAKEN else DoseSessionStatus.MISSED
+            return DoseSessionState(time, status, terminal, medsFrom(terminal, scheduleMeds), scheduledDate = scheduledDate)
         }
 
         val latest = sessionEvents.maxWithOrNull(DoseEventOrder.global)!!
