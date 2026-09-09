@@ -59,7 +59,7 @@ object DoseStateEngine {
 
             val resolution = top.maxWithOrNull(compareBy<DoseEvent> { it.actorTopic }.thenBy { it.eventId })!!
             val laterUndo = sessionEvents.filter { (it.type == "undo_taken" || it.type == "undo_missed") && it.actorTopic == resolution.actorTopic }
-                .maxWithOrNull(compareBy<DoseEvent> { it.revision }.thenBy { it.eventId }.thenBy { it.timestamp })
+                .maxWithOrNull(DoseEventOrder.withinActor)
             if (laterUndo != null && laterUndo.revision > resolution.revision) {
                 return DoseSessionState(time, DoseSessionStatus.PENDING, laterUndo, medsFrom(laterUndo, scheduleMeds), scheduledDate = scheduledDate)
             }
@@ -72,12 +72,12 @@ object DoseStateEngine {
         }.values.filterNotNull()
         val effective = latestByActor.filterNot { it.type == "undo_taken" || it.type == "undo_missed" }
         if (effective.isEmpty() && latestByActor.any { it.type == "undo_taken" || it.type == "undo_missed" }) {
-            val undo = latestByActor.maxWithOrNull(compareBy<DoseEvent> { it.revision }.thenBy { it.actorTopic }.thenBy { it.eventId })!!
+            val undo = latestByActor.maxWithOrNull(DoseEventOrder.global)!!
             return DoseSessionState(time, DoseSessionStatus.PENDING, undo, medsFrom(undo, scheduleMeds), scheduledDate = scheduledDate)
         }
 
-        val lastTaken = effective.filter { it.type == "taken" }.maxWithOrNull(compareBy<DoseEvent> { it.revision }.thenBy { it.actorTopic })
-        val lastMissed = effective.filter { it.type == "missed" }.maxWithOrNull(compareBy<DoseEvent> { it.revision }.thenBy { it.actorTopic })
+        val lastTaken = effective.filter { it.type == "taken" }.maxWithOrNull(DoseEventOrder.global)
+        val lastMissed = effective.filter { it.type == "missed" }.maxWithOrNull(DoseEventOrder.global)
         if (lastTaken != null && lastMissed != null && lastTaken.actorTopic != lastMissed.actorTopic) {
             val conflicts = ordered(listOf(lastTaken, lastMissed))
             return DoseSessionState(time, DoseSessionStatus.CONFLICT, conflicts.last(), medsFrom(conflicts.last(), scheduleMeds), conflicts, scheduledDate)
@@ -89,9 +89,7 @@ object DoseStateEngine {
             return DoseSessionState(time, status, effectiveTerminal, medsFrom(effectiveTerminal, scheduleMeds), scheduledDate = scheduledDate)
         }
 
-        val latest = sessionEvents.maxWithOrNull(
-            compareBy<DoseEvent> { it.revision }.thenBy { it.actorTopic }.thenBy { it.eventId }.thenBy { it.timestamp }
-        )!!
+        val latest = sessionEvents.maxWithOrNull(DoseEventOrder.global)!!
         val status = when (latest.type) {
             "snoozed" -> DoseSessionStatus.SNOOZED
             "alarm" -> DoseSessionStatus.PENDING
@@ -103,20 +101,6 @@ object DoseStateEngine {
 
     private fun medsFrom(event: DoseEvent, fallback: List<Medication>): List<Medication> = if (event.medications.isNotEmpty()) event.medications else fallback
     private fun eventDate(event: DoseEvent): String = event.scheduledDate.ifBlank { LocalDate.now().toString() }
-
-    /**
-     * Logical revision is the causal clock. Actor/topic and event ID are stable
-     * deterministic tie-breakers. Wall-clock time is used only after those fields
-     * so device clock skew cannot change convergence or the winning UI payload.
-     */
-    private fun ordered(events: List<DoseEvent>) = events.sortedWith(
-        compareBy<DoseEvent> { it.revision }
-            .thenBy { it.actorTopic }
-            .thenBy { it.eventId }
-            .thenBy { it.timestamp }
-    )
-
-    private fun newestForActor(events: List<DoseEvent>): DoseEvent? = events.maxWithOrNull(
-        compareBy<DoseEvent> { it.revision }.thenBy { it.eventId }.thenBy { it.timestamp }
-    )
+    private fun ordered(events: List<DoseEvent>) = events.sortedWith(DoseEventOrder.global)
+    private fun newestForActor(events: List<DoseEvent>): DoseEvent? = events.maxWithOrNull(DoseEventOrder.withinActor)
 }
