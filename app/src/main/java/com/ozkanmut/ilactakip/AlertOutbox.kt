@@ -18,7 +18,7 @@ data class PendingAlert(
 object AlertOutbox {
     private const val PREFS = "dosefolk_alert_outbox"
     private const val KEY = "alerts"
-    private const val MAX = 200
+    private const val FLUSH_BATCH = 100
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     @Synchronized
@@ -26,7 +26,9 @@ object AlertOutbox {
         if (topic.isBlank()) return
         val current = load(c).toMutableList()
         current.add(0, PendingAlert(UUID.randomUUID().toString(), topic, title, message, System.currentTimeMillis()))
-        save(c, current.take(MAX))
+        // Pending caregiver alerts are reliability data. Never discard them merely
+        // because the device stayed offline for a long time.
+        save(c, current)
         DosefolkSyncScheduler.kick(c)
     }
 
@@ -41,10 +43,16 @@ object AlertOutbox {
 
     @Synchronized
     fun flushBlocking(c: Context): Boolean {
-        val pending = load(c)
-        if (pending.isEmpty()) return true
-        val remaining = mutableListOf<PendingAlert>()
-        pending.forEach { alert -> if (!post(alert)) remaining += alert }
+        val all = load(c)
+        if (all.isEmpty()) return true
+
+        // Lists are newest-first. Drain the oldest alerts first so long-offline
+        // caregiver notifications preserve chronology. Bound each worker pass so
+        // reconnecting after a large backlog does not monopolize one WorkManager run.
+        val batch = all.takeLast(FLUSH_BATCH)
+        val deliveredIds = mutableSetOf<String>()
+        batch.forEach { alert -> if (post(alert)) deliveredIds += alert.id }
+        val remaining = all.filterNot { it.id in deliveredIds }
         save(c, remaining)
         return remaining.isEmpty()
     }
