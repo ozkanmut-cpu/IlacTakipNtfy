@@ -44,6 +44,7 @@ object SyncEngine {
                         val payload = runCatching { JSONObject(envelope.optString("message")) }.getOrNull() ?: return@forEach
                         val event = parseDoseEvent(payload) ?: return@forEach
                         if (!PermissionPolicy.acceptRemote(context, event)) return@forEach
+                        OwnerScopeStore.remember(context, event)
                         EventStore.append(context, event.copy(syncState = "synced"))
                         StockEngine.applyEvent(context, event)
                         applyRemoteState(context, event)
@@ -72,7 +73,8 @@ object SyncEngine {
             eventId, type, time, o.optString("actor"), o.optString("actorTopic"), timestamp,
             meds, "synced", o.optLong("revision",0L),
             o.optString("scheduledDate", fallbackDate).ifBlank { fallbackDate },
-            o.optLong("snoozeUntil", 0L)
+            o.optLong("snoozeUntil", 0L),
+            o.optString("ownerId")
         )
     }
 
