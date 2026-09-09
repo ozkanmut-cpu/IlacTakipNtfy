@@ -72,11 +72,15 @@ object SyncEngine {
     }
 
     private fun applyRemoteState(c: Context, event: DoseEvent) {
+        val scheduledDate = event.scheduledDate
         when(event.type){
             "care_claimed" -> CareBatonStore.applyRemoteClaim(c,event)
-            "care_released" -> CareBatonStore.resolve(c,event.time)
-            "taken","missed","conflict_resolved_taken","conflict_resolved_missed" -> { CareBatonStore.resolve(c,event.time); SmartEscalation.cancel(c,event.time) }
-            "snoozed" -> SmartEscalation.cancel(c,event.time)
+            "care_released" -> CareBatonStore.resolve(c,event.time,scheduledDate)
+            "taken","missed","conflict_resolved_taken","conflict_resolved_missed" -> {
+                CareBatonStore.resolve(c,event.time,scheduledDate)
+                SmartEscalation.cancel(c,event.time,scheduledDate)
+            }
+            "snoozed" -> SmartEscalation.cancel(c,event.time,scheduledDate)
         }
     }
 }
