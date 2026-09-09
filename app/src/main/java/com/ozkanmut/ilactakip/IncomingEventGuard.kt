@@ -1,6 +1,7 @@
 package com.ozkanmut.ilactakip
 
 import android.content.Context
+import org.json.JSONArray
 import org.json.JSONObject
 
 /**
@@ -49,21 +50,48 @@ object IncomingEventGuard {
 
 object RemoteEventReceiptStore {
     private const val PREFS = "dosefolk_remote_event_receipts"
-    private const val KEY = "processed_event_ids"
+    private const val KEY_SET = "processed_event_ids"
+    private const val KEY_ORDER = "processed_event_order_v2"
     private const val MAX_IDS = 5000
 
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     fun processed(c: Context, eventId: String): Boolean =
-        eventId.isNotBlank() && prefs(c).getStringSet(KEY, emptySet()).orEmpty().contains(eventId)
+        eventId.isNotBlank() && prefs(c).getStringSet(KEY_SET, emptySet()).orEmpty().contains(eventId)
+
+    private fun orderedIds(c: Context, membership: Set<String>): MutableList<String> {
+        val raw = prefs(c).getString(KEY_ORDER, null)
+        if (raw == null) return membership.toMutableList() // one-time legacy migration; old order was unknowable
+        return runCatching {
+            val a = JSONArray(raw)
+            val ordered = (0 until a.length()).map { a.optString(it) }
+                .filter { it.isNotBlank() && it in membership }
+                .distinct()
+                .toMutableList()
+            membership.filterNot { it in ordered }.forEach { ordered += it }
+            ordered
+        }.getOrElse { membership.toMutableList() }
+    }
 
     @Synchronized
     fun markProcessed(c: Context, eventId: String) {
         if (eventId.isBlank()) return
-        val existing = prefs(c).getStringSet(KEY, emptySet()).orEmpty().toMutableList()
-        existing.remove(eventId)
-        existing.add(eventId)
-        val kept = if (existing.size > MAX_IDS) existing.takeLast(MAX_IDS) else existing
-        prefs(c).edit().putStringSet(KEY, kept.toSet()).commit()
+        val p = prefs(c)
+        val membership = p.getStringSet(KEY_SET, emptySet()).orEmpty().toMutableSet()
+        val ordered = orderedIds(c, membership)
+
+        ordered.remove(eventId)
+        ordered += eventId
+        membership += eventId
+
+        while (ordered.size > MAX_IDS) {
+            val evicted = ordered.removeAt(0)
+            membership.remove(evicted)
+        }
+
+        p.edit()
+            .putStringSet(KEY_SET, membership)
+            .putString(KEY_ORDER, JSONArray(ordered).toString())
+            .commit()
     }
 }
