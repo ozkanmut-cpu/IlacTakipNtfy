@@ -164,7 +164,7 @@ class ActionReceiver : BroadcastReceiver() {
         val ids = i.getStringExtra("ids")?.split("|#|") ?: emptyList()
         val stored = Store.load(c).associateBy { it.id }
         val resolvedMeds = ids.mapNotNull { stored[it] }.ifEmpty { names.mapIndexed { index, label -> Medication("legacy-$index", label, "", listOf(time)) } }
-        val snoozeUntil = if (action == "snooze") AlarmScheduler.snoozeGroup(c, time, resolvedMeds, 30, scheduledDate) else 0L
+        val snoozeUntil = if (action == "snooze") System.currentTimeMillis() + 30 * 60_000L else 0L
         Ntfy.sendEvent(c, if (action == "snooze") "snoozed" else action, time, resolvedMeds, scheduledDate, snoozeUntil)
     }
 }
@@ -216,7 +216,13 @@ object Ntfy {
 
             when {
                 type in terminalTypes -> { AlarmScheduler.cancelSnooze(c, time, scheduledDate); SmartEscalation.cancel(c, time, scheduledDate); CareBatonStore.resolve(c, time, scheduledDate); DoseNotificationLifecycle.cancel(c, time, scheduledDate) }
-                type == "snoozed" -> { SmartEscalation.cancel(c, time, scheduledDate); DoseNotificationLifecycle.cancel(c, time, scheduledDate) }
+                type == "snoozed" -> {
+                    if (event.snoozeUntil > System.currentTimeMillis() && meds.isNotEmpty()) {
+                        AlarmScheduler.scheduleSnoozeUntil(c, time, meds, event.snoozeUntil, scheduledDate)
+                    }
+                    SmartEscalation.cancel(c, time, scheduledDate)
+                    DoseNotificationLifecycle.cancel(c, time, scheduledDate)
+                }
             }
             OwnerScopeStore.remember(c, event)
             PrnUsageLedger.observe(c, event)
