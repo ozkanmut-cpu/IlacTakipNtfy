@@ -16,6 +16,7 @@ object SgkStockAutoImporter {
     private const val PREFS = "dosefolk_sgk_stock_import"
     private const val KEY_APPLIED = "applied_cycles"
     private const val KEY_INITIALIZED = "initialized"
+    private const val KEY_REVIEW = "review_cycles"
     private const val PRESCRIPTION_PREFS = "dosefolk_prescription_tracker"
     private val dotDate = DateTimeFormatter.ofPattern("dd.MM.yyyy")
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -44,6 +45,9 @@ object SgkStockAutoImporter {
         }
     }
 
+    /** Number of new SGK cycles whose stock amount could not be derived safely. */
+    fun reviewCount(c: Context): Int = prefs(c).getStringSet(KEY_REVIEW, emptySet()).orEmpty().size
+
     @Synchronized
     fun reconcile(c: Context): Int {
         if (reconciling) return 0
@@ -53,12 +57,14 @@ object SgkStockAutoImporter {
             val records = PrescriptionRecordStore.all(context)
             if (records.isEmpty()) return 0
             val applied = prefs(context).getStringSet(KEY_APPLIED, emptySet()).orEmpty().toMutableSet()
+            val review = prefs(context).getStringSet(KEY_REVIEW, emptySet()).orEmpty().toMutableSet()
             var changed = 0
 
             records.sortedBy { parse(it.fillDate) ?: parse(it.prescriptionDate) ?: it.endDate() ?: LocalDate.MIN }.forEach { r ->
                 val cycle = cycleKey(r)
                 if (cycle in applied) return@forEach
 
+                // Mark before nested preference writes so callbacks cannot add the same cycle twice.
                 applied += cycle
                 prefs(context).edit().putStringSet(KEY_APPLIED, keepRecent(applied)).commit()
 
@@ -81,18 +87,24 @@ object SgkStockAutoImporter {
                     ))
                     PrescriptionRecordStore.update(context, r.copy(medicationId = med.id))
                 } else if (r.medicationId != med.id) {
-                    // Persist the resolved link so later SGK cycles do not have to guess again.
                     PrescriptionRecordStore.update(context, r.copy(medicationId = med.id))
                 }
 
                 val units = estimateSupplyUnits(context, med, r)
                 if (units != null && units > 0) {
                     StockEngine.addSupply(context, med, units)
+                    review.remove(cycle)
                     changed++
+                } else {
+                    // Keep the prescription import, but never invent an inventory amount.
+                    review += cycle
                 }
             }
 
-            prefs(context).edit().putStringSet(KEY_APPLIED, keepRecent(applied)).commit()
+            prefs(context).edit()
+                .putStringSet(KEY_APPLIED, keepRecent(applied))
+                .putStringSet(KEY_REVIEW, keepRecent(review))
+                .commit()
             return changed
         } finally {
             reconciling = false
@@ -107,8 +119,6 @@ object SgkStockAutoImporter {
     private fun estimateSupplyUnits(c: Context, med: Medication, r: PrescriptionRecord): Int? {
         val meta = MedicationMetaStore.get(c, med.id)
         val boxes = r.boxCount?.takeIf { it > 0 }
-        val pack = meta?.packageCount?.takeIf { it > 0 }
-        if (boxes != null && pack != null && meta.form != MedicationForm.INSULIN) return boxes * pack
 
         if (meta?.form == MedicationForm.INSULIN) {
             val daily = dailyDoseUnits(r.dosePattern, r.period) ?: return null
@@ -117,7 +127,28 @@ object SgkStockAutoImporter {
             val days = (ChronoUnit.DAYS.between(start, end) + 1).coerceAtLeast(1)
             return (daily * days).roundToInt().coerceAtLeast(1)
         }
-        return null
+
+        // For SGK-created metadata, only auto-add stock when package contents are explicitly
+        // present in the medication name (e.g. "28 FILM TABLET"). A suggestion alone is not
+        // strong enough evidence. User-entered/confirmed metadata remains authoritative.
+        val explicitPack = explicitPackageCount(r.medicationName)
+        val confirmedPack = meta?.packageCount?.takeIf { it > 0 && meta.source != "sgk_pdf" }
+        val pack = explicitPack ?: confirmedPack
+        return if (boxes != null && pack != null) boxes * pack else null
+    }
+
+    internal fun explicitPackageCount(name: String): Int? {
+        val normalized = name.uppercase()
+            .replace('İ', 'I')
+            .replace('Ş', 'S')
+            .replace('Ü', 'U')
+            .replace('Ö', 'O')
+            .replace('Ç', 'C')
+            .replace('Ğ', 'G')
+        val form = "(?:FILM\\s*)?(?:TABLET|TB|KAPSUL|KAPSULE|CAPSULE|AMPUL|FLAKON|NEBUL|NEBULE|PATCH|YAMA)"
+        val matches = Regex("\\b(\\d{1,4})\\s*(?:ADET\\s*)?$form\\b").findAll(normalized).toList()
+        if (matches.size != 1) return null
+        return matches.single().groupValues[1].toIntOrNull()?.takeIf { it in 1..1000 }
     }
 
     private fun dailyDoseUnits(pattern: String, period: String): Double? {
