@@ -2,6 +2,7 @@ package com.ozkanmut.ilactakip
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import androidx.work.testing.WorkManagerTestInitHelper
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -17,6 +18,7 @@ class PairingPermissionTest {
     @Before
     fun setUp() {
         c = ApplicationProvider.getApplicationContext()
+        WorkManagerTestInitHelper.initializeTestWorkManager(c)
         listOf(
             "ilac_takip",
             "dosefolk_permissions",
