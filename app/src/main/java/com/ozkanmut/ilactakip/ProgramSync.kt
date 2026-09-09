@@ -4,11 +4,6 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 
-/**
- * Keeps medication program changes in the same durable ntfy event stream as dose actions.
- * Local programs stay in Store. Remote programs are cached in OwnerScopeStore and never
- * enter this device's own alarm list.
- */
 object ProgramSync {
     private const val PREFS = "dosefolk_program_sync"
     private const val KEY_BASELINE = "baseline"
@@ -16,6 +11,9 @@ object ProgramSync {
 
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private fun stampKey(ownerId: String, id: String) = "stamp|$ownerId|$id"
+    private fun revisionKey(ownerId: String, id: String) = "order_rev|$ownerId|$id"
+    private fun actorKey(ownerId: String, id: String) = "order_actor|$ownerId|$id"
+    private fun eventKey(ownerId: String, id: String) = "order_event|$ownerId|$id"
 
     @Synchronized
     fun observeLocal(c: Context, meds: List<Medication>) {
@@ -52,7 +50,11 @@ object ProgramSync {
         saveBaseline(c, meds)
     }
 
-    /** Applies an authorized remote program event without touching the local medication list. */
+    /**
+     * Applies an authorized remote program event without touching the local medication list.
+     * Revision is the primary order. Equal concurrent revisions converge by actorTopic/eventId.
+     * Legacy revision=0 events retain timestamp ordering for backwards compatibility.
+     */
     @Synchronized
     fun applyRemote(c: Context, event: DoseEvent) {
         if (event.type !in setOf("program_added", "program_updated", "program_deleted")) return
@@ -61,11 +63,30 @@ object ProgramSync {
         val ownerId = event.ownerId.ifBlank { event.actorTopic }
         if (ownerId.isBlank() || ownerId == OwnerScopeStore.localOwnerId(c)) return
         val p = prefs(c)
-        val lastStamp = p.getLong(stampKey(ownerId, med.id), 0L)
-        if (event.timestamp in 1 until lastStamp) return
+
+        val storedRevision = p.getLong(revisionKey(ownerId, med.id), 0L)
+        val storedActor = p.getString(actorKey(ownerId, med.id), "").orEmpty()
+        val storedEvent = p.getString(eventKey(ownerId, med.id), "").orEmpty()
+        val legacyStamp = p.getLong(stampKey(ownerId, med.id), 0L)
+
+        val accept = if (event.revision > 0L || storedRevision > 0L) {
+            when {
+                event.revision != storedRevision -> event.revision > storedRevision
+                event.actorTopic != storedActor -> event.actorTopic > storedActor
+                else -> event.eventId > storedEvent
+            }
+        } else {
+            event.timestamp >= legacyStamp
+        }
+        if (!accept) return
 
         OwnerScopeStore.applyRemoteProgram(c, ownerId, event.type, med)
-        p.edit().putLong(stampKey(ownerId, med.id), event.timestamp).commit()
+        p.edit()
+            .putLong(stampKey(ownerId, med.id), event.timestamp)
+            .putLong(revisionKey(ownerId, med.id), event.revision)
+            .putString(actorKey(ownerId, med.id), event.actorTopic)
+            .putString(eventKey(ownerId, med.id), event.eventId)
+            .commit()
     }
 
     private fun localProgramEvent(c: Context, med: Medication, ownerId: String) = DoseEvent(
