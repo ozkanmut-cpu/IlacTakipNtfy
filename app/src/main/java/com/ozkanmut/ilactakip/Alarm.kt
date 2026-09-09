@@ -11,10 +11,8 @@ import android.os.Build
 import androidx.core.app.NotificationCompat
 import java.net.HttpURLConnection
 import java.net.URL
-import java.time.Instant
 import java.time.LocalDate
 import java.time.LocalTime
-import java.time.ZoneId
 import java.time.ZonedDateTime
 import java.util.UUID
 import kotlin.concurrent.thread
@@ -35,15 +33,12 @@ object AlarmScheduler {
     }
 
     private fun cancelGroup(c: Context, time: String) = cancelByKey(c, "group-$time")
-
     fun cancelSnooze(c: Context, time: String) = cancelByKey(c, "snooze-$time")
 
     private fun cancelByKey(c: Context, key: String) {
         val alarmManager = c.getSystemService(AlarmManager::class.java)
         val pendingIntent = PendingIntent.getBroadcast(
-            c,
-            key.hashCode(),
-            Intent(c, AlarmReceiver::class.java),
+            c, key.hashCode(), Intent(c, AlarmReceiver::class.java),
             PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
         )
         if (pendingIntent != null) {
@@ -124,7 +119,7 @@ class AlarmReceiver : BroadcastReceiver() {
         val stored = Store.load(c).associateBy { it.id }
         val alarmMeds = ids.mapNotNull { stored[it] }.ifEmpty { names.mapIndexed { index, label -> Medication("legacy-$index", label, "", listOf(time)) } }
         Ntfy.sendEvent(c, "alarm", time, alarmMeds, scheduledDate)
-        SmartEscalation.schedule(c, time)
+        SmartEscalation.schedule(c, time, scheduledDate)
         AlarmScheduler.scheduleAll(c, Store.load(c))
     }
 }
@@ -160,10 +155,10 @@ object Ntfy {
         when {
             type in terminalTypes -> {
                 AlarmScheduler.cancelSnooze(c, time)
-                SmartEscalation.cancel(c, time)
-                CareBatonStore.resolve(c, time)
+                SmartEscalation.cancel(c, time, scheduledDate)
+                CareBatonStore.resolve(c, time, scheduledDate)
             }
-            type == "snoozed" -> SmartEscalation.cancel(c, time)
+            type == "snoozed" -> SmartEscalation.cancel(c, time, scheduledDate)
         }
 
         val event = DoseEvent(
