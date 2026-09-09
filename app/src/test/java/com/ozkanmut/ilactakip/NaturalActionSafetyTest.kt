@@ -2,6 +2,7 @@ package com.ozkanmut.ilactakip
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import androidx.work.testing.WorkManagerTestInitHelper
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -18,13 +19,15 @@ class NaturalActionSafetyTest {
     @Before
     fun setUp() {
         c = ApplicationProvider.getApplicationContext()
+        WorkManagerTestInitHelper.initializeTestWorkManager(c)
         listOf(
             "ilac_takip",
             "dosefolk_events",
             "dosefolk_stock",
             "dosefolk_program_rules",
             "dosefolk_alarm_scheduler",
-            "dosefolk_owner_scope"
+            "dosefolk_owner_scope",
+            "dosefolk_program_sync"
         ).forEach { c.getSharedPreferences(it, Context.MODE_PRIVATE).edit().clear().commit() }
         Store.save(c, listOf(med))
     }
