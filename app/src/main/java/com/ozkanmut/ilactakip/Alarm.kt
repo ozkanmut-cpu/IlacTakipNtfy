@@ -83,12 +83,7 @@ object AlarmScheduler {
     }
 
     fun restoreActiveSnoozes(c: Context) {
-        val events = EventStore.load(c)
-        val current = Store.load(c).associateBy { it.id }
-        SnoozeRecovery.activeSnoozes(events).forEach { event ->
-            val meds = event.medications.mapNotNull { current[it.id] }.ifEmpty { event.medications }
-            if (meds.isNotEmpty()) scheduleSnoozeUntil(c, event.time, meds, event.snoozeUntil, event.scheduledDate)
-        }
+        SnoozeRecovery.reconcileToday(c)
     }
 }
 
@@ -149,7 +144,6 @@ class BootReceiver : BroadcastReceiver() {
         if (i.action == Intent.ACTION_TIMEZONE_CHANGED) TravelGuard.onTimezonePossiblyChanged(c) else TravelGuard.initialize(c)
         val timezonePending = TravelGuard.pendingNotice(c) != null
         if (RecoveryPolicy.shouldRebuildRegularAlarms(i.action, timezonePending)) AlarmScheduler.scheduleAll(c, Store.load(c))
-        // Snoozes and active escalation are absolute recovery obligations; preserve them across reboot/time changes.
         AlarmScheduler.restoreActiveSnoozes(c)
         UndoRecovery.recoverCurrent(c)
         SmartEscalation.restore(c)
