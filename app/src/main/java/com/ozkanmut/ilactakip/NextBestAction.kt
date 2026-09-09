@@ -5,7 +5,7 @@ import java.time.LocalDate
 import java.time.LocalTime
 import java.time.temporal.ChronoUnit
 
-enum class NextActionKind { REPAIR, RESOLVE_CONFLICT, HANDLE_DOSE, UPCOMING, ALL_GOOD }
+enum class NextActionKind { REPAIR, RESOLVE_CONFLICT, HANDLE_DOSE, PRESCRIPTION_DUE, UPCOMING, ALL_GOOD }
 
 data class NextBestAction(
     val kind: NextActionKind,
@@ -51,6 +51,17 @@ object NextBestActionEngine {
                 s.time,
                 s.medications,
                 s.scheduledDate
+            )
+        }
+
+        val refillDue = PrescriptionLifecycle.due(c)
+        if (refillDue.isNotEmpty()) {
+            val names = refillDue.take(3).joinToString(", ") { it.medicationName }
+            val extra = (refillDue.size - 3).coerceAtLeast(0)
+            return NextBestAction(
+                NextActionKind.PRESCRIPTION_DUE,
+                uiText("Reçete / yeniden temin zamanı", "Prescription / refill due"),
+                if (extra > 0) uiText("$names ve $extra ilaç daha", "$names and $extra more") else names
             )
         }
 
