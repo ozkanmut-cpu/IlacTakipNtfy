@@ -36,13 +36,15 @@ object SyncEngine {
                     val ntfyId=envelope.optString("id");if(ntfyId.isNotBlank())newestId=ntfyId
                     val payload=runCatching{JSONObject(envelope.optString("message"))}.getOrNull()?:return@forEach
                     if(StockSync.applyIncoming(context,payload))return@forEach
+                    if(!IncomingEventGuard.supportedDosePayload(payload))return@forEach
                     val event=parseDoseEvent(payload)?:return@forEach
-                    if(!PermissionPolicy.acceptRemote(context,event))return@forEach
+                    if(!IncomingEventGuard.shouldProcess(context,event))return@forEach
                     EventStore.append(context,event.copy(syncState="synced"));OwnerScopeStore.remember(context,event)
                     val ownerId=event.ownerId.ifBlank{event.actorTopic}
                     if(ownerId.isNotBlank()&&ownerId!=OwnerScopeStore.localOwnerId(context))event.medicationMeta.forEach{MedicationMetaStore.saveRemote(context,ownerId,it)}
                     if(ownerId.isBlank() || ownerId==OwnerScopeStore.localOwnerId(context)) StockEngine.applyEvent(context,event)
                     applyRemoteState(context,event)
+                    RemoteEventReceiptStore.markProcessed(context,event.eventId)
                 }}
                 // Reconcile only after the whole catch-up batch so later terminal events win over stale snooze/undo rows.
                 SnoozeRecovery.reconcileToday(context)
