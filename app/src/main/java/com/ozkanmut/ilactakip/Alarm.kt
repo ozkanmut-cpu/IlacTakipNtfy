@@ -97,6 +97,18 @@ object AlarmDeliveryGuard {
     }
 }
 
+object ActionDeliveryGuard {
+    fun shouldApply(c: Context, action: String, time: String, scheduledDate: String): Boolean {
+        val date = runCatching { LocalDate.parse(scheduledDate) }.getOrNull() ?: return false
+        val state = DoseStateEngine.stateForTime(c, time, date).status
+        return when (action) {
+            "snooze" -> state == DoseSessionStatus.UNKNOWN || state == DoseSessionStatus.PENDING
+            "taken", "missed" -> state == DoseSessionStatus.UNKNOWN || state == DoseSessionStatus.PENDING || state == DoseSessionStatus.SNOOZED
+            else -> false
+        }
+    }
+}
+
 class AlarmReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
         val time = i.getStringExtra("time") ?: return
@@ -125,6 +137,7 @@ class ActionReceiver : BroadcastReceiver() {
         val action = i.getStringExtra("action") ?: return
         val time = i.getStringExtra("time") ?: return
         val scheduledDate = i.getStringExtra("scheduledDate") ?: LocalDate.now().toString()
+        if (!ActionDeliveryGuard.shouldApply(c, action, time, scheduledDate)) return
         val names = i.getStringExtra("names")?.split("|#|") ?: emptyList()
         val ids = i.getStringExtra("ids")?.split("|#|") ?: emptyList()
         val stored = Store.load(c).associateBy { it.id }
