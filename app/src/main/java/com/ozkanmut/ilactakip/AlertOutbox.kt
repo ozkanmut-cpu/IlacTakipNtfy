@@ -18,7 +18,7 @@ data class PendingAlert(
 object AlertOutbox {
     private const val PREFS = "dosefolk_alert_outbox"
     private const val KEY = "alerts"
-    private const val FLUSH_BATCH = 100
+    private const val FLUSH_BATCH = 10
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     @Synchronized
@@ -41,17 +41,22 @@ object AlertOutbox {
         save(c, load(c).filterNot { it.topic == topic })
     }
 
+    internal fun batchForFlush(all: List<PendingAlert>): List<PendingAlert> = all.takeLast(FLUSH_BATCH)
+
     @Synchronized
     fun flushBlocking(c: Context): Boolean {
         val all = load(c)
         if (all.isEmpty()) return true
 
         // Lists are newest-first. Drain the oldest alerts first so long-offline
-        // caregiver notifications preserve chronology. Bound each worker pass so
-        // reconnecting after a large backlog does not monopolize one WorkManager run.
-        val batch = all.takeLast(FLUSH_BATCH)
+        // caregiver notifications preserve chronology. Keep each worker pass small:
+        // every HTTP call can consume its full timeout on a bad network.
+        val batch = batchForFlush(all)
         val deliveredIds = mutableSetOf<String>()
-        batch.forEach { alert -> if (post(alert)) deliveredIds += alert.id }
+        for (alert in batch) {
+            if (!post(alert)) break
+            deliveredIds += alert.id
+        }
         val remaining = all.filterNot { it.id in deliveredIds }
         save(c, remaining)
         return remaining.isEmpty()
