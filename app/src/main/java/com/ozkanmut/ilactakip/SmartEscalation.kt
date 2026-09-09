@@ -19,34 +19,34 @@ object SmartEscalation {
     private const val SECOND_DELAY_MIN = 25L
     private const val BATON_GRACE_MS = 5_000L
 
-    fun schedule(c: Context, time: String) {
-        cancelAlarms(c, time)
-        AttentionBudget.clear(c, time)
-        scheduleStage(c, time, 0, System.currentTimeMillis() + FIRST_DELAY_MIN * 60_000L)
-        scheduleStage(c, time, 1, System.currentTimeMillis() + SECOND_DELAY_MIN * 60_000L)
+    fun schedule(c: Context, time: String, scheduledDate: String = LocalDate.now().toString()) {
+        cancelAlarms(c, time, scheduledDate)
+        AttentionBudget.clear(c, time, scheduledDate)
+        scheduleStage(c, time, scheduledDate, 0, System.currentTimeMillis() + FIRST_DELAY_MIN * 60_000L)
+        scheduleStage(c, time, scheduledDate, 1, System.currentTimeMillis() + SECOND_DELAY_MIN * 60_000L)
     }
 
-    fun cancel(c: Context, time: String) {
-        cancelAlarms(c, time)
-        AttentionBudget.clear(c, time)
+    fun cancel(c: Context, time: String, scheduledDate: String = LocalDate.now().toString()) {
+        cancelAlarms(c, time, scheduledDate)
+        AttentionBudget.clear(c, time, scheduledDate)
     }
 
-    fun deferUntil(c: Context, time: String, expiresAt: Long) {
-        cancelAlarms(c, time)
+    fun deferUntil(c: Context, time: String, expiresAt: Long, scheduledDate: String = LocalDate.now().toString()) {
+        cancelAlarms(c, time, scheduledDate)
         val base = maxOf(System.currentTimeMillis(), expiresAt) + BATON_GRACE_MS
         val people = TemporaryCareStore.prioritizedPeople(c)
-        if (people.isNotEmpty()) scheduleStage(c, time, 0, base)
-        if (people.size > 1) scheduleStage(c, time, 1, base + 15 * 60_000L)
+        if (people.isNotEmpty()) scheduleStage(c, time, scheduledDate, 0, base)
+        if (people.size > 1) scheduleStage(c, time, scheduledDate, 1, base + 15 * 60_000L)
     }
 
-    private fun cancelAlarms(c: Context, time: String) {
+    private fun cancelAlarms(c: Context, time: String, scheduledDate: String) {
         val alarmManager = c.getSystemService(AlarmManager::class.java)
-        for (stage in 0..1) alarmManager.cancel(pendingIntent(c, time, stage))
+        for (stage in 0..1) alarmManager.cancel(pendingIntent(c, time, scheduledDate, stage))
     }
 
-    private fun scheduleStage(c: Context, time: String, stage: Int, trigger: Long) {
+    private fun scheduleStage(c: Context, time: String, scheduledDate: String, stage: Int, trigger: Long) {
         val alarmManager = c.getSystemService(AlarmManager::class.java)
-        val pi = pendingIntent(c, time, stage)
+        val pi = pendingIntent(c, time, scheduledDate, stage)
         try {
             alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pi)
         } catch (_: SecurityException) {
@@ -54,13 +54,14 @@ object SmartEscalation {
         }
     }
 
-    private fun pendingIntent(c: Context, time: String, stage: Int): PendingIntent {
+    private fun pendingIntent(c: Context, time: String, scheduledDate: String, stage: Int): PendingIntent {
         val intent = Intent(c, EscalationReceiver::class.java)
             .putExtra("time", time)
+            .putExtra("scheduledDate", scheduledDate)
             .putExtra("stage", stage)
         return PendingIntent.getBroadcast(
             c,
-            ("dosefolk-escalation-$time-$stage").hashCode(),
+            ("dosefolk-escalation-$scheduledDate-$time-$stage").hashCode(),
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
@@ -70,26 +71,28 @@ object SmartEscalation {
 class EscalationReceiver : BroadcastReceiver() {
     override fun onReceive(c: Context, i: Intent) {
         val time = i.getStringExtra("time") ?: return
+        val scheduledDate = i.getStringExtra("scheduledDate") ?: LocalDate.now().toString()
         val stage = i.getIntExtra("stage", 0)
         val pendingResult = goAsync()
         Thread {
             try {
                 SyncEngine.pullBlocking(c.applicationContext)
-                val state = DoseStateEngine.stateForTime(c, time)
+                val date = runCatching { LocalDate.parse(scheduledDate) }.getOrDefault(LocalDate.now())
+                val state = DoseStateEngine.stateForTime(c, time, date)
                 val unresolved = state.status == DoseSessionStatus.PENDING ||
                     state.status == DoseSessionStatus.SNOOZED ||
                     state.status == DoseSessionStatus.CONFLICT
                 if (!unresolved) return@Thread
 
-                val baton = CareBatonStore.active(c, time)
+                val baton = CareBatonStore.active(c, time, scheduledDate)
                 if (baton != null) {
-                    SmartEscalation.deferUntil(c, time, baton.expiresAt)
+                    SmartEscalation.deferUntil(c, time, baton.expiresAt, scheduledDate)
                     return@Thread
                 }
 
                 val people = TemporaryCareStore.prioritizedPeople(c)
                 val target = people.getOrNull(stage) ?: return@Thread
-                if (!AttentionBudget.allow(c, time, target.topic, stage)) return@Thread
+                if (!AttentionBudget.allow(c, time, target.topic, stage, scheduledDate)) return@Thread
 
                 val medNames = state.medications.joinToString(", ") { it.name }
                 val title = if (I18n.language() == "tr") "Dosefolk • ilgilenme gerekiyor" else "Dosefolk • attention needed"
@@ -99,7 +102,7 @@ class EscalationReceiver : BroadcastReceiver() {
                     if (medNames.isBlank()) "The $time medication session is still unresolved." else "$time • $medNames is still unresolved."
                 }
                 Ntfy.sendTo(target.topic, title, body)
-                AttentionBudget.mark(c, time, target.topic, stage)
+                AttentionBudget.mark(c, time, target.topic, stage, scheduledDate)
             } finally {
                 pendingResult.finish()
             }
@@ -107,21 +110,21 @@ class EscalationReceiver : BroadcastReceiver() {
     }
 }
 
-/** Prevent duplicate caregiver notifications for the same dose/stage/day. */
+/** Prevent duplicate caregiver notifications for the same dose/stage/date. */
 object AttentionBudget {
     private const val PREFS = "dosefolk_attention_budget"
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-    private fun key(time: String, topic: String, stage: Int) = "${LocalDate.now()}|$time|$topic|$stage"
+    private fun key(time: String, topic: String, stage: Int, scheduledDate: String) = "$scheduledDate|$time|$topic|$stage"
 
-    fun allow(c: Context, time: String, topic: String, stage: Int): Boolean =
-        !prefs(c).getBoolean(key(time, topic, stage), false)
+    fun allow(c: Context, time: String, topic: String, stage: Int, scheduledDate: String = LocalDate.now().toString()): Boolean =
+        !prefs(c).getBoolean(key(time, topic, stage, scheduledDate), false)
 
-    fun mark(c: Context, time: String, topic: String, stage: Int) {
-        prefs(c).edit().putBoolean(key(time, topic, stage), true).apply()
+    fun mark(c: Context, time: String, topic: String, stage: Int, scheduledDate: String = LocalDate.now().toString()) {
+        prefs(c).edit().putBoolean(key(time, topic, stage, scheduledDate), true).apply()
     }
 
-    fun clear(c: Context, time: String) {
-        val prefix = "${LocalDate.now()}|$time|"
+    fun clear(c: Context, time: String, scheduledDate: String = LocalDate.now().toString()) {
+        val prefix = "$scheduledDate|$time|"
         val editor = prefs(c).edit()
         prefs(c).all.keys.filter { it.startsWith(prefix) }.forEach { editor.remove(it) }
         editor.apply()
