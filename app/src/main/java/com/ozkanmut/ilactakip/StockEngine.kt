@@ -27,7 +27,12 @@ object StockEngine {
     @Synchronized fun clearRemoteOwner(c:Context,ownerId:String){saveRemote(c,loadRemote(c).filterNot{it.first==ownerId})}
 
     private fun consumptionUnits(c:Context,id:String):Int{val m=MedicationMetaStore.get(c,id)?:return 1;val countable=m.form in setOf(MedicationForm.TABLET,MedicationForm.INSULIN,MedicationForm.NEBULE,MedicationForm.INHALER,MedicationForm.DROP,MedicationForm.PATCH);return if(countable)(m.quantity?:1.0).roundToInt().coerceAtLeast(1) else 1}
-    @Synchronized fun applyEvent(c:Context,event:DoseEvent){if(event.type !in setOf("taken","prn_taken")||alreadyProcessed(c,event.eventId))return;val current=load(c).associateBy{it.medicationId}.toMutableMap();val changed=mutableListOf<MedicationStock>();event.medications.distinctBy{it.id}.forEach{med->val s=current[med.id]?:return@forEach;val u=s.copy(remainingDoses=(s.remainingDoses-consumptionUnits(c,med.id)).coerceAtLeast(0),updatedAt=event.timestamp);current[med.id]=u;changed+=u};if(changed.isNotEmpty()){save(c,current.values.toList());changed.forEach{LowStockNotifier.evaluate(c,it);StockSync.publishToCircle(c,it)}};markProcessed(c,event.eventId)}
+    @Synchronized fun applyEvent(c:Context,event:DoseEvent){
+        if(event.type !in setOf("taken","prn_taken","undo_taken")||alreadyProcessed(c,event.eventId))return
+        val current=load(c).associateBy{it.medicationId}.toMutableMap();val changed=mutableListOf<MedicationStock>();val restore=event.type=="undo_taken"
+        event.medications.distinctBy{it.id}.forEach{med->val s=current[med.id]?:return@forEach;val units=consumptionUnits(c,med.id);val remaining=if(restore)s.remainingDoses+units else (s.remainingDoses-units).coerceAtLeast(0);val u=s.copy(remainingDoses=remaining,updatedAt=event.timestamp);current[med.id]=u;changed+=u}
+        if(changed.isNotEmpty()){save(c,current.values.toList());changed.forEach{LowStockNotifier.evaluate(c,it);StockSync.publishToCircle(c,it)}};markProcessed(c,event.eventId)
+    }
     private fun alreadyProcessed(c:Context,id:String)=processed(c).contains(id)
     private fun processed(c:Context):Set<String>{val raw=prefs(c).getString(KEY_PROCESSED,"[]")?:"[]";return runCatching{val a=JSONArray(raw);(0 until a.length()).map{a.optString(it)}.filter{it.isNotBlank()}.toSet()}.getOrDefault(emptySet())}
     private fun markProcessed(c:Context,id:String){prefs(c).edit().putString(KEY_PROCESSED,JSONArray((listOf(id)+processed(c)).distinct().take(2000)).toString()).apply()}
