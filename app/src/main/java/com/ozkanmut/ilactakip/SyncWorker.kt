@@ -16,8 +16,9 @@ import java.util.concurrent.TimeUnit
 class DosefolkSyncWorker(appContext: Context, params: WorkerParameters) : Worker(appContext, params) {
     override fun doWork(): Result {
         val outboundOk = Ntfy.flushPendingBlocking(applicationContext)
+        val alertsOk = AlertOutbox.flushBlocking(applicationContext)
         val inboundOk = SyncEngine.pullBlocking(applicationContext)
-        return if (outboundOk && inboundOk) Result.success() else Result.retry()
+        return if (outboundOk && alertsOk && inboundOk) Result.success() else Result.retry()
     }
 }
 
@@ -43,8 +44,6 @@ object DosefolkSyncScheduler {
             .setConstraints(network())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.SECONDS)
             .build()
-        // Pending events live in EventStore, so cancelling a currently running worker
-        // provides no benefit and can interrupt an in-flight delivery. One unique kick is enough.
         WorkManager.getInstance(c.applicationContext)
             .enqueueUniqueWork(KICK, ExistingWorkPolicy.KEEP, request)
     }
