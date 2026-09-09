@@ -39,9 +39,6 @@ object ProgramRuleStore {
             val medName = Store.load(c).firstOrNull { it.id == normalized.medicationId }?.name ?: "Program"
             val carrier = Medication(normalized.medicationId, medName, encode(normalized).toString(), emptyList())
             if (Ntfy.sendEvent(c, "program_rule_updated", "program", listOf(carrier))) {
-                // save() and applyRemote() share the same object lock, so the local
-                // event can be captured here before any remote rule is allowed to
-                // race in. Persist the exact event ordering metadata that was sent.
                 val emitted = latestLocalRuleEvent(c, normalized.medicationId)
                 if (emitted != null) persistOrdering(c, normalized.medicationId, emitted)
             }
@@ -63,10 +60,6 @@ object ProgramRuleStore {
 
         val p = prefs(c)
         val id = rule.medicationId
-
-        // Crash recovery: Ntfy.sendEvent durably appends the local rule event before
-        // save() writes ordering metadata. If the process dies in that tiny window,
-        // recover the metadata from EventStore before judging any remote edit.
         reconcileLocalOrdering(c, id)
 
         val storedRevision = p.getLong(REV_PREFIX + id, 0L)
@@ -97,7 +90,7 @@ object ProgramRuleStore {
                     event.actorTopic == localTopic &&
                     event.medications.firstOrNull()?.id == medicationId
             }
-            .maxWithOrNull(DoseEventOrder.comparator)
+            .maxWithOrNull(DoseEventOrder.global)
     }
 
     private fun reconcileLocalOrdering(c: Context, medicationId: String) {
