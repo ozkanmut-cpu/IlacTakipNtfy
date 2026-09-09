@@ -20,14 +20,14 @@ object SnoozeRecovery {
             val meds = latest.medications.ifEmpty { state.medications }
             if (meds.isEmpty()) return@forEach
 
-            AlarmScheduler.scheduleSnoozeUntil(
-                c = c,
-                time = state.time,
-                meds = meds,
-                triggerAtMillis = recoveryTrigger(latest.snoozeUntil, now),
-                scheduledDate = state.scheduledDate
-            )
-            scheduled++
+            if (AlarmScheduler.scheduleSnoozeIfActive(
+                    c = c,
+                    time = state.time,
+                    meds = meds,
+                    triggerAtMillis = recoveryTrigger(latest.snoozeUntil, now),
+                    scheduledDate = state.scheduledDate
+                )
+            ) scheduled++
         }
         return scheduled
     }
