@@ -8,7 +8,7 @@ import kotlin.math.roundToInt
 data class MedicationStock(val medicationId:String,val medicationName:String,val remainingDoses:Int,val packSize:Int,val lowThreshold:Int=5,val updatedAt:Long=System.currentTimeMillis())
 
 object StockEngine {
-    private const val PREFS="dosefolk_stock"; private const val KEY_STOCK="stock"; private const val KEY_PROCESSED="processed_events"; private const val KEY_REMOTE="remote_stock"
+    private const val PREFS="dosefolk_stock"; private const val KEY_STOCK="stock"; private const val KEY_PROCESSED="processed_events"; private const val KEY_CONSUMED="consumed_sessions"; private const val KEY_REMOTE="remote_stock"
     private fun prefs(c:Context)=c.getSharedPreferences(PREFS,Context.MODE_PRIVATE)
     private fun remoteRevisionKey(ownerId:String,medicationId:String)="remote_rev|$ownerId|$medicationId"
     private fun remoteActorKey(ownerId:String,medicationId:String)="remote_actor|$ownerId|$medicationId"
@@ -80,6 +80,10 @@ object StockEngine {
     }
 
     private fun consumptionUnits(c:Context,id:String):Int{val m=MedicationMetaStore.get(c,id)?:return 1;val countable=m.form in setOf(MedicationForm.TABLET,MedicationForm.INSULIN,MedicationForm.NEBULE,MedicationForm.INHALER,MedicationForm.DROP,MedicationForm.PATCH);return if(countable)(m.quantity?:1.0).roundToInt().coerceAtLeast(1) else 1}
+    private fun consumptionKey(event:DoseEvent,medicationId:String):String =
+        if(event.type=="prn_taken") "prn|${event.eventId}|$medicationId"
+        else "dose|${event.scheduledDate}|${event.time}|$medicationId"
+
     @Synchronized fun applyEvent(c:Context,event:DoseEvent){
         if(event.type !in setOf("taken","prn_taken","undo_taken")||alreadyProcessed(c,event.eventId))return
         val ownerId=event.ownerId.ifBlank{event.actorTopic}
@@ -87,9 +91,18 @@ object StockEngine {
 
         val current=load(c).associateBy{it.medicationId}.toMutableMap()
         val changed=mutableListOf<MedicationStock>()
+        val consumed=consumed(c).toMutableSet()
         val restore=event.type=="undo_taken"
         event.medications.distinctBy{it.id}.forEach{med->
             val s=current[med.id]?:return@forEach
+            val key=consumptionKey(event,med.id)
+            if(restore){
+                if(key !in consumed)return@forEach
+                consumed.remove(key)
+            }else{
+                if(key in consumed)return@forEach
+                consumed.add(key)
+            }
             val units=consumptionUnits(c,med.id)
             val remaining=if(restore)s.remainingDoses+units else (s.remainingDoses-units).coerceAtLeast(0)
             val u=s.copy(remainingDoses=remaining,updatedAt=event.timestamp)
@@ -98,7 +111,9 @@ object StockEngine {
         }
 
         val processedIds=(listOf(event.eventId)+processed(c)).distinct().take(2000)
-        val editor=prefs(c).edit().putString(KEY_PROCESSED,JSONArray(processedIds).toString())
+        val editor=prefs(c).edit()
+            .putString(KEY_PROCESSED,JSONArray(processedIds).toString())
+            .putString(KEY_CONSUMED,JSONArray(consumed.toList().take(4000)).toString())
         if(changed.isNotEmpty()) editor.putString(KEY_STOCK,stockJson(current.values.toList()).toString())
         if(!editor.commit()) return
 
@@ -106,6 +121,7 @@ object StockEngine {
     }
     private fun alreadyProcessed(c:Context,id:String)=processed(c).contains(id)
     private fun processed(c:Context):Set<String>{val raw=prefs(c).getString(KEY_PROCESSED,"[]")?:"[]";return runCatching{val a=JSONArray(raw);(0 until a.length()).map{a.optString(it)}.filter{it.isNotBlank()}.toSet()}.getOrDefault(emptySet())}
+    private fun consumed(c:Context):Set<String>{val raw=prefs(c).getString(KEY_CONSUMED,"[]")?:"[]";return runCatching{val a=JSONArray(raw);(0 until a.length()).map{a.optString(it)}.filter{it.isNotBlank()}.toSet()}.getOrDefault(emptySet())}
     private fun stockJson(v:List<MedicationStock>):JSONArray{val a=JSONArray();v.forEach{a.put(toJson(it))};return a}
     private fun load(c:Context):List<MedicationStock>{val raw=prefs(c).getString(KEY_STOCK,"[]")?:"[]";return runCatching{val a=JSONArray(raw);(0 until a.length()).mapNotNull{fromJson(a.optJSONObject(it))}}.getOrDefault(emptyList())}
     private fun save(c:Context,v:List<MedicationStock>){prefs(c).edit().putString(KEY_STOCK,stockJson(v).toString()).apply()}
