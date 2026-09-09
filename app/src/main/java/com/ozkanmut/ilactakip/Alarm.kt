@@ -144,8 +144,10 @@ object Ntfy {
             type in terminalTypes -> { AlarmScheduler.cancelSnooze(c, time); SmartEscalation.cancel(c, time, scheduledDate); CareBatonStore.resolve(c, time, scheduledDate) }
             type == "snoozed" -> SmartEscalation.cancel(c, time, scheduledDate)
         }
-        val event = DoseEvent(UUID.randomUUID().toString(), type, time, Store.myName(c), Store.topic(c),System.currentTimeMillis(), meds, "pending", EventStore.nextRevision(c), scheduledDate, snoozeUntil)
+        val ownerId = OwnerScopeStore.ownerFor(c, meds)
+        val event = DoseEvent(UUID.randomUUID().toString(), type, time, Store.myName(c), Store.topic(c),System.currentTimeMillis(), meds, "pending", EventStore.nextRevision(c), scheduledDate, snoozeUntil, ownerId)
         EventStore.append(c, event)
+        OwnerScopeStore.remember(c, event)
         StockEngine.applyEvent(c, event)
         thread { deliverEventBlocking(c.applicationContext, event) }
         DosefolkSyncScheduler.kick(c)
