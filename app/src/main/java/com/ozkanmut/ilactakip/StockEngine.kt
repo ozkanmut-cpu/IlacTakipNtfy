@@ -41,15 +41,33 @@ object StockEngine {
         if(event.type !in setOf("taken","prn_taken","undo_taken")||alreadyProcessed(c,event.eventId))return
         val ownerId=event.ownerId.ifBlank{event.actorTopic}
         if(ownerId.isNotBlank() && ownerId!=OwnerScopeStore.localOwnerId(c)) return
-        val current=load(c).associateBy{it.medicationId}.toMutableMap();val changed=mutableListOf<MedicationStock>();val restore=event.type=="undo_taken"
-        event.medications.distinctBy{it.id}.forEach{med->val s=current[med.id]?:return@forEach;val units=consumptionUnits(c,med.id);val remaining=if(restore)s.remainingDoses+units else (s.remainingDoses-units).coerceAtLeast(0);val u=s.copy(remainingDoses=remaining,updatedAt=event.timestamp);current[med.id]=u;changed+=u}
-        if(changed.isNotEmpty()){save(c,current.values.toList());changed.forEach{LowStockNotifier.evaluate(c,it);StockSync.publishToCircle(c,it)}};markProcessed(c,event.eventId)
+
+        val current=load(c).associateBy{it.medicationId}.toMutableMap()
+        val changed=mutableListOf<MedicationStock>()
+        val restore=event.type=="undo_taken"
+        event.medications.distinctBy{it.id}.forEach{med->
+            val s=current[med.id]?:return@forEach
+            val units=consumptionUnits(c,med.id)
+            val remaining=if(restore)s.remainingDoses+units else (s.remainingDoses-units).coerceAtLeast(0)
+            val u=s.copy(remainingDoses=remaining,updatedAt=event.timestamp)
+            current[med.id]=u
+            changed+=u
+        }
+
+        // Stock mutation and its idempotency receipt must become durable together.
+        // Otherwise a process death between the two writes could decrement stock twice on replay.
+        val processedIds=(listOf(event.eventId)+processed(c)).distinct().take(2000)
+        val editor=prefs(c).edit().putString(KEY_PROCESSED,JSONArray(processedIds).toString())
+        if(changed.isNotEmpty()) editor.putString(KEY_STOCK,stockJson(current.values.toList()).toString())
+        if(!editor.commit()) return
+
+        changed.forEach{LowStockNotifier.evaluate(c,it);StockSync.publishToCircle(c,it)}
     }
     private fun alreadyProcessed(c:Context,id:String)=processed(c).contains(id)
     private fun processed(c:Context):Set<String>{val raw=prefs(c).getString(KEY_PROCESSED,"[]")?:"[]";return runCatching{val a=JSONArray(raw);(0 until a.length()).map{a.optString(it)}.filter{it.isNotBlank()}.toSet()}.getOrDefault(emptySet())}
-    private fun markProcessed(c:Context,id:String){prefs(c).edit().putString(KEY_PROCESSED,JSONArray((listOf(id)+processed(c)).distinct().take(2000)).toString()).apply()}
+    private fun stockJson(v:List<MedicationStock>):JSONArray{val a=JSONArray();v.forEach{a.put(toJson(it))};return a}
     private fun load(c:Context):List<MedicationStock>{val raw=prefs(c).getString(KEY_STOCK,"[]")?:"[]";return runCatching{val a=JSONArray(raw);(0 until a.length()).mapNotNull{fromJson(a.optJSONObject(it))}}.getOrDefault(emptyList())}
-    private fun save(c:Context,v:List<MedicationStock>){val a=JSONArray();v.forEach{a.put(toJson(it))};prefs(c).edit().putString(KEY_STOCK,a.toString()).apply()}
+    private fun save(c:Context,v:List<MedicationStock>){prefs(c).edit().putString(KEY_STOCK,stockJson(v).toString()).apply()}
     private fun loadRemote(c:Context):List<Pair<String,MedicationStock>>{val raw=prefs(c).getString(KEY_REMOTE,"[]")?:"[]";return runCatching{val a=JSONArray(raw);(0 until a.length()).mapNotNull{i->val o=a.optJSONObject(i)?:return@mapNotNull null;val owner=o.optString("ownerId");val s=fromJson(o.optJSONObject("stock"));if(owner.isBlank()||s==null)null else owner to s}}.getOrDefault(emptyList())}
     private fun saveRemote(c:Context,v:List<Pair<String,MedicationStock>>){val a=JSONArray();v.forEach{(owner,s)->a.put(JSONObject().put("ownerId",owner).put("stock",toJson(s)))};prefs(c).edit().putString(KEY_REMOTE,a.toString()).commit()}
 }
