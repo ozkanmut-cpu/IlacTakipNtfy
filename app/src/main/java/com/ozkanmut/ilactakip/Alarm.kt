@@ -145,7 +145,11 @@ object Ntfy {
             type == "snoozed" -> SmartEscalation.cancel(c, time, scheduledDate)
         }
         val ownerId = OwnerScopeStore.ownerFor(c, meds)
-        val event = DoseEvent(UUID.randomUUID().toString(), type, time, Store.myName(c), Store.topic(c),System.currentTimeMillis(), meds, "pending", EventStore.nextRevision(c), scheduledDate, snoozeUntil, ownerId)
+        val meta = meds.mapNotNull { med ->
+            if (ownerId == OwnerScopeStore.localOwnerId(c)) MedicationMetaStore.get(c, med.id)
+            else MedicationMetaStore.remote(c, ownerId, med.id)
+        }
+        val event = DoseEvent(UUID.randomUUID().toString(), type, time, Store.myName(c), Store.topic(c),System.currentTimeMillis(), meds, "pending", EventStore.nextRevision(c), scheduledDate, snoozeUntil, ownerId, meta)
         EventStore.append(c, event)
         OwnerScopeStore.remember(c, event)
         StockEngine.applyEvent(c, event)
