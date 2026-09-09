@@ -97,6 +97,18 @@ object DosefolkCheck {
             ) { c -> DosefolkSyncScheduler.kick(c) }
         }
 
+        val pendingAlerts = AlertOutbox.pendingCount(context)
+        if (pendingAlerts > 0) {
+            result += DosefolkIssue(
+                id = "pending_alerts",
+                title = tr("$pendingAlerts takipçi uyarısı gönderilmeyi bekliyor", "$pendingAlerts caregiver alert(s) are waiting to send"),
+                detail = tr(
+                    "Uyarılar telefonda kalıcı olarak saklandı. Ağ bağlantısı geldiğinde otomatik yeniden gönderilecek.",
+                    "The alerts are durably stored on this phone and will retry automatically when network access returns."
+                )
+            ) { c -> DosefolkSyncScheduler.kick(c) }
+        }
+
         if (Store.people(context).isNotEmpty()) {
             val last = SyncEngine.lastSuccess(context)
             if (last == 0L || System.currentTimeMillis() - last > SYNC_STALE_MS) {
