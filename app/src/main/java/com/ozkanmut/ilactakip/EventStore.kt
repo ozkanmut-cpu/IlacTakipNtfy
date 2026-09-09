@@ -34,7 +34,9 @@ object EventStore {
     @Synchronized
     fun nextRevision(c: Context): Long {
         val p = prefs(c)
-        val next = p.getLong(KEY_REVISION, 0L) + 1L
+        val current = p.getLong(KEY_REVISION, 0L)
+        check(current < Long.MAX_VALUE) { "Lamport revision counter exhausted" }
+        val next = current + 1L
         p.edit().putLong(KEY_REVISION, next).commit()
         return next
     }
