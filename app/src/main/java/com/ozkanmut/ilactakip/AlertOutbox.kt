@@ -7,6 +7,7 @@ import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.net.URL
 import java.time.LocalDate
+import java.time.LocalTime
 import java.util.UUID
 
 data class PendingAlert(
@@ -97,6 +98,8 @@ object AlertOutbox {
         val scheduledDate = parts[1]
         val time = parts[2]
         if (scheduledDate.isBlank() || time.isBlank()) return null
+        if (runCatching { LocalDate.parse(scheduledDate) }.isFailure) return null
+        if (runCatching { LocalTime.parse(time) }.isFailure) return null
         return EscalationSessionKey(scheduledDate, time)
     }
 
