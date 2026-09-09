@@ -130,6 +130,7 @@ class BootReceiver : BroadcastReceiver() {
         if (i.action == Intent.ACTION_TIMEZONE_CHANGED) TravelGuard.onTimezonePossiblyChanged(c) else TravelGuard.initialize(c)
         AlarmScheduler.scheduleAll(c, Store.load(c))
         AlarmScheduler.restoreActiveSnoozes(c)
+        UndoRecovery.recoverCurrent(c)
         DosefolkSyncScheduler.ensure(c)
         DosefolkSyncScheduler.kick(c)
     }
@@ -153,6 +154,7 @@ object Ntfy {
         EventStore.append(c, event)
         OwnerScopeStore.remember(c, event)
         StockEngine.applyEvent(c, event)
+        UndoRecovery.recoverEvent(c, event)
         thread { deliverEventBlocking(c.applicationContext, event) }
         DosefolkSyncScheduler.kick(c)
     }
