@@ -35,6 +35,34 @@ class OfflineReliabilityTest {
         ).forEach { c.getSharedPreferences(it, Context.MODE_PRIVATE).edit().clear().commit() }
     }
 
+    private fun doseEvent(
+        id: String,
+        type: String = "alarm",
+        date: String = LocalDate.now().minusDays(1).toString(),
+        syncState: String = "synced",
+        actorTopic: String = "device-a",
+        revision: Long = 1L
+    ) = DoseEvent(
+        eventId = id,
+        type = type,
+        time = "08:00",
+        actor = actorTopic,
+        actorTopic = actorTopic,
+        timestamp = System.currentTimeMillis(),
+        medications = listOf(med),
+        syncState = syncState,
+        revision = revision,
+        scheduledDate = date,
+        ownerId = Store.topic(c)
+    )
+
+    private fun seedEvents(events: List<DoseEvent>) {
+        val array = JSONArray()
+        events.forEach { array.put(EventStore.payload(it)) }
+        c.getSharedPreferences("dosefolk_events", Context.MODE_PRIVATE)
+            .edit().putString("events", array.toString()).commit()
+    }
+
     @Test
     fun partialDeliveryLedger_retriesOnlyMissingTopics() {
         val eventId = "event-1"
@@ -43,7 +71,6 @@ class OfflineReliabilityTest {
         assertTrue(DeliveryLedger.delivered(c, eventId, "topic-a"))
         assertFalse(DeliveryLedger.delivered(c, eventId, "topic-b"))
 
-        // Marking the same pair again must stay idempotent.
         DeliveryLedger.markDelivered(c, eventId, "topic-a")
         assertTrue(DeliveryLedger.delivered(c, eventId, "topic-a"))
         assertFalse(DeliveryLedger.delivered(c, eventId, "topic-b"))
@@ -62,7 +89,6 @@ class OfflineReliabilityTest {
         AlertOutbox.dropTopic(c, "care-a")
         assertEquals(1, AlertOutbox.pendingCount(c))
 
-        // Re-opening the store must still see the durable pending row.
         assertEquals(1, AlertOutbox.pendingCount(c.applicationContext))
         AlertOutbox.dropTopic(c, "care-b")
         assertEquals(0, AlertOutbox.pendingCount(c))
@@ -75,7 +101,6 @@ class OfflineReliabilityTest {
         AttentionBudget.mark(c, "08:00", "care-a", 0, date)
         assertFalse(AttentionBudget.allow(c, "08:00", "care-a", 0, date))
 
-        // Different stage and caregiver are independent.
         assertTrue(AttentionBudget.allow(c, "08:00", "care-a", 1, date))
         assertTrue(AttentionBudget.allow(c, "08:00", "care-b", 0, date))
 
@@ -112,5 +137,49 @@ class OfflineReliabilityTest {
             .getStringSet("scheduled_times", emptySet())
             .orEmpty()
         assertTrue("08:00" in scheduled)
+    }
+
+    @Test
+    fun oldPendingEvent_survivesMoreThanThousandSyncedHistoryRows() {
+        val pending = doseEvent("pending-old", type = "taken", syncState = "pending")
+        val history = (0 until 1000).map { doseEvent("history-$it") }
+        seedEvents(listOf(pending) + history)
+
+        EventStore.append(c, doseEvent("new-history"))
+
+        assertTrue(EventStore.pending(c).any { it.eventId == "pending-old" })
+        assertTrue(EventStore.contains(c, "pending-old"))
+        assertTrue(EventStore.load(c).size <= 1000)
+    }
+
+    @Test
+    fun todaysConflictState_survivesLargeHistoricalCatchUpBatch() {
+        Store.save(c, listOf(med))
+        val today = LocalDate.now().toString()
+        val taken = doseEvent("today-taken", "taken", today, actorTopic = "phone-a", revision = 10L)
+        val missed = doseEvent("today-missed", "missed", today, actorTopic = "phone-b", revision = 11L)
+        val oldHistory = (0 until 1000).map { doseEvent("old-$it") }
+        seedEvents(listOf(taken, missed) + oldHistory)
+
+        EventStore.append(c, doseEvent("new-old-history"))
+
+        assertTrue(EventStore.contains(c, "today-taken"))
+        assertTrue(EventStore.contains(c, "today-missed"))
+        assertEquals(DoseSessionStatus.CONFLICT, DoseStateEngine.stateForTime(c, "08:00").status)
+    }
+
+    @Test
+    fun protectedPendingRow_becomesCompactableAfterSuccessfulSync() {
+        val pending = doseEvent("pending-to-sync", type = "taken", syncState = "pending")
+        val history = (0 until 1000).map { doseEvent("history-sync-$it") }
+        seedEvents(listOf(pending) + history)
+
+        EventStore.append(c, doseEvent("trigger-compaction"))
+        assertTrue(EventStore.contains(c, "pending-to-sync"))
+
+        EventStore.markSynced(c, "pending-to-sync")
+
+        assertTrue(EventStore.load(c).size <= 1000)
+        assertFalse(EventStore.pending(c).any { it.eventId == "pending-to-sync" })
     }
 }
