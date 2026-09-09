@@ -191,6 +191,42 @@ class OfflineReliabilityTest {
     }
 
     @Test
+    fun remoteStockSnapshot_replayIsIdempotent() {
+        val owner = "peer-stock"
+        val snapshot = MedicationStock(med.id, med.name, 7, 30, 5, updatedAt = 500L)
+
+        StockEngine.applyRemoteSnapshot(c, owner, snapshot, revision = 10L, actorTopic = owner, eventId = "stock-10")
+        StockEngine.applyRemoteSnapshot(c, owner, snapshot, revision = 10L, actorTopic = owner, eventId = "stock-10")
+
+        assertEquals(7, StockEngine.remoteForMedication(c, owner, med.id)?.remainingDoses)
+    }
+
+    @Test
+    fun remoteStockSnapshot_lowerRevisionCannotWinWithFutureClock() {
+        val owner = "peer-stock"
+        val newer = MedicationStock(med.id, med.name, 6, 30, 5, updatedAt = 100L)
+        val staleFutureClock = MedicationStock(med.id, med.name, 9, 30, 5, updatedAt = 9_999_999L)
+
+        StockEngine.applyRemoteSnapshot(c, owner, newer, revision = 20L, actorTopic = owner, eventId = "newer")
+        StockEngine.applyRemoteSnapshot(c, owner, staleFutureClock, revision = 19L, actorTopic = owner, eventId = "stale")
+
+        assertEquals(6, StockEngine.remoteForMedication(c, owner, med.id)?.remainingDoses)
+    }
+
+    @Test
+    fun remoteStockOrdering_clearsOnRevokeSoRepairingCanStartFresh() {
+        val owner = "peer-stock"
+        val old = MedicationStock(med.id, med.name, 4, 30, 5, updatedAt = 500L)
+        val fresh = MedicationStock(med.id, med.name, 11, 30, 5, updatedAt = 1L)
+
+        StockEngine.applyRemoteSnapshot(c, owner, old, revision = 50L, actorTopic = owner, eventId = "old")
+        StockEngine.clearRemoteOwner(c, owner)
+        StockEngine.applyRemoteSnapshot(c, owner, fresh, revision = 1L, actorTopic = owner, eventId = "fresh")
+
+        assertEquals(11, StockEngine.remoteForMedication(c, owner, med.id)?.remainingDoses)
+    }
+
+    @Test
     fun bootReceiver_rebuildsAlarmPlanAfterSchedulerStateLoss() {
         Store.save(c, listOf(med))
         c.getSharedPreferences("dosefolk_alarm_scheduler", Context.MODE_PRIVATE).edit().clear().commit()
