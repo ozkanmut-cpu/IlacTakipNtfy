@@ -32,7 +32,7 @@ object EventStore {
     fun nextRevision(c: Context): Long {
         val p = prefs(c)
         val next = p.getLong(KEY_REVISION, 0L) + 1L
-        p.edit().putLong(KEY_REVISION, next).apply()
+        p.edit().putLong(KEY_REVISION, next).commit()
         return next
     }
 
@@ -61,7 +61,7 @@ object EventStore {
     private fun save(c: Context, events: List<DoseEvent>) {
         val array = JSONArray()
         events.forEach { array.put(toJson(it)) }
-        prefs(c).edit().putString(KEY_EVENTS, array.toString()).apply()
+        prefs(c).edit().putString(KEY_EVENTS, array.toString()).commit()
     }
 
     fun payload(event: DoseEvent): JSONObject = JSONObject()
