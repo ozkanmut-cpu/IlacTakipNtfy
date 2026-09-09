@@ -3,6 +3,7 @@ package com.ozkanmut.ilactakip
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
+import java.time.LocalDate
 import kotlin.math.roundToInt
 
 data class MedicationStock(val medicationId:String,val medicationName:String,val remainingDoses:Int,val packSize:Int,val lowThreshold:Int=5,val updatedAt:Long=System.currentTimeMillis())
@@ -72,6 +73,15 @@ object StockEngine {
 
     private fun consumptionUnits(c:Context,id:String):Int{val m=MedicationMetaStore.get(c,id)?:return 1;val countable=m.form in setOf(MedicationForm.TABLET,MedicationForm.INSULIN,MedicationForm.NEBULE,MedicationForm.INHALER,MedicationForm.DROP,MedicationForm.PATCH);return if(countable)(m.quantity?:1.0).roundToInt().coerceAtLeast(1) else 1}
     private fun consumptionKey(event:DoseEvent,medicationId:String):String = if(event.type=="prn_taken") "prn|${event.eventId}|$medicationId" else "dose|${event.scheduledDate}|${event.time}|$medicationId"
+    private fun compactLedger(values:Set<String>,limit:Int=4000):List<String>{
+        val ordered=values.toList()
+        val todayPrefix="dose|${LocalDate.now()}|"
+        val protected=ordered.filter{it.startsWith(todayPrefix)}
+        val protectedSet=protected.toSet()
+        val budget=(limit-protected.size).coerceAtLeast(0)
+        val recent=ordered.asReversed().asSequence().filterNot{it in protectedSet}.take(budget).toList().asReversed()
+        return (recent+protected).distinct()
+    }
 
     @Synchronized fun applyEvent(c:Context,event:DoseEvent){
         val stockTypes=setOf("taken","prn_taken","undo_taken","conflict_resolved_taken","conflict_resolved_missed")
@@ -95,7 +105,7 @@ object StockEngine {
             val u=s.copy(remainingDoses=remaining,updatedAt=event.timestamp); current[med.id]=u; changed+=u
         }
         val processedIds=(listOf(event.eventId)+processed(c)).distinct().take(2000)
-        val editor=prefs(c).edit().putString(KEY_PROCESSED,JSONArray(processedIds).toString()).putString(KEY_CONSUMED,JSONArray(consumed.toList().take(4000)).toString()).putString(KEY_RESTORED,JSONArray(restored.toList().take(4000)).toString())
+        val editor=prefs(c).edit().putString(KEY_PROCESSED,JSONArray(processedIds).toString()).putString(KEY_CONSUMED,JSONArray(compactLedger(consumed)).toString()).putString(KEY_RESTORED,JSONArray(compactLedger(restored)).toString())
         if(changed.isNotEmpty())editor.putString(KEY_STOCK,stockJson(current.values.toList()).toString())
         if(!editor.commit())return
         changed.forEach{LowStockNotifier.evaluate(c,it);StockSync.publishToCircle(c,it)}
