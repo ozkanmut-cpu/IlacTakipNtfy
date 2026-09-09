@@ -27,6 +27,7 @@ fun VoiceAssistantScreen(context: Context) {
     var messages by remember { mutableStateOf(listOf(AssistantMessage(false, I18n.t("ai_ready")))) }
     var showImport by remember { mutableStateOf(false) }
     var showProgram by remember { mutableStateOf(false) }
+    var showPrescription by remember { mutableStateOf(false) }
 
     fun submit(text: String) {
         val query = text.trim()
@@ -50,6 +51,10 @@ fun VoiceAssistantScreen(context: Context) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = { showImport = true }, modifier = Modifier.weight(1f)) { Text(if (I18n.language() == "tr") "İçe aktar" else "Import") }
             OutlinedButton(onClick = { showProgram = true }, modifier = Modifier.weight(1f)) { Text(if (I18n.language() == "tr") "Program" else "Schedule") }
+        }
+        OutlinedButton(onClick = { showPrescription = true }, modifier = Modifier.fillMaxWidth()) {
+            val dueCount = PrescriptionRecordStore.due(context).size
+            Text(if (I18n.language() == "tr") "Reçete / SGK${if (dueCount > 0) " ($dueCount)" else ""}" else "Prescription / SGK${if (dueCount > 0) " ($dueCount)" else ""}")
         }
 
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -89,6 +94,12 @@ fun VoiceAssistantScreen(context: Context) {
             Spacer(Modifier.height(24.dp))
         }
     }
+    if (showPrescription) {
+        ModalBottomSheet(onDismissRequest = { showPrescription = false }) {
+            PrescriptionTrackerScreen(context, Store.load(context)) { }
+            Spacer(Modifier.height(24.dp))
+        }
+    }
 }
 
 object AssistantLocalRouter {
@@ -97,6 +108,16 @@ object AssistantLocalRouter {
         val q = raw.lowercase(Locale.getDefault())
         val meds = Store.load(c)
         val groups = meds.flatMap { med -> med.times.map { it to med } }.groupBy({ it.first }, { it.second }).toSortedMap()
+
+        if (listOf("reçete", "recete", "sgk", "refill", "prescription").any { q.contains(it) }) {
+            val due = PrescriptionRecordStore.due(c)
+            val upcoming = PrescriptionRecordStore.upcoming(c)
+            return when {
+                due.isNotEmpty() -> if (I18n.language() == "tr") "Yeniden temin zamanı gelen: ${due.joinToString { it.medicationName }}" else "Refill eligible now: ${due.joinToString { it.medicationName }}"
+                upcoming.isNotEmpty() -> if (I18n.language() == "tr") "Yaklaşan reçeteler: ${upcoming.joinToString { it.medicationName }}" else "Upcoming refills: ${upcoming.joinToString { it.medicationName }}"
+                else -> if (I18n.language() == "tr") "Takip edilen yaklaşan reçete yok." else "No tracked refill is due soon."
+            }
+        }
 
         val todayWords = listOf("bugün", "today", "heute", "aujourd", "hoy", "oggi", "hoje", "сегодня", "сьогодні", "اليوم", "امروز", "היום", "σήμερα", "astăzi", "idag", "i dag", "tänään", "dnes", "ma", "hari ini", "hôm nay", "आज", "今日", "오늘", "今天")
         if (todayWords.any { q.contains(it) }) {
