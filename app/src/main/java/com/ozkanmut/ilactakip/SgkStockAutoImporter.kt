@@ -67,7 +67,7 @@ object SgkStockAutoImporter {
 
                 // Mark this SGK cycle before any nested preference write so callbacks can never add it twice.
                 applied += cycle
-                prefs(context).edit().putStringSet(KEY_APPLIED, applied.toList().takeLast(4000).toSet()).commit()
+                prefs(context).edit().putStringSet(KEY_APPLIED, applied.toList().let { if (it.size > 4000) it.subList(it.size - 4000, it.size) else it }.toSet()).commit()
 
                 val meds = Store.load(context)
                 var med = r.medicationId.takeIf { it.isNotBlank() }?.let { id -> meds.firstOrNull { it.id == id } }
@@ -97,7 +97,7 @@ object SgkStockAutoImporter {
                 }
             }
 
-            prefs(context).edit().putStringSet(KEY_APPLIED, applied.toList().takeLast(4000).toSet()).commit()
+            prefs(context).edit().putStringSet(KEY_APPLIED, applied.toList().let { if (it.size > 4000) it.subList(it.size - 4000, it.size) else it }.toSet()).commit()
             return changed
         } finally {
             reconciling = false
