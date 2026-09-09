@@ -38,7 +38,16 @@ class NotificationGroupingRecoveryTest {
         Store.save(c, listOf(medA, medB))
     }
 
-    private fun alarmIntent() = Intent(c, AlarmReceiver::class.java)
+    private fun alarmIntent(deliveryId: String? = null, isSnooze: Boolean = false) = Intent(c, AlarmReceiver::class.java)
+        .putExtra("time", "08:00")
+        .putExtra("names", "${medA.name} (${medA.dose})|#|${medB.name} (${medB.dose})")
+        .putExtra("ids", "${medA.id}|#|${medB.id}")
+        .putExtra("scheduledDate", date)
+        .putExtra("isSnooze", isSnooze)
+        .apply { if (deliveryId != null) putExtra("deliveryId", deliveryId) }
+
+    private fun snoozeAction() = Intent(c, ActionReceiver::class.java)
+        .putExtra("action", "snooze")
         .putExtra("time", "08:00")
         .putExtra("names", "${medA.name} (${medA.dose})|#|${medB.name} (${medB.dose})")
         .putExtra("ids", "${medA.id}|#|${medB.id}")
@@ -65,16 +74,33 @@ class NotificationGroupingRecoveryTest {
     }
 
     @Test
+    fun duplicateSameAlarmBroadcast_createsOnlyOneAlarmEvent() {
+        val intent = alarmIntent(deliveryId = "group-08:00|123456")
+
+        AlarmReceiver().onReceive(c, intent)
+        AlarmReceiver().onReceive(c, intent)
+
+        val alarmEvents = EventStore.load(c).filter { it.type == "alarm" && it.time == "08:00" && it.scheduledDate == date }
+        assertEquals(1, alarmEvents.size)
+        assertEquals("group-08:00|123456", alarmEvents.single().eventId)
+    }
+
+    @Test
+    fun laterSnoozeDelivery_withDifferentDeliveryId_isNotMistakenForDuplicate() {
+        AlarmReceiver().onReceive(c, alarmIntent(deliveryId = "group-08:00|100"))
+        ActionReceiver().onReceive(c, snoozeAction())
+
+        AlarmReceiver().onReceive(c, alarmIntent(deliveryId = "snooze-$date-08:00|200", isSnooze = true))
+
+        val alarmEvents = EventStore.load(c).filter { it.type == "alarm" && it.time == "08:00" && it.scheduledDate == date }
+        assertEquals(2, alarmEvents.size)
+        assertEquals(setOf("group-08:00|100", "snooze-$date-08:00|200"), alarmEvents.map { it.eventId }.toSet())
+    }
+
+    @Test
     fun snoozeThenBoot_preservesSnoozedStateAndRebuildsRegularSchedule() {
         AlarmReceiver().onReceive(c, alarmIntent())
-
-        val snooze = Intent(c, ActionReceiver::class.java)
-            .putExtra("action", "snooze")
-            .putExtra("time", "08:00")
-            .putExtra("names", "${medA.name} (${medA.dose})|#|${medB.name} (${medB.dose})")
-            .putExtra("ids", "${medA.id}|#|${medB.id}")
-            .putExtra("scheduledDate", date)
-        ActionReceiver().onReceive(c, snooze)
+        ActionReceiver().onReceive(c, snoozeAction())
 
         val beforeBoot = DoseStateEngine.stateForTime(c, "08:00", LocalDate.parse(date))
         assertEquals(DoseSessionStatus.SNOOZED, beforeBoot.status)
