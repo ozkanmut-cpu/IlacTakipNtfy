@@ -31,7 +31,8 @@ class OfflineReliabilityTest {
             "dosefolk_care_baton",
             "dosefolk_alarm_scheduler",
             "dosefolk_program_rules",
-            "dosefolk_permissions"
+            "dosefolk_permissions",
+            "dosefolk_stock"
         ).forEach { c.getSharedPreferences(it, Context.MODE_PRIVATE).edit().clear().commit() }
     }
 
@@ -55,6 +56,26 @@ class OfflineReliabilityTest {
         scheduledDate = date,
         ownerId = Store.topic(c)
     )
+
+    private fun localStockEvent(id: String, type: String) = DoseEvent(
+        eventId = id,
+        type = type,
+        time = "08:00",
+        actor = "local",
+        actorTopic = "",
+        timestamp = System.currentTimeMillis(),
+        medications = listOf(med),
+        syncState = "synced",
+        revision = 1L,
+        scheduledDate = LocalDate.now().toString(),
+        ownerId = ""
+    )
+
+    private fun seedStock(remaining: Int) {
+        val stock = MedicationStock(med.id, med.name, remaining, 30, 5)
+        c.getSharedPreferences("dosefolk_stock", Context.MODE_PRIVATE)
+            .edit().putString("stock", JSONArray().put(StockEngine.toJson(stock)).toString()).commit()
+    }
 
     private fun seedEvents(events: List<DoseEvent>) {
         val array = JSONArray()
@@ -181,5 +202,27 @@ class OfflineReliabilityTest {
 
         assertTrue(EventStore.load(c).size <= 1000)
         assertFalse(EventStore.pending(c).any { it.eventId == "pending-to-sync" })
+    }
+
+    @Test
+    fun replayedTakenEvent_decrementsStockOnlyOnce() {
+        seedStock(10)
+        val event = localStockEvent("stock-taken-1", "taken")
+
+        StockEngine.applyEvent(c, event)
+        StockEngine.applyEvent(c, event)
+
+        assertEquals(9, StockEngine.forMedication(c, med.id)?.remainingDoses)
+    }
+
+    @Test
+    fun replayedUndoTakenEvent_restoresStockOnlyOnce() {
+        seedStock(9)
+        val event = localStockEvent("stock-undo-1", "undo_taken")
+
+        StockEngine.applyEvent(c, event)
+        StockEngine.applyEvent(c, event)
+
+        assertEquals(10, StockEngine.forMedication(c, med.id)?.remainingDoses)
     }
 }
