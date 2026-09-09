@@ -15,6 +15,10 @@ import java.util.concurrent.TimeUnit
 
 class DosefolkSyncWorker(appContext: Context, params: WorkerParameters) : Worker(appContext, params) {
     override fun doWork(): Result {
+        // Local maintenance does not need network success and is idempotent.
+        SgkStockAutoImporter.reconcile(applicationContext)
+        PrescriptionNotifier.evaluate(applicationContext)
+
         val outboundOk = Ntfy.flushPendingBlocking(applicationContext)
         val alertsOk = AlertOutbox.flushBlocking(applicationContext)
         val inboundOk = SyncEngine.pullBlocking(applicationContext)
