@@ -87,6 +87,22 @@ object AlarmScheduler {
 
     fun snoozeGroup(c: Context, time: String, meds: List<Medication>, minutes: Int, scheduledDate: String = LocalDate.now().toString()): Long =
         scheduleSnoozeUntil(c, time, meds, System.currentTimeMillis() + minutes.coerceAtLeast(1) * 60_000L, scheduledDate)
+
+    fun restoreActiveSnoozes(c: Context) {
+        val now = System.currentTimeMillis()
+        EventStore.load(c)
+            .asSequence()
+            .filter { it.type == "snoozed" && it.snoozeUntil > now && it.scheduledDate.isNotBlank() }
+            .distinctBy { "${it.scheduledDate}|${it.time}" }
+            .forEach { event ->
+                val date = runCatching { LocalDate.parse(event.scheduledDate) }.getOrNull() ?: return@forEach
+                val state = DoseStateEngine.stateForTime(c, event.time, date)
+                if (state.status == DoseSessionStatus.SNOOZED) {
+                    val meds = event.medications.ifEmpty { state.medications }
+                    if (meds.isNotEmpty()) scheduleSnoozeUntil(c, event.time, meds, event.snoozeUntil, event.scheduledDate)
+                }
+            }
+    }
 }
 
 class AlarmReceiver : BroadcastReceiver() {
@@ -148,6 +164,7 @@ class BootReceiver : BroadcastReceiver() {
         if (i.action == Intent.ACTION_TIMEZONE_CHANGED) TravelGuard.onTimezonePossiblyChanged(c)
         else TravelGuard.initialize(c)
         AlarmScheduler.scheduleAll(c, Store.load(c))
+        AlarmScheduler.restoreActiveSnoozes(c)
         DosefolkSyncScheduler.ensure(c)
         DosefolkSyncScheduler.kick(c)
     }
