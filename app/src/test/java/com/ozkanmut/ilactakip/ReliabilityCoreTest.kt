@@ -29,7 +29,8 @@ class ReliabilityCoreTest {
             "dosefolk_remote_medication_meta",
             "dosefolk_program_rules",
             "dosefolk_owner_scope",
-            "dosefolk_low_stock_alerts"
+            "dosefolk_low_stock_alerts",
+            "dosefolk_prescription_tracker"
         ).forEach { c.getSharedPreferences(it, Context.MODE_PRIVATE).edit().clear().commit() }
     }
 
@@ -102,5 +103,38 @@ class ReliabilityCoreTest {
         val scheduled = c.getSharedPreferences("dosefolk_alarm_scheduler", Context.MODE_PRIVATE)
             .getStringSet("scheduled_times", emptySet()).orEmpty()
         assertTrue("08:00" in scheduled)
+    }
+
+    @Test
+    fun prescriptionLifecycle_newestCycleSupersedesOlderFill() {
+        val old = PrescriptionRecord(
+            id = "old", medicationName = "Vasoxen 5 mg 28 tablet",
+            fillDate = "01.06.2026", doseEndDate = "01.09.2026", continuous = true
+        )
+        val newer = PrescriptionRecord(
+            id = "new", medicationName = "Vasoxen 5 mg 28 tablet",
+            fillDate = "01.08.2026", doseEndDate = "01.11.2026", continuous = true
+        )
+
+        val current = PrescriptionLifecycle.current(listOf(old, newer))
+        assertEquals(1, current.size)
+        assertEquals("new", current.single().id)
+    }
+
+    @Test
+    fun prescriptionLifecycle_dueDoesNotSurfaceSupersededOldCycle() {
+        val old = PrescriptionRecord(
+            id = "old", medicationName = "Vasoxen 5 mg 28 tablet",
+            fillDate = "01.05.2026", doseEndDate = "01.06.2026", continuous = true
+        )
+        val newer = PrescriptionRecord(
+            id = "new", medicationName = "Vasoxen 5 mg 28 tablet",
+            fillDate = "01.08.2026", doseEndDate = "01.12.2026", continuous = true
+        )
+        PrescriptionRecordStore.upsertAll(c, listOf(old, newer))
+
+        val due = PrescriptionLifecycle.due(c, LocalDate.of(2026, 9, 9))
+        assertTrue(due.none { it.id == "old" })
+        assertTrue(due.none { it.medicationName.contains("Vasoxen") })
     }
 }
