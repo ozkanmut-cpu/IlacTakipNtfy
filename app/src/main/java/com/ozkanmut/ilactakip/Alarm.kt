@@ -85,6 +85,24 @@ object AlarmScheduler {
         return safeTrigger
     }
 
+    /**
+     * Schedules a snooze only while the merged session is still SNOOZED.
+     * The post-schedule check closes the race where a terminal event lands
+     * between the first state check and AlarmManager.set*(). A later terminal
+     * event is also safe because its normal side effects cancel the snooze.
+     */
+    fun scheduleSnoozeIfActive(c: Context, time: String, meds: List<Medication>, triggerAtMillis: Long, scheduledDate: String): Boolean {
+        if (meds.isEmpty() || triggerAtMillis <= System.currentTimeMillis()) return false
+        val date = runCatching { LocalDate.parse(scheduledDate) }.getOrNull() ?: return false
+        if (DoseStateEngine.stateForTime(c, time, date).status != DoseSessionStatus.SNOOZED) return false
+        scheduleSnoozeUntil(c, time, meds, triggerAtMillis, scheduledDate)
+        if (DoseStateEngine.stateForTime(c, time, date).status != DoseSessionStatus.SNOOZED) {
+            cancelSnooze(c, time, scheduledDate)
+            return false
+        }
+        return true
+    }
+
     fun snoozeGroup(c: Context, time: String, meds: List<Medication>, minutes: Int, scheduledDate: String = LocalDate.now().toString()): Long {
         val trigger = System.currentTimeMillis() + minutes * 60_000L
         scheduleSnoozeUntil(c, time, meds, trigger, scheduledDate)
@@ -217,9 +235,7 @@ object Ntfy {
             when {
                 type in terminalTypes -> { AlarmScheduler.cancelSnooze(c, time, scheduledDate); SmartEscalation.cancel(c, time, scheduledDate); CareBatonStore.resolve(c, time, scheduledDate); DoseNotificationLifecycle.cancel(c, time, scheduledDate) }
                 type == "snoozed" -> {
-                    if (event.snoozeUntil > System.currentTimeMillis() && meds.isNotEmpty()) {
-                        AlarmScheduler.scheduleSnoozeUntil(c, time, meds, event.snoozeUntil, scheduledDate)
-                    }
+                    AlarmScheduler.scheduleSnoozeIfActive(c, time, meds, event.snoozeUntil, scheduledDate)
                     SmartEscalation.cancel(c, time, scheduledDate)
                     DoseNotificationLifecycle.cancel(c, time, scheduledDate)
                 }
