@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.testing.WorkManagerTestInitHelper
+import org.json.JSONArray
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -45,11 +46,12 @@ class TwoDeviceOfflineRaceTest {
         actorTopic: String,
         timestamp: Long,
         revision: Long,
-        syncState: String = "synced"
+        syncState: String = "synced",
+        time: String = "08:00"
     ) = DoseEvent(
         eventId = id,
         type = type,
-        time = "08:00",
+        time = time,
         actor = actorTopic,
         actorTopic = actorTopic,
         timestamp = timestamp,
@@ -152,5 +154,35 @@ class TwoDeviceOfflineRaceTest {
         StockEngine.applyEvent(c, undo.copy(eventId = "undo-stock-replay"))
 
         assertEquals(10, StockEngine.forMedication(c, med.id)?.remainingDoses)
+    }
+
+    @Test
+    fun sameMedicationAtDifferentTimes_consumesEachScheduledDoseSeparately() {
+        val base = System.currentTimeMillis()
+        StockEngine.configure(c, med, packSize = 10, currentDoses = 10, lowThreshold = 2)
+
+        StockEngine.applyEvent(c, event("morning-dose", "taken", Store.topic(c), base, 1L, time = "08:00"))
+        StockEngine.applyEvent(c, event("evening-dose", "taken", Store.topic(c), base + 1_000L, 2L, time = "20:00"))
+
+        assertEquals(8, StockEngine.forMedication(c, med.id)?.remainingDoses)
+    }
+
+    @Test
+    fun currentDayConsumedSession_survivesMoreThanFourThousandLedgerRows() {
+        val base = System.currentTimeMillis()
+        StockEngine.configure(c, med, packSize = 20, currentDoses = 20, lowThreshold = 2)
+        val activeKey = "dose|$date|08:00|${med.id}"
+        val ledger = JSONArray()
+        repeat(4000) { ledger.put("dose|2020-01-${(it % 28) + 1}|07:${it % 60}|old-$it") }
+        ledger.put(activeKey)
+        c.getSharedPreferences("dosefolk_stock", Context.MODE_PRIVATE).edit()
+            .putString("consumed_sessions", ledger.toString())
+            .commit()
+
+        StockEngine.applyEvent(c, event("other-current-dose", "taken", Store.topic(c), base, 10L, time = "20:00"))
+        val afterOtherDose = StockEngine.forMedication(c, med.id)?.remainingDoses
+        StockEngine.applyEvent(c, event("replay-active-new-id", "taken", "phone-b", base + 1_000L, 11L, time = "08:00"))
+
+        assertEquals(afterOtherDose, StockEngine.forMedication(c, med.id)?.remainingDoses)
     }
 }
