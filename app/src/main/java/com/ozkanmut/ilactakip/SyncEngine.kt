@@ -148,7 +148,7 @@ object SyncEngine {
         val scheduledDate = event.scheduledDate
         when (event.type) {
             "care_claimed" -> CareBatonStore.applyRemoteClaim(c, event)
-            "care_released" -> CareBatonStore.resolve(c, event.time, scheduledDate)
+            "care_released" -> CareBatonStore.applyRemoteRelease(c, event)
             "taken", "missed", "conflict_resolved_taken", "conflict_resolved_missed" -> {
                 CareBatonStore.resolve(c, event.time, scheduledDate)
                 SmartEscalation.cancel(c, event.time, scheduledDate)
