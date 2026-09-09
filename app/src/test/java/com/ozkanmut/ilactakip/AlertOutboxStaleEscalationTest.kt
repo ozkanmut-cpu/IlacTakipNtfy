@@ -52,4 +52,20 @@ class AlertOutboxStaleEscalationTest {
 
         assertNull(AlertOutbox.staleEscalationSession(alert, now))
     }
+
+    @Test
+    fun malformedEscalationId_isPreservedForNormalProbePath() {
+        val invalidDate = PendingAlert(
+            "escalation|not-a-date|08:00|care-topic|0",
+            "care-topic", "Dosefolk", "attention",
+            now - tenHours - 1L,
+            true
+        )
+        val invalidTime = invalidDate.copy(
+            id = "escalation|2026-09-09|99:99|care-topic|0"
+        )
+
+        assertNull(AlertOutbox.staleEscalationSession(invalidDate, now))
+        assertNull(AlertOutbox.staleEscalationSession(invalidTime, now))
+    }
 }
