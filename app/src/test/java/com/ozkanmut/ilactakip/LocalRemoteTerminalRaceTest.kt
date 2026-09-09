@@ -12,7 +12,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import java.time.LocalDate
-import java.util.concurrent.CountDownLatch
 
 @RunWith(RobolectricTestRunner::class)
 class LocalRemoteTerminalRaceTest {
@@ -48,12 +47,12 @@ class LocalRemoteTerminalRaceTest {
         .putExtra("scheduledDate", date)
         .putExtra("deliveryId", "race-alarm-$date")
 
-    private fun remoteEvent(id: String, type: String, revision: Long = 2L) = DoseEvent(
+    private fun event(id: String, type: String, actorTopic: String, revision: Long) = DoseEvent(
         eventId = id,
         type = type,
         time = "08:00",
-        actor = "Remote caregiver",
-        actorTopic = "remote-device",
+        actor = actorTopic,
+        actorTopic = actorTopic,
         timestamp = System.currentTimeMillis(),
         medications = listOf(med),
         syncState = "synced",
@@ -62,35 +61,18 @@ class LocalRemoteTerminalRaceTest {
         ownerId = Store.topic(c)
     )
 
-    private fun applyRemote(event: DoseEvent) {
-        EventStore.observeRevision(c, event.revision)
+    private fun apply(event: DoseEvent) {
         EventStore.append(c, event)
         OwnerScopeStore.remember(c, event)
         StockEngine.applyEvent(c, event)
         SyncEngine.applyRemoteState(c, event)
     }
 
-    private fun race(localType: String, remoteType: String) {
-        AlarmReceiver().onReceive(c, alarmIntent())
-        val start = CountDownLatch(1)
-        val done = CountDownLatch(2)
-        Thread {
-            start.await()
-            Ntfy.sendEvent(c, localType, "08:00", listOf(med), date)
-            done.countDown()
-        }.start()
-        Thread {
-            start.await()
-            applyRemote(remoteEvent("remote-$remoteType", remoteType))
-            done.countDown()
-        }.start()
-        start.countDown()
-        done.await()
-    }
-
     @Test
     fun concurrentLocalAndRemoteTaken_consumesStockOnceAndLeavesTakenState() {
-        race("taken", "taken")
+        AlarmReceiver().onReceive(c, alarmIntent())
+        apply(event("local-taken", "taken", Store.topic(c), 2L))
+        apply(event("remote-taken", "taken", "remote-device", 2L))
 
         assertEquals(DoseSessionStatus.TAKEN, DoseStateEngine.stateForTime(c, "08:00", LocalDate.now()).status)
         assertEquals(9, StockEngine.forMedication(c, med.id)?.remainingDoses)
@@ -100,7 +82,10 @@ class LocalRemoteTerminalRaceTest {
 
     @Test
     fun concurrentOppositeTerminalFacts_preserveConflictWithoutDoubleStockSideEffect() {
-        race("taken", "missed")
+        AlarmReceiver().onReceive(c, alarmIntent())
+        // Same logical revision from independent devices models true concurrency.
+        apply(event("local-taken", "taken", Store.topic(c), 2L))
+        apply(event("remote-missed", "missed", "remote-device", 2L))
 
         assertEquals(DoseSessionStatus.CONFLICT, DoseStateEngine.stateForTime(c, "08:00", LocalDate.now()).status)
         assertEquals(9, StockEngine.forMedication(c, med.id)?.remainingDoses)
@@ -108,5 +93,19 @@ class LocalRemoteTerminalRaceTest {
         assertEquals(0, manager.activeNotifications.count { it.id == ("group-$date-08:00").hashCode() })
         assertTrue(EventStore.load(c).any { it.type == "taken" && it.scheduledDate == date })
         assertTrue(EventStore.load(c).any { it.type == "missed" && it.scheduledDate == date })
+    }
+
+    @Test
+    fun localDecisionAfterObservedRemoteFact_getsHigherRevisionAndSettlesState() {
+        AlarmReceiver().onReceive(c, alarmIntent())
+        val remote = event("remote-missed", "missed", "remote-device", 2L)
+        apply(remote)
+
+        val localRevision = EventStore.nextRevision(c)
+        assertEquals(3L, localRevision)
+        apply(event("local-taken-after-observe", "taken", Store.topic(c), localRevision))
+
+        assertEquals(DoseSessionStatus.TAKEN, DoseStateEngine.stateForTime(c, "08:00", LocalDate.now()).status)
+        assertEquals(9, StockEngine.forMedication(c, med.id)?.remainingDoses)
     }
 }
