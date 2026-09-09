@@ -18,7 +18,8 @@ data class DoseEvent(
     val revision: Long = 0L,
     val scheduledDate: String = "",
     val snoozeUntil: Long = 0L,
-    val ownerId: String = ""
+    val ownerId: String = "",
+    val medicationMeta: List<MedicationMeta> = emptyList()
 )
 
 object EventStore {
@@ -66,7 +67,7 @@ object EventStore {
     }
 
     fun payload(event: DoseEvent): JSONObject = JSONObject()
-        .put("v", 8)
+        .put("v", 9)
         .put("eventId", event.eventId)
         .put("type", event.type)
         .put("time", event.time)
@@ -81,6 +82,7 @@ object EventStore {
         .put("medications", JSONArray(event.medications.map { med ->
             JSONObject().put("id", med.id).put("name", med.name).put("dose", med.dose).put("times", JSONArray(med.times))
         }))
+        .put("medicationMeta", JSONArray(event.medicationMeta.map { MedicationMetaStore.toJson(it) }))
 
     private fun toJson(event: DoseEvent): JSONObject = payload(event)
 
@@ -96,6 +98,8 @@ object EventStore {
                 )
             }
         }
+        val metaJson = o.optJSONArray("medicationMeta") ?: JSONArray()
+        val meta = (0 until metaJson.length()).mapNotNull { MedicationMetaStore.fromJson(metaJson.optJSONObject(it)) }
         val timestamp = o.optLong("timestamp")
         val fallbackDate = if (timestamp > 0L) {
             Instant.ofEpochMilli(timestamp).atZone(ZoneId.systemDefault()).toLocalDate().toString()
@@ -112,7 +116,8 @@ object EventStore {
             revision = o.optLong("revision", 0L),
             scheduledDate = o.optString("scheduledDate", fallbackDate).ifBlank { fallbackDate },
             snoozeUntil = o.optLong("snoozeUntil", 0L),
-            ownerId = o.optString("ownerId")
+            ownerId = o.optString("ownerId"),
+            medicationMeta = meta
         )
     }
 }
