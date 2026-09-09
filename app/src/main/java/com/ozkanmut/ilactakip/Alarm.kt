@@ -146,23 +146,25 @@ class AlarmReceiver : BroadcastReceiver() {
         val ids = i.getStringExtra("ids")?.split("|#|")?.filter { it.isNotBlank() } ?: emptyList()
         val scheduledDate = i.getStringExtra("scheduledDate") ?: LocalDate.now().toString()
         val isSnooze = i.getBooleanExtra("isSnooze", false)
-        if (!AlarmDeliveryGuard.shouldDeliver(c, time, scheduledDate, ids, isSnooze)) { AlarmScheduler.scheduleAll(c, Store.load(c)); return }
+        val deliveryId = i.getStringExtra("deliveryId")?.takeIf { it.isNotBlank() }
+            ?: "legacy-alarm|$scheduledDate|$time|${if (isSnooze) "snooze" else "regular"}|${ids.sorted().joinToString(",")}"        
+        val canonical = AlarmPresentationLedger.canonicalAlarmForRedelivery(c, deliveryId, time, scheduledDate)
+
+        if (!AlarmDeliveryGuard.shouldDeliver(c, time, scheduledDate, ids, isSnooze)) {
+            if (canonical != null) AlarmPresentationLedger.markPresented(c, deliveryId)
+            AlarmScheduler.scheduleAll(c, Store.load(c))
+            return
+        }
 
         val stored = Store.load(c).associateBy { it.id }
         val alarmMeds = ids.mapNotNull { stored[it] }.ifEmpty { names.mapIndexed { index, label -> Medication("legacy-$index", label, "", listOf(time)) } }
-        val deliveryId = i.getStringExtra("deliveryId")?.takeIf { it.isNotBlank() }
-            ?: "legacy-alarm|$scheduledDate|$time|${if (isSnooze) "snooze" else "regular"}|${ids.sorted().joinToString(",")}"        
 
-        val canonical = AlarmPresentationLedger.canonicalAlarmForRedelivery(c, deliveryId, time, scheduledDate)
         if (canonical != null) {
             if (AlarmPresentationLedger.isPresented(c, deliveryId)) return
         } else if (!Ntfy.sendEvent(c, "alarm", time, alarmMeds, scheduledDate, eventId = deliveryId)) {
             return
         }
 
-        // A terminal decision may race the durable alarm event. Re-check before
-        // presenting, and treat a terminal winner as a completed presentation so
-        // stale redelivery cannot resurrect a notification later.
         if (!AlarmDeliveryGuard.shouldDeliver(c, time, scheduledDate, ids, isSnooze)) {
             AlarmPresentationLedger.markPresented(c, deliveryId)
             AlarmScheduler.scheduleAll(c, Store.load(c))
@@ -179,10 +181,6 @@ class AlarmReceiver : BroadcastReceiver() {
         SmartEscalation.schedule(c, time, scheduledDate)
         AlarmScheduler.scheduleAll(c, Store.load(c))
 
-        // Close the second race window: if a terminal event lands while Android
-        // notification/escalation side effects are being created, remove them now.
-        // If it lands after this check, the terminal event's normal side effects
-        // cancel both, so all interleavings converge to the resolved state.
         if (!AlarmDeliveryGuard.shouldDeliver(c, time, scheduledDate, ids, isSnooze)) {
             DoseNotificationLifecycle.cancel(c, time, scheduledDate)
             SmartEscalation.cancel(c, time, scheduledDate)
