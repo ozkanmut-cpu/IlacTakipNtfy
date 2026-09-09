@@ -36,7 +36,7 @@ object ProgramRuleStore {
             val now = System.currentTimeMillis()
             prefs(c).edit().putLong(STAMP_PREFIX + normalized.medicationId, now).commit()
             val medName = Store.load(c).firstOrNull { it.id == normalized.medicationId }?.name ?: "Program"
-            val carrier = Medication(normalized.medicationId, medName, toJson(normalized).toString(), emptyList())
+            val carrier = Medication(normalized.medicationId, medName, encode(normalized).toString(), emptyList())
             Ntfy.sendEvent(c, "program_rule_updated", "program", listOf(carrier))
         }
     }
@@ -46,8 +46,13 @@ object ProgramRuleStore {
         if (event.type != "program_rule_updated") return
         val carrier = event.medications.firstOrNull() ?: return
         if (carrier.id.isBlank() || carrier.dose.isBlank()) return
-        val rule = runCatching { fromJson(JSONObject(carrier.dose)) }.getOrNull() ?: return
+        val rule = runCatching { decode(JSONObject(carrier.dose)) }.getOrNull() ?: return
         if (rule.medicationId != carrier.id) return
+        val ownerId = event.ownerId.ifBlank { event.actorTopic }
+        if (ownerId.isNotBlank() && ownerId != OwnerScopeStore.localOwnerId(c)) {
+            OwnerScopeStore.applyRemoteRule(c, ownerId, rule, event.timestamp)
+            return
+        }
         val p = prefs(c)
         val lastStamp = p.getLong(STAMP_PREFIX + rule.medicationId, 0L)
         if (event.timestamp in 1 until lastStamp) return
@@ -80,17 +85,24 @@ object ProgramRuleStore {
         return null
     }
 
-    fun describe(c: Context, medicationId: String): String {
-        val r = get(c, medicationId)
+    fun describe(c: Context, medicationId: String): String = describeRule(get(c, medicationId))
+
+    fun describeRule(r: ProgramRule): String {
         val parts = mutableListOf<String>()
         if (r.everyNDays > 1) parts += if (I18n.language() == "tr") "${r.everyNDays} günde bir" else "Every ${r.everyNDays} days"
         if (r.weekdays.isNotEmpty()) {
             val names = r.weekdays.sorted().map { DayOfWeek.of(it).name.take(3) }
             parts += names.joinToString(" · ")
         }
+        r.startDate?.let { parts += if (I18n.language() == "tr") "Başlangıç $it" else "Starts $it" }
+        r.endDate?.let { parts += if (I18n.language() == "tr") "Bitiş $it" else "Ends $it" }
         if (r.routineLabel.isNotBlank()) parts += r.routineLabel
         return parts.joinToString(" • ")
     }
+
+    fun normalizeForSync(rule: ProgramRule): ProgramRule = normalize(rule)
+    fun encode(rule: ProgramRule): JSONObject = toJson(normalize(rule))
+    fun decode(o: JSONObject): ProgramRule = normalize(fromJson(o))
 
     private fun normalize(rule: ProgramRule) = rule.copy(
         weekdays = rule.weekdays.filter { it in 1..7 }.toSet(),
