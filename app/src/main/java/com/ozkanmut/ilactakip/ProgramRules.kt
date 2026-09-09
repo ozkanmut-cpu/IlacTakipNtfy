@@ -21,6 +21,9 @@ object ProgramRuleStore {
     private const val PREFS = "dosefolk_program_rules"
     private const val KEY = "rules"
     private const val STAMP_PREFIX = "stamp|"
+    private const val REV_PREFIX = "rev|"
+    private const val ACTOR_PREFIX = "actor|"
+    private const val EVENT_PREFIX = "event|"
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     fun get(c: Context, medicationId: String): ProgramRule =
@@ -50,15 +53,33 @@ object ProgramRuleStore {
         if (rule.medicationId != carrier.id) return
         val ownerId = event.ownerId.ifBlank { event.actorTopic }
         if (ownerId.isNotBlank() && ownerId != OwnerScopeStore.localOwnerId(c)) {
-            OwnerScopeStore.applyRemoteRule(c, ownerId, rule, event.timestamp)
+            OwnerScopeStore.applyRemoteRule(c, ownerId, rule, event)
             return
         }
+
         val p = prefs(c)
-        val lastStamp = p.getLong(STAMP_PREFIX + rule.medicationId, 0L)
-        if (event.timestamp in 1 until lastStamp) return
+        val id = rule.medicationId
+        val storedRevision = p.getLong(REV_PREFIX + id, 0L)
+        val storedActor = p.getString(ACTOR_PREFIX + id, "").orEmpty()
+        val storedEvent = p.getString(EVENT_PREFIX + id, "").orEmpty()
+        val lastStamp = p.getLong(STAMP_PREFIX + id, 0L)
+        val accept = if (event.revision > 0L || storedRevision > 0L) {
+            when {
+                event.revision != storedRevision -> event.revision > storedRevision
+                event.actorTopic != storedActor -> event.actorTopic > storedActor
+                else -> event.eventId > storedEvent
+            }
+        } else event.timestamp >= lastStamp
+        if (!accept) return
+
         val normalized = normalize(rule)
         persist(c, listOf(normalized) + load(c).filterNot { it.medicationId == normalized.medicationId })
-        p.edit().putLong(STAMP_PREFIX + normalized.medicationId, event.timestamp).commit()
+        p.edit()
+            .putLong(STAMP_PREFIX + normalized.medicationId, event.timestamp)
+            .putLong(REV_PREFIX + normalized.medicationId, event.revision)
+            .putString(ACTOR_PREFIX + normalized.medicationId, event.actorTopic)
+            .putString(EVENT_PREFIX + normalized.medicationId, event.eventId)
+            .commit()
         AlarmScheduler.scheduleAll(c, Store.load(c), observeProgramChanges = false)
     }
 
