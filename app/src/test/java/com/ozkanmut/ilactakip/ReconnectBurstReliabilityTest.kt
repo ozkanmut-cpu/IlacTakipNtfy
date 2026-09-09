@@ -66,7 +66,7 @@ class ReconnectBurstReliabilityTest {
         val batch = AlertOutbox.batchForFlush(newestFirst)
 
         assertEquals(10, batch.size)
-        assertEquals((9 downTo 0).map { "alert-$it" }, batch.map { it.id })
+        assertEquals((0 until 10).map { "alert-$it" }, batch.map { it.id })
     }
 
     @Test
