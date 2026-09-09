@@ -1,18 +1,19 @@
 package com.ozkanmut.ilactakip
 
-import android.app.AlarmManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.testing.WorkManagerTestInitHelper
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import java.time.LocalDate
 
 @RunWith(RobolectricTestRunner::class)
 class ProgramRescheduleRaceTest {
@@ -89,5 +90,30 @@ class ProgramRescheduleRaceTest {
             .getStringSet("scheduled_times", emptySet())
             .orEmpty()
         assertTrue(scheduled.isEmpty())
+    }
+
+    @Test
+    fun staleBroadcast_isRejectedAfterProgramMoved() {
+        val date = LocalDate.now().toString()
+        assertTrue(AlarmDeliveryGuard.shouldDeliver(c, "08:00", date, listOf(med.id), isSnooze = false))
+
+        Store.save(c, listOf(med.copy(times = listOf("09:00"))))
+
+        assertFalse(AlarmDeliveryGuard.shouldDeliver(c, "08:00", date, listOf(med.id), isSnooze = false))
+        assertTrue(AlarmDeliveryGuard.shouldDeliver(c, "09:00", date, listOf(med.id), isSnooze = false))
+    }
+
+    @Test
+    fun staleBroadcast_isRejectedAfterMedicationDeleted() {
+        val date = LocalDate.now().toString()
+        Store.save(c, emptyList())
+        assertFalse(AlarmDeliveryGuard.shouldDeliver(c, "08:00", date, listOf(med.id), isSnooze = false))
+    }
+
+    @Test
+    fun explicitSnooze_isNotSilentlyDroppedByProgramRaceGuard() {
+        val date = LocalDate.now().toString()
+        Store.save(c, listOf(med.copy(times = listOf("09:00"))))
+        assertTrue(AlarmDeliveryGuard.shouldDeliver(c, "08:00", date, listOf(med.id), isSnooze = true))
     }
 }
