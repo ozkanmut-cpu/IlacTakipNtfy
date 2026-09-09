@@ -40,6 +40,10 @@ object DoseStateEngine {
         compareBy<DoseEvent> { it.timestamp }.thenBy { it.actorTopic }.thenBy { it.revision }.thenBy { it.eventId }
     )
 
+    private fun newestForActor(events: List<DoseEvent>): DoseEvent? = events.maxWithOrNull(
+        compareBy<DoseEvent> { it.revision }.thenBy { it.timestamp }.thenBy { it.eventId }
+    )
+
     fun stateForTime(c: Context, time: String, date: LocalDate = LocalDate.now()): DoseSessionState {
         val dateKey = date.toString()
         val scheduleMeds = Store.load(c).filter { time in it.times && ProgramRuleStore.isActiveOn(c, it.id, date) }
@@ -79,36 +83,55 @@ object DoseStateEngine {
         val latestAlarmIndex = relevant.indexOfLast { it.type == "alarm" }
         val sessionEvents = if (latestAlarmIndex >= 0) relevant.drop(latestAlarmIndex) else relevant
 
-        // An explicit human conflict resolution is authoritative for this dose session.
-        // Remote wall clocks are not trusted for causal ordering: a stale event from a
-        // device whose clock is ahead must not reopen a conflict after it was resolved.
-        val latestExplicitResolution = sessionEvents.lastOrNull {
+        // Resolve explicit human decisions by per-device revision rather than wall clock.
+        // If two different devices explicitly resolve the same conflict in opposite
+        // directions, that disagreement is itself a conflict and must be surfaced.
+        val resolutions = sessionEvents.filter {
             it.type == "conflict_resolved_taken" || it.type == "conflict_resolved_missed"
         }
-        if (latestExplicitResolution != null) {
-            val laterUndo = sessionEvents.lastOrNull { it.type == "undo_taken" || it.type == "undo_missed" }
-            val resolutionUndone = laterUndo != null &&
-                laterUndo.actorTopic == latestExplicitResolution.actorTopic &&
-                laterUndo.revision > latestExplicitResolution.revision
-            if (resolutionUndone) {
+        if (resolutions.isNotEmpty()) {
+            val latestPerActor = resolutions.groupBy { it.actorTopic }.values.mapNotNull(::newestForActor)
+            val takenResolution = latestPerActor.filter { it.type == "conflict_resolved_taken" }
+            val missedResolution = latestPerActor.filter { it.type == "conflict_resolved_missed" }
+
+            if (takenResolution.isNotEmpty() && missedResolution.isNotEmpty()) {
+                val conflicts = ordered(listOf(takenResolution.maxBy { it.revision }, missedResolution.maxBy { it.revision }))
+                return DoseSessionState(
+                    time = time,
+                    status = DoseSessionStatus.CONFLICT,
+                    latestEvent = conflicts.last(),
+                    medications = medsFrom(conflicts.last(), scheduleMeds),
+                    conflictEvents = conflicts,
+                    scheduledDate = scheduledDate
+                )
+            }
+
+            val resolution = latestPerActor.maxWithOrNull(
+                compareBy<DoseEvent> { it.revision }.thenBy { it.actorTopic }.thenBy { it.eventId }
+            )!!
+            val laterUndo = sessionEvents
+                .filter { (it.type == "undo_taken" || it.type == "undo_missed") && it.actorTopic == resolution.actorTopic }
+                .maxWithOrNull(compareBy<DoseEvent> { it.revision }.thenBy { it.timestamp }.thenBy { it.eventId })
+            if (laterUndo != null && laterUndo.revision > resolution.revision) {
                 return DoseSessionState(time, DoseSessionStatus.PENDING, laterUndo, medsFrom(laterUndo, scheduleMeds), scheduledDate = scheduledDate)
             }
-            val status = if (latestExplicitResolution.type == "conflict_resolved_taken") DoseSessionStatus.TAKEN else DoseSessionStatus.MISSED
-            return DoseSessionState(time, status, latestExplicitResolution, medsFrom(latestExplicitResolution, scheduleMeds), scheduledDate = scheduledDate)
+            val status = if (resolution.type == "conflict_resolved_taken") DoseSessionStatus.TAKEN else DoseSessionStatus.MISSED
+            return DoseSessionState(time, status, resolution, medsFrom(resolution, scheduleMeds), scheduledDate = scheduledDate)
         }
 
-        val latest = sessionEvents.last()
-        if (latest.type == "undo_taken" || latest.type == "undo_missed") {
-            return DoseSessionState(time, DoseSessionStatus.PENDING, latest, medsFrom(latest, scheduleMeds), scheduledDate = scheduledDate)
+        // A same-device undo is causal only when its local revision is newer than
+        // that device's latest terminal fact. Arrival order and wall clock do not matter.
+        val latestByActor = sessionEvents.groupBy { it.actorTopic }.mapValues { (_, actorEvents) ->
+            newestForActor(actorEvents.filter { it.type == "taken" || it.type == "missed" || it.type == "undo_taken" || it.type == "undo_missed" })
+        }.values.filterNotNull()
+        val effective = latestByActor.filterNot { it.type == "undo_taken" || it.type == "undo_missed" }
+        if (effective.isEmpty() && latestByActor.any { it.type == "undo_taken" || it.type == "undo_missed" }) {
+            val undo = latestByActor.maxWithOrNull(compareBy<DoseEvent> { it.revision }.thenBy { it.actorTopic }.thenBy { it.eventId })!!
+            return DoseSessionState(time, DoseSessionStatus.PENDING, undo, medsFrom(undo, scheduleMeds), scheduledDate = scheduledDate)
         }
 
-        val terminal = sessionEvents.filter { it.type == "taken" || it.type == "missed" }
-        val lastTaken = terminal.lastOrNull { it.type == "taken" }
-        val lastMissed = terminal.lastOrNull { it.type == "missed" }
-
-        // Opposite terminal reports from different devices are contradictory facts
-        // about the same scheduled dose. Do not use phone wall-clock distance to decide
-        // whether the contradiction exists; clocks can be skewed by minutes or hours.
+        val lastTaken = effective.filter { it.type == "taken" }.maxWithOrNull(compareBy<DoseEvent> { it.revision }.thenBy { it.actorTopic })
+        val lastMissed = effective.filter { it.type == "missed" }.maxWithOrNull(compareBy<DoseEvent> { it.revision }.thenBy { it.actorTopic })
         if (lastTaken != null && lastMissed != null && lastTaken.actorTopic != lastMissed.actorTopic) {
             val conflicts = ordered(listOf(lastTaken, lastMissed))
             return DoseSessionState(
@@ -121,11 +144,17 @@ object DoseStateEngine {
             )
         }
 
+        val effectiveTerminal = lastTaken ?: lastMissed
+        if (effectiveTerminal != null) {
+            val status = if (effectiveTerminal.type == "taken") DoseSessionStatus.TAKEN else DoseSessionStatus.MISSED
+            return DoseSessionState(time, status, effectiveTerminal, medsFrom(effectiveTerminal, scheduleMeds), scheduledDate = scheduledDate)
+        }
+
+        val latest = sessionEvents.last()
         val status = when (latest.type) {
-            "taken" -> DoseSessionStatus.TAKEN
-            "missed" -> DoseSessionStatus.MISSED
             "snoozed" -> DoseSessionStatus.SNOOZED
             "alarm" -> DoseSessionStatus.PENDING
+            "undo_taken", "undo_missed" -> DoseSessionStatus.PENDING
             else -> DoseSessionStatus.UNKNOWN
         }
         return DoseSessionState(time, status, latest, medsFrom(latest, scheduleMeds), scheduledDate = scheduledDate)
