@@ -69,6 +69,6 @@ object AlertOutbox {
     private fun save(c: Context, alerts: List<PendingAlert>) {
         val a = JSONArray()
         alerts.forEach { a.put(JSONObject().put("id", it.id).put("topic", it.topic).put("title", it.title).put("message", it.message).put("createdAt", it.createdAt)) }
-        prefs(c).edit().putString(KEY, a.toString()).apply()
+        prefs(c).edit().putString(KEY, a.toString()).commit()
     }
 }
