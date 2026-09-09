@@ -9,7 +9,7 @@ import java.time.LocalDate
 /** Optional operational scheduling constraints. Prescription details are never inferred. */
 data class ProgramRule(
     val medicationId: String,
-    val weekdays: Set<Int> = emptySet(), // java.time DayOfWeek values 1..7; empty = every day
+    val weekdays: Set<Int> = emptySet(),
     val startDate: String? = null,
     val endDate: String? = null,
     val everyNDays: Int = 1,
@@ -20,6 +20,7 @@ data class ProgramRule(
 object ProgramRuleStore {
     private const val PREFS = "dosefolk_program_rules"
     private const val KEY = "rules"
+    private const val STAMP_PREFIX = "stamp|"
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     fun get(c: Context, medicationId: String): ProgramRule =
@@ -27,12 +28,33 @@ object ProgramRuleStore {
 
     @Synchronized
     fun save(c: Context, rule: ProgramRule) {
-        val normalized = rule.copy(
-            weekdays = rule.weekdays.filter { it in 1..7 }.toSet(),
-            everyNDays = rule.everyNDays.coerceAtLeast(1)
-        )
-        persist(c, listOf(normalized) + load(c).filterNot { it.medicationId == rule.medicationId })
-        AlarmScheduler.scheduleAll(c, Store.load(c))
+        val normalized = normalize(rule)
+        val before = get(c, normalized.medicationId)
+        persist(c, listOf(normalized) + load(c).filterNot { it.medicationId == normalized.medicationId })
+        AlarmScheduler.scheduleAll(c, Store.load(c), observeProgramChanges = false)
+        if (before != normalized) {
+            val now = System.currentTimeMillis()
+            prefs(c).edit().putLong(STAMP_PREFIX + normalized.medicationId, now).commit()
+            val medName = Store.load(c).firstOrNull { it.id == normalized.medicationId }?.name ?: "Program"
+            val carrier = Medication(normalized.medicationId, medName, toJson(normalized).toString(), emptyList())
+            Ntfy.sendEvent(c, "program_rule_updated", "program", listOf(carrier))
+        }
+    }
+
+    @Synchronized
+    fun applyRemote(c: Context, event: DoseEvent) {
+        if (event.type != "program_rule_updated") return
+        val carrier = event.medications.firstOrNull() ?: return
+        if (carrier.id.isBlank() || carrier.dose.isBlank()) return
+        val rule = runCatching { fromJson(JSONObject(carrier.dose)) }.getOrNull() ?: return
+        if (rule.medicationId != carrier.id) return
+        val p = prefs(c)
+        val lastStamp = p.getLong(STAMP_PREFIX + rule.medicationId, 0L)
+        if (event.timestamp in 1 until lastStamp) return
+        val normalized = normalize(rule)
+        persist(c, listOf(normalized) + load(c).filterNot { it.medicationId == normalized.medicationId })
+        p.edit().putLong(STAMP_PREFIX + normalized.medicationId, event.timestamp).commit()
+        AlarmScheduler.scheduleAll(c, Store.load(c), observeProgramChanges = false)
     }
 
     fun isActiveOn(c: Context, medicationId: String, date: LocalDate): Boolean {
@@ -66,42 +88,49 @@ object ProgramRuleStore {
             val names = r.weekdays.sorted().map { DayOfWeek.of(it).name.take(3) }
             parts += names.joinToString(" · ")
         }
-        if (!r.routineLabel.isNullOrBlank()) parts += r.routineLabel
+        if (r.routineLabel.isNotBlank()) parts += r.routineLabel
         return parts.joinToString(" • ")
+    }
+
+    private fun normalize(rule: ProgramRule) = rule.copy(
+        weekdays = rule.weekdays.filter { it in 1..7 }.toSet(),
+        everyNDays = rule.everyNDays.coerceAtLeast(1)
+    )
+
+    private fun toJson(r: ProgramRule) = JSONObject()
+        .put("medicationId", r.medicationId)
+        .put("weekdays", JSONArray(r.weekdays.sorted()))
+        .put("startDate", r.startDate ?: "")
+        .put("endDate", r.endDate ?: "")
+        .put("everyNDays", r.everyNDays)
+        .put("anchorDate", r.anchorDate ?: "")
+        .put("routineLabel", r.routineLabel)
+
+    private fun fromJson(o: JSONObject): ProgramRule {
+        val days = o.optJSONArray("weekdays") ?: JSONArray()
+        return ProgramRule(
+            medicationId = o.optString("medicationId"),
+            weekdays = (0 until days.length()).map { days.optInt(it) }.filter { it in 1..7 }.toSet(),
+            startDate = o.optString("startDate").takeIf { it.isNotBlank() },
+            endDate = o.optString("endDate").takeIf { it.isNotBlank() },
+            everyNDays = o.optInt("everyNDays", 1).coerceAtLeast(1),
+            anchorDate = o.optString("anchorDate").takeIf { it.isNotBlank() },
+            routineLabel = o.optString("routineLabel")
+        )
     }
 
     private fun load(c: Context): List<ProgramRule> {
         val raw = prefs(c).getString(KEY, "[]") ?: "[]"
         return runCatching {
             val a = JSONArray(raw)
-            (0 until a.length()).mapNotNull { i ->
-                val o = a.optJSONObject(i) ?: return@mapNotNull null
-                val days = o.optJSONArray("weekdays") ?: JSONArray()
-                ProgramRule(
-                    medicationId = o.optString("medicationId"),
-                    weekdays = (0 until days.length()).map { days.optInt(it) }.filter { it in 1..7 }.toSet(),
-                    startDate = o.optString("startDate").takeIf { it.isNotBlank() },
-                    endDate = o.optString("endDate").takeIf { it.isNotBlank() },
-                    everyNDays = o.optInt("everyNDays", 1).coerceAtLeast(1),
-                    anchorDate = o.optString("anchorDate").takeIf { it.isNotBlank() },
-                    routineLabel = o.optString("routineLabel")
-                )
-            }.filter { it.medicationId.isNotBlank() }
+            (0 until a.length()).mapNotNull { i -> a.optJSONObject(i)?.let(::fromJson) }
+                .filter { it.medicationId.isNotBlank() }
         }.getOrDefault(emptyList())
     }
 
     private fun persist(c: Context, rules: List<ProgramRule>) {
         val a = JSONArray()
-        rules.forEach { r ->
-            a.put(JSONObject()
-                .put("medicationId", r.medicationId)
-                .put("weekdays", JSONArray(r.weekdays.sorted()))
-                .put("startDate", r.startDate ?: "")
-                .put("endDate", r.endDate ?: "")
-                .put("everyNDays", r.everyNDays)
-                .put("anchorDate", r.anchorDate ?: "")
-                .put("routineLabel", r.routineLabel))
-        }
-        prefs(c).edit().putString(KEY, a.toString()).apply()
+        rules.forEach { a.put(toJson(it)) }
+        prefs(c).edit().putString(KEY, a.toString()).commit()
     }
 }
