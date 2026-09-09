@@ -47,11 +47,8 @@ object SmartEscalation {
     private fun scheduleStage(c: Context, time: String, scheduledDate: String, stage: Int, trigger: Long) {
         val alarmManager = c.getSystemService(AlarmManager::class.java)
         val pi = pendingIntent(c, time, scheduledDate, stage)
-        try {
-            alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pi)
-        } catch (_: SecurityException) {
-            alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pi)
-        }
+        try { alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pi) }
+        catch (_: SecurityException) { alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, trigger, pi) }
     }
 
     private fun pendingIntent(c: Context, time: String, scheduledDate: String, stage: Int): PendingIntent {
@@ -60,9 +57,7 @@ object SmartEscalation {
             .putExtra("scheduledDate", scheduledDate)
             .putExtra("stage", stage)
         return PendingIntent.getBroadcast(
-            c,
-            ("dosefolk-escalation-$scheduledDate-$time-$stage").hashCode(),
-            intent,
+            c, ("dosefolk-escalation-$scheduledDate-$time-$stage").hashCode(), intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
     }
@@ -79,9 +74,7 @@ class EscalationReceiver : BroadcastReceiver() {
                 SyncEngine.pullBlocking(c.applicationContext)
                 val date = runCatching { LocalDate.parse(scheduledDate) }.getOrDefault(LocalDate.now())
                 val state = DoseStateEngine.stateForTime(c, time, date)
-                val unresolved = state.status == DoseSessionStatus.PENDING ||
-                    state.status == DoseSessionStatus.SNOOZED ||
-                    state.status == DoseSessionStatus.CONFLICT
+                val unresolved = state.status == DoseSessionStatus.PENDING || state.status == DoseSessionStatus.SNOOZED || state.status == DoseSessionStatus.CONFLICT
                 if (!unresolved) return@Thread
 
                 val baton = CareBatonStore.active(c, time, scheduledDate)
@@ -101,16 +94,13 @@ class EscalationReceiver : BroadcastReceiver() {
                 } else {
                     if (medNames.isBlank()) "The $time medication session is still unresolved." else "$time • $medNames is still unresolved."
                 }
-                Ntfy.sendTo(target.topic, title, body)
+                Ntfy.sendTo(c, target.topic, title, body)
                 AttentionBudget.mark(c, time, target.topic, stage, scheduledDate)
-            } finally {
-                pendingResult.finish()
-            }
+            } finally { pendingResult.finish() }
         }.start()
     }
 }
 
-/** Prevent duplicate caregiver notifications for the same dose/stage/date. */
 object AttentionBudget {
     private const val PREFS = "dosefolk_attention_budget"
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
