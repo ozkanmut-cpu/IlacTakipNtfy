@@ -10,12 +10,6 @@ import java.time.Instant
 import java.time.ZoneId
 import kotlin.concurrent.thread
 
-/**
- * Owns the ntfy catch-up cursor. The cursor advances only after the full batch,
- * including reconciliation, completes successfully. If the process dies midway,
- * the old cursor remains and the batch is replayed; eventId/receipt guards make
- * that replay idempotent.
- */
 object SyncCheckpointStore {
     private const val PREFS = "dosefolk_sync"
     private const val LAST_ID = "last_ntfy_id"
@@ -33,14 +27,6 @@ object SyncCheckpointStore {
     }
 }
 
-/**
- * Pure cursor reducer for streamed ntfy JSON lines.
- *
- * A malformed envelope must never move the cursor because we do not know which
- * ntfy message it represented. A syntactically valid `message` envelope may move
- * the cursor even if its inner payload is malformed or unsupported; otherwise a
- * poison message would be replayed forever and block useful catch-up progress.
- */
 object NtfyBatchCursor {
     fun envelopeOrNull(line: String): JSONObject? = runCatching { JSONObject(line) }.getOrNull()
 
@@ -89,7 +75,8 @@ object SyncEngine {
                         val event = parseDoseEvent(payload) ?: return@forEach
                         if (!IncomingEventGuard.shouldProcess(context, event)) return@forEach
 
-                        // Persist before any derived side effect so a crash cannot lose the event.
+                        // Merge the remote logical clock before any later local event can be created.
+                        EventStore.observeRevision(context, event.revision)
                         EventStore.append(context, event.copy(syncState = "synced"))
                         OwnerScopeStore.remember(context, event)
                         val ownerId = event.ownerId.ifBlank { event.actorTopic }
@@ -98,14 +85,10 @@ object SyncEngine {
                         }
                         if (ownerId.isBlank() || ownerId == OwnerScopeStore.localOwnerId(context)) StockEngine.applyEvent(context, event)
                         applyRemoteState(context, event)
-
-                        // Receipt is last: if we crash before this point, replay is intentionally allowed.
                         RemoteEventReceiptStore.markProcessed(context, event.eventId)
                     }
                 }
 
-                // Reconcile only after the whole catch-up batch so later terminal events
-                // win over stale snooze/undo rows. Cursor commit is the final durable step.
                 SnoozeRecovery.reconcileToday(context)
                 UndoRecovery.recoverCurrent(context)
                 SyncCheckpointStore.commitSuccessfulBatch(context, newestId)
@@ -113,7 +96,6 @@ object SyncEngine {
                 true
             }
         } catch (_: Exception) {
-            // Deliberately do not advance LAST_ID here. Persisted events are replay-safe.
             false
         }
     }
