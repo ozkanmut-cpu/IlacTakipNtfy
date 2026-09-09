@@ -58,6 +58,24 @@ object CareBatonStore {
         resumeIfUnresolved(c, time, scheduledDate)
     }
 
+    /**
+     * Applies a remote release with crash-safe ordering.
+     *
+     * We resume escalation before removing the claim. If the process dies after
+     * scheduling but before the durable claim removal, the same event is replayed
+     * and scheduling safely converges. Once removal is committed, a replay sees no
+     * claim and becomes a no-op, so a successful release cannot keep resetting the
+     * escalation timer or AttentionBudget.
+     */
+    @Synchronized fun applyRemoteRelease(c: Context, event: DoseEvent) {
+        val scheduledDate = event.scheduledDate.ifBlank { LocalDate.now().toString() }
+        val key = doseKey(event.time, scheduledDate)
+        val current = load(c)
+        if (current.none { it.doseKey == key }) return
+        resumeIfUnresolved(c, event.time, scheduledDate)
+        save(c, current.filterNot { it.doseKey == key })
+    }
+
     @Synchronized fun resolve(c: Context, time: String, scheduledDate: String = LocalDate.now().toString()) {
         save(c, load(c).filterNot { it.doseKey == doseKey(time, scheduledDate) })
     }
@@ -108,7 +126,8 @@ object CareBatonStore {
                     .put("scheduledDate", it.scheduledDate)
             )
         }
-        prefs(c).edit().putString(KEY, a.toString()).apply()
+        // Synchronous durability matters for replay ordering around remote release.
+        prefs(c).edit().putString(KEY, a.toString()).commit()
     }
 }
 
