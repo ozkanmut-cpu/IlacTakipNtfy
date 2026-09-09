@@ -6,6 +6,7 @@ import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URLEncoder
 import java.net.URL
+import java.time.LocalDate
 import java.util.UUID
 
 data class PendingAlert(
@@ -16,6 +17,8 @@ data class PendingAlert(
     val createdAt: Long,
     val inFlight: Boolean = false
 )
+
+data class EscalationSessionKey(val scheduledDate: String, val time: String)
 
 internal object AlertDeliveryProbe {
     fun containsSequence(lines: Sequence<String>, sequenceId: String): Boolean {
@@ -32,6 +35,7 @@ object AlertOutbox {
     private const val PREFS = "dosefolk_alert_outbox"
     private const val KEY = "alerts"
     private const val FLUSH_BATCH = 10
+    private const val STALE_ESCALATION_AMBIGUITY_MS = 10L * 60L * 60L * 1000L
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     /**
@@ -81,6 +85,22 @@ object AlertOutbox {
         all.takeLast(FLUSH_BATCH).asReversed()
 
     /**
+     * A very old in-flight escalation is delivery-ambiguous: the original POST may
+     * have succeeded but the ntfy cache may no longer be able to prove it. Re-sending
+     * that old stage can create a duplicate hours later. Instead, discard the stale
+     * stage and rebuild escalation from the dose's current state.
+     */
+    internal fun staleEscalationSession(alert: PendingAlert, now: Long = System.currentTimeMillis()): EscalationSessionKey? {
+        if (!alert.inFlight || now - alert.createdAt < STALE_ESCALATION_AMBIGUITY_MS) return null
+        val parts = alert.id.split('|')
+        if (parts.size < 5 || parts[0] != "escalation") return null
+        val scheduledDate = parts[1]
+        val time = parts[2]
+        if (scheduledDate.isBlank() || time.isBlank()) return null
+        return EscalationSessionKey(scheduledDate, time)
+    }
+
+    /**
      * Crash-safe alert delivery:
      * 1) mark a row in-flight durably before POST;
      * 2) POST with a deterministic ntfy sequence ID;
@@ -96,6 +116,15 @@ object AlertOutbox {
         val batchIds = batchForFlush(all).map { it.id }
         for (id in batchIds) {
             var alert = all.firstOrNull { it.id == id } ?: continue
+
+            val staleSession = staleEscalationSession(alert)
+            if (staleSession != null) {
+                all = all.filterNot { it.id == alert.id }
+                save(c, all)
+                recoverEscalationFromCurrentState(c, staleSession)
+                all = load(c)
+                continue
+            }
 
             if (alert.inFlight) {
                 when (probeDelivered(alert)) {
@@ -127,6 +156,16 @@ object AlertOutbox {
             save(c, all)
         }
         return all.isEmpty()
+    }
+
+    private fun recoverEscalationFromCurrentState(c: Context, session: EscalationSessionKey) {
+        val date = runCatching { LocalDate.parse(session.scheduledDate) }.getOrNull() ?: return
+        val state = DoseStateEngine.stateForTime(c, session.time, date)
+        val unresolved = state.status == DoseSessionStatus.PENDING ||
+            state.status == DoseSessionStatus.SNOOZED ||
+            state.status == DoseSessionStatus.CONFLICT
+        if (unresolved) SmartEscalation.schedule(c, session.time, session.scheduledDate)
+        else dropEscalationSession(c, session.time, session.scheduledDate)
     }
 
     private enum class ProbeResult { DELIVERED, NOT_FOUND, UNKNOWN }
