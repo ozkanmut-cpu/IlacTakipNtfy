@@ -45,6 +45,7 @@ object PairingLifecycle {
         PermissionPolicy.clearPeer(c, topic)
         RevocationCleanup.clearPeer(c, topic)
         MedicationMetaStore.clearRemoteOwner(c, topic)
+        StockEngine.clearRemoteOwner(c, topic)
         if (dropOutbox) AlertOutbox.dropTopic(c, topic)
     }
 }
