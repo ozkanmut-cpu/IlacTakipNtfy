@@ -25,6 +25,7 @@ android {
         jvmTarget = "17"
     }
 
+    testOptions { unitTests.isIncludeAndroidResources = true }
     buildFeatures { compose = true }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
 }
@@ -42,4 +43,8 @@ dependencies {
     implementation("com.google.android.gms:play-services-code-scanner:16.1.0")
     implementation("com.google.zxing:core:3.5.3")
     debugImplementation("androidx.compose.ui:ui-tooling")
+
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("androidx.test:core:1.6.1")
 }
