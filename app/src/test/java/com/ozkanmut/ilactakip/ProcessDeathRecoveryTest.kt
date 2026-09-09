@@ -18,12 +18,14 @@ import java.time.LocalDate
 @RunWith(RobolectricTestRunner::class)
 class ProcessDeathRecoveryTest {
     private lateinit var c: Context
+    private var nextRevision = 0L
     private val pendingMed = Medication("med-pending", "Pending Med", "1 tablet", listOf("08:00"))
     private val snoozedMed = Medication("med-snooze", "Snoozed Med", "1 tablet", listOf("09:00"))
 
     @Before
     fun setUp() {
         c = ApplicationProvider.getApplicationContext()
+        nextRevision = 0L
         WorkManagerTestInitHelper.initializeTestWorkManager(c)
         listOf(
             "ilac_takip",
@@ -47,19 +49,22 @@ class ProcessDeathRecoveryTest {
         med: Medication,
         syncState: String = "synced",
         snoozeUntil: Long = 0L
-    ) = DoseEvent(
-        eventId = id,
-        type = type,
-        time = time,
-        actor = "Tester",
-        actorTopic = "tester-topic",
-        timestamp = System.currentTimeMillis(),
-        medications = listOf(med),
-        syncState = syncState,
-        revision = System.currentTimeMillis(),
-        scheduledDate = LocalDate.now().toString(),
-        snoozeUntil = snoozeUntil
-    )
+    ): DoseEvent {
+        val revision = ++nextRevision
+        return DoseEvent(
+            eventId = id,
+            type = type,
+            time = time,
+            actor = "Tester",
+            actorTopic = "tester-topic",
+            timestamp = System.currentTimeMillis() + revision,
+            medications = listOf(med),
+            syncState = syncState,
+            revision = revision,
+            scheduledDate = LocalDate.now().toString(),
+            snoozeUntil = snoozeUntil
+        )
+    }
 
     private fun escalation(time: String, stage: Int): PendingIntent? {
         val date = LocalDate.now().toString()
