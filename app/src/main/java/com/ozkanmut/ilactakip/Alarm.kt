@@ -64,7 +64,14 @@ object AlarmScheduler {
         val alarmManager = c.getSystemService(AlarmManager::class.java)
         val names = meds.joinToString("|#|") { med -> med.name + if (med.dose.isBlank()) "" else " (${med.dose})" }
         val ids = meds.joinToString("|#|") { it.id }
-        val intent = Intent(c, AlarmReceiver::class.java).putExtra("time", time).putExtra("names", names).putExtra("ids", ids).putExtra("isSnooze", isSnooze).putExtra("scheduledDate", scheduledDate)
+        val deliveryId = "$requestKey|$triggerAtMillis"
+        val intent = Intent(c, AlarmReceiver::class.java)
+            .putExtra("time", time)
+            .putExtra("names", names)
+            .putExtra("ids", ids)
+            .putExtra("isSnooze", isSnooze)
+            .putExtra("scheduledDate", scheduledDate)
+            .putExtra("deliveryId", deliveryId)
         val pendingIntent = PendingIntent.getBroadcast(c, requestKey.hashCode(), intent, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         try { alarmManager.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent) }
         catch (_: SecurityException) { alarmManager.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, triggerAtMillis, pendingIntent) }
@@ -117,6 +124,13 @@ class AlarmReceiver : BroadcastReceiver() {
         val scheduledDate = i.getStringExtra("scheduledDate") ?: LocalDate.now().toString()
         val isSnooze = i.getBooleanExtra("isSnooze", false)
         if (!AlarmDeliveryGuard.shouldDeliver(c, time, scheduledDate, ids, isSnooze)) { AlarmScheduler.scheduleAll(c, Store.load(c)); return }
+
+        val stored = Store.load(c).associateBy { it.id }
+        val alarmMeds = ids.mapNotNull { stored[it] }.ifEmpty { names.mapIndexed { index, label -> Medication("legacy-$index", label, "", listOf(time)) } }
+        val deliveryId = i.getStringExtra("deliveryId")?.takeIf { it.isNotBlank() }
+            ?: "legacy-alarm|$scheduledDate|$time|${if (isSnooze) "snooze" else "regular"}|${ids.sorted().joinToString(",")}"        
+        if (!Ntfy.sendEvent(c, "alarm", time, alarmMeds, scheduledDate, eventId = deliveryId)) return
+
         val channel = "medication"
         val notificationManager = c.getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= 26) notificationManager.createNotificationChannel(NotificationChannel(channel, I18n.t("channel"), NotificationManager.IMPORTANCE_HIGH))
@@ -124,9 +138,6 @@ class AlarmReceiver : BroadcastReceiver() {
         val text = names.joinToString(", ")
         val notification = NotificationCompat.Builder(c, channel).setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("$time • ${I18n.t("med_count", names.size)}").setContentText(text).setStyle(NotificationCompat.BigTextStyle().bigText(text)).setPriority(NotificationCompat.PRIORITY_MAX).setAutoCancel(true).addAction(0,I18n.t("all_taken"),action("taken")).addAction(0,I18n.t("snooze30"),action("snooze")).addAction(0,I18n.t("notif_missed"),action("missed")).build()
         notificationManager.notify(("group-$scheduledDate-$time").hashCode(), notification)
-        val stored = Store.load(c).associateBy { it.id }
-        val alarmMeds = ids.mapNotNull { stored[it] }.ifEmpty { names.mapIndexed { index, label -> Medication("legacy-$index", label, "", listOf(time)) } }
-        Ntfy.sendEvent(c, "alarm", time, alarmMeds, scheduledDate)
         SmartEscalation.schedule(c, time, scheduledDate)
         AlarmScheduler.scheduleAll(c, Store.load(c))
     }
@@ -169,20 +180,30 @@ object Ntfy {
     private val terminalTypes = setOf("taken", "missed", "conflict_resolved_taken", "conflict_resolved_missed")
     private val eventLocks = ConcurrentHashMap<String, Any>()
 
-    fun sendEvent(c: Context, type: String, time: String, meds: List<Medication>, scheduledDate: String = LocalDate.now().toString(), snoozeUntil: Long = 0L) {
+    fun sendEvent(
+        c: Context,
+        type: String,
+        time: String,
+        meds: List<Medication>,
+        scheduledDate: String = LocalDate.now().toString(),
+        snoozeUntil: Long = 0L,
+        eventId: String? = null
+    ): Boolean {
+        val ownerId = OwnerScopeStore.ownerFor(c, meds)
+        val meta = meds.mapNotNull { med -> if (ownerId == OwnerScopeStore.localOwnerId(c)) MedicationMetaStore.get(c, med.id) else MedicationMetaStore.remote(c, ownerId, med.id) }
+        val event = DoseEvent(eventId ?: UUID.randomUUID().toString(), type, time, Store.myName(c), Store.topic(c),System.currentTimeMillis(), meds, "pending", EventStore.nextRevision(c), scheduledDate, snoozeUntil, ownerId, meta)
+        if (!EventStore.appendIfAbsent(c, event)) return false
+
         when {
             type in terminalTypes -> { AlarmScheduler.cancelSnooze(c, time, scheduledDate); SmartEscalation.cancel(c, time, scheduledDate); CareBatonStore.resolve(c, time, scheduledDate) }
             type == "snoozed" -> SmartEscalation.cancel(c, time, scheduledDate)
         }
-        val ownerId = OwnerScopeStore.ownerFor(c, meds)
-        val meta = meds.mapNotNull { med -> if (ownerId == OwnerScopeStore.localOwnerId(c)) MedicationMetaStore.get(c, med.id) else MedicationMetaStore.remote(c, ownerId, med.id) }
-        val event = DoseEvent(UUID.randomUUID().toString(), type, time, Store.myName(c), Store.topic(c),System.currentTimeMillis(), meds, "pending", EventStore.nextRevision(c), scheduledDate, snoozeUntil, ownerId, meta)
-        EventStore.append(c, event)
         OwnerScopeStore.remember(c, event)
         StockEngine.applyEvent(c, event)
         UndoRecovery.recoverEvent(c, event)
         thread { deliverEventBlocking(c.applicationContext, event) }
         DosefolkSyncScheduler.kick(c)
+        return true
     }
 
     fun retryPending(c: Context) { DosefolkSyncScheduler.kick(c) }
