@@ -73,18 +73,17 @@ object SyncEngine {
                         val payload = runCatching { JSONObject(envelope.optString("message")) }.getOrNull() ?: return@forEach
                         if (StockSync.applyIncoming(context, payload)) return@forEach
                         if (!IncomingEventGuard.supportedDosePayload(payload)) return@forEach
-                        val event = parseDoseEvent(payload) ?: return@forEach
-                        if (!IncomingEventGuard.shouldProcess(context, event)) return@forEach
+                        val incoming = parseDoseEvent(payload) ?: return@forEach
+                        if (!IncomingEventGuard.shouldProcess(context, incoming)) return@forEach
 
-                        EventStore.observeRevision(context, event.revision)
-                        EventStore.append(context, event.copy(syncState = "synced"))
+                        val event = persistCanonicalIncoming(context, incoming)
                         OwnerScopeStore.remember(context, event)
                         val ownerId = event.ownerId.ifBlank { event.actorTopic }
                         if (ownerId.isNotBlank() && ownerId != OwnerScopeStore.localOwnerId(context)) {
                             event.medicationMeta.forEach { MedicationMetaStore.saveRemote(context, ownerId, it) }
                         }
                         if (ownerId.isBlank() || ownerId == OwnerScopeStore.localOwnerId(context)) {
-                            PrnUsageLedger.observe(context,event)
+                            PrnUsageLedger.observe(context, event)
                             StockEngine.applyEvent(context, event)
                         }
                         applyRemoteState(context, event)
@@ -102,6 +101,19 @@ object SyncEngine {
         } catch (_: Exception) {
             false
         }
+    }
+
+    /**
+     * The first durable payload for an eventId is canonical. If a crash happened
+     * after EventStore persistence but before derived side effects/receipt, replay
+     * is allowed to finish those idempotent side effects using the stored event.
+     * A later replay with the same id but altered payload/revision must not mutate
+     * state or advance the local Lamport clock.
+     */
+    internal fun persistCanonicalIncoming(c: Context, incoming: DoseEvent): DoseEvent {
+        val stored = incoming.copy(syncState = "synced")
+        if (EventStore.appendIfAbsent(c, stored)) return stored
+        return EventStore.load(c).firstOrNull { it.eventId == incoming.eventId } ?: stored
     }
 
     private fun parseDoseEvent(o: JSONObject): DoseEvent? {
