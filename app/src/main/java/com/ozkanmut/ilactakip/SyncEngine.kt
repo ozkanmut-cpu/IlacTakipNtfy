@@ -98,6 +98,7 @@ object SyncEngine {
             "program_rule_updated" -> ProgramRuleStore.applyRemote(c,event)
             "capability_edit_program_granted", "capability_edit_program_revoked",
             "capability_edit_stock_granted", "capability_edit_stock_revoked" -> RemoteCapabilityStore.applyEvent(c,event)
+            "circle_revoked" -> PairingLifecycle.applyRemoteRevoke(c,event)
         }
     }
 }
