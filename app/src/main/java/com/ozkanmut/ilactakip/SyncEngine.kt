@@ -43,6 +43,7 @@ object SyncEngine {
                         val ntfyId = envelope.optString("id"); if (ntfyId.isNotBlank()) newestId = ntfyId
                         val payload = runCatching { JSONObject(envelope.optString("message")) }.getOrNull() ?: return@forEach
                         val event = parseDoseEvent(payload) ?: return@forEach
+                        if (!PermissionPolicy.acceptRemote(context, event)) return@forEach
                         EventStore.append(context, event.copy(syncState = "synced"))
                         StockEngine.applyEvent(context, event)
                         applyRemoteState(context, event)
