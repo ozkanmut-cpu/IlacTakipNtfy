@@ -42,7 +42,10 @@ object DoseStateEngine {
     private fun reduce(time: String, events: List<DoseEvent>, scheduleMeds: List<Medication>, scheduledDate: String): DoseSessionState {
         if (events.isEmpty()) return DoseSessionState(time, DoseSessionStatus.UNKNOWN, null, scheduleMeds, scheduledDate = scheduledDate)
         val sessionEvents = events.filter { it.type in stateTypes }
-        if (sessionEvents.isEmpty()) return DoseSessionState(time, DoseSessionStatus.UNKNOWN, events.firstOrNull(), scheduleMeds, scheduledDate = scheduledDate)
+        if (sessionEvents.isEmpty()) {
+            val latest = events.maxWithOrNull(DoseEventOrder.global)
+            return DoseSessionState(time, DoseSessionStatus.UNKNOWN, latest, latest?.let { medsFrom(it, scheduleMeds) } ?: scheduleMeds, scheduledDate = scheduledDate)
+        }
 
         val resolutions = sessionEvents.filter { it.type == "conflict_resolved_taken" || it.type == "conflict_resolved_missed" }
         if (resolutions.isNotEmpty()) {
