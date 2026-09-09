@@ -16,7 +16,8 @@ data class DoseEvent(
     val medications: List<Medication>,
     val syncState: String = "pending",
     val revision: Long = 0L,
-    val scheduledDate: String = ""
+    val scheduledDate: String = "",
+    val snoozeUntil: Long = 0L
 )
 
 object EventStore {
@@ -64,11 +65,12 @@ object EventStore {
     }
 
     fun payload(event: DoseEvent): JSONObject = JSONObject()
-        .put("v", 5)
+        .put("v", 6)
         .put("eventId", event.eventId)
         .put("type", event.type)
         .put("time", event.time)
         .put("scheduledDate", event.scheduledDate)
+        .put("snoozeUntil", event.snoozeUntil)
         .put("actor", event.actor)
         .put("actorTopic", event.actorTopic)
         .put("timestamp", event.timestamp)
@@ -85,12 +87,7 @@ object EventStore {
         val medsJson = o.optJSONArray("medications") ?: JSONArray()
         val meds = (0 until medsJson.length()).mapNotNull { index ->
             medsJson.optJSONObject(index)?.let { med ->
-                Medication(
-                    id = med.optString("id"),
-                    name = med.optString("name"),
-                    dose = med.optString("dose"),
-                    times = emptyList()
-                )
+                Medication(med.optString("id"), med.optString("name"), med.optString("dose"), emptyList())
             }
         }
         val timestamp = o.optLong("timestamp")
@@ -107,7 +104,8 @@ object EventStore {
             medications = meds,
             syncState = o.optString("syncState", "pending"),
             revision = o.optLong("revision", 0L),
-            scheduledDate = o.optString("scheduledDate", fallbackDate).ifBlank { fallbackDate }
+            scheduledDate = o.optString("scheduledDate", fallbackDate).ifBlank { fallbackDate },
+            snoozeUntil = o.optLong("snoozeUntil", 0L)
         )
     }
 }
