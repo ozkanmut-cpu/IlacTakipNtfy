@@ -69,7 +69,7 @@ object PrescriptionRecordStore {
         val old = load(c).toMutableList()
         records.forEach { incoming ->
             val keyIndex = old.indexOfFirst {
-                it.medicationName.normalizedName() == incoming.medicationName.normalizedName() &&
+                MedicationIdentity.same(it.medicationName, incoming.medicationName) &&
                     it.doseEndDate == incoming.doseEndDate &&
                     it.prescriptionNo == incoming.prescriptionNo
             }
@@ -84,16 +84,10 @@ object PrescriptionRecordStore {
     }
 
     fun due(c: Context, today: LocalDate = LocalDate.now()): List<PrescriptionRecord> =
-        load(c).filter { it.continuous && (it.eligibleDate()?.let { d -> !d.isAfter(today) } == true) }
-            .sortedBy { it.eligibleDate() }
+        PrescriptionLifecycle.due(c, today)
 
     fun upcoming(c: Context, today: LocalDate = LocalDate.now(), days: Long = 45): List<PrescriptionRecord> =
-        load(c).filter {
-            if (!it.continuous) false else {
-                val d = it.eligibleDate() ?: return@filter false
-                d.isAfter(today) && !d.isAfter(today.plusDays(days))
-            }
-        }.sortedBy { it.eligibleDate() }
+        PrescriptionLifecycle.upcoming(c, today, days)
 
     private fun load(c: Context): List<PrescriptionRecord> = runCatching {
         val a = JSONArray(prefs(c).getString(KEY, "[]") ?: "[]")
@@ -161,43 +155,76 @@ data class SgkImportRow(
 )
 
 object SgkMedicationParser {
-    private val dateRegex = Regex("\\b\\d{2}\\.\\d{2}\\.\\d{4}\\b")
-    private val codeRegex = Regex("^[A-Z0-9]{6,9}(?:\\s+.*)?$", RegexOption.IGNORE_CASE)
-    private val doseRegex = Regex("(?i)\\b\\d+\\s*x\\s*\\d+(?:[.,]\\d+)?\\b")
+    private val dateRegex = Regex("(?<!\\d)(\\d{1,2})\\s*[./-]\\s*(\\d{1,2})\\s*[./-]\\s*(\\d{4})(?!\\d)")
+    private val doseRegex = Regex("(?i)(?<!\\d)\\d+\\s*[x×]\\s*\\d+(?:[.,]\\d+)?(?!\\d)")
     private val periodRegex = Regex("(?i)\\b\\d+\\s*(?:Günde|Gunde|Haftada|Ayda|Yılda|Yilda|day|week|month|year)\\b")
     private val boxRegex = Regex("(?i)\\b(\\d{1,3})\\s*Adet\\b")
     private val strengthRegex = Regex("(?i)(\\d+(?:[.,/]\\d+)*)\\s*(MG|MCG|UG|U/ML|IU/ML|ML|GR|G|%)")
     private val formRegex = Regex("(?i)tablet|tb\\.?|kapsül|kapsul|capsule|neb|nebul|flakon|flk|damla|solusyon|solüsyon|enjeks|kalem|inhal|krem|jel|pomad|şurup|surup")
+    private val headerRegex = Regex("(?i)reçete|recete|ilaç adı|ilac adi|doz bitiş|doz bitis|eczane|doktor|sağlık tesisi|saglik tesisi")
 
     fun parse(text: String): List<SgkImportRow> {
-        val lines = text.replace('\u000c', '\n').lines().map { it.trim() }.filter { it.isNotBlank() }
+        val lines = normalizeOcr(text)
         val chunks = mutableListOf<MutableList<String>>()
         var current: MutableList<String>? = null
         lines.forEach { line ->
-            val startsRow = codeRegex.matches(line) && (dateRegex.containsMatchIn(line) || line.length <= 12)
-            if (startsRow && !line.contains("Reçete", true)) {
+            val code = extractPrescriptionCode(line)
+            val startsRow = code != null && !headerRegex.containsMatchIn(line)
+            if (startsRow) {
                 current = mutableListOf(line)
                 chunks += current!!
             } else current?.add(line)
         }
-        return chunks.mapNotNull(::parseChunk).distinctBy { "${it.prescriptionNo}|${it.medicationName.normalizedName()}|${it.doseEndDate}" }
+        return chunks.mapNotNull(::parseChunk)
+            .distinctBy { "${it.prescriptionNo}|${MedicationIdentity.canonical(it.medicationName)}|${it.doseEndDate}" }
+    }
+
+    private fun normalizeOcr(text: String): List<String> = text
+        .replace('\u000c', '\n')
+        .replace('×', 'x')
+        .lines()
+        .map { line ->
+            line.replace(Regex("[‐‑‒–—]"), "-")
+                .replace(Regex("\\s+"), " ")
+                .trim()
+        }
+        .filter { it.isNotBlank() }
+
+    private fun extractPrescriptionCode(line: String): String? {
+        if (headerRegex.containsMatchIn(line)) return null
+        val beforeDate = dateRegex.find(line)?.range?.first?.let { line.substring(0, it) } ?: line
+        val tokenArea = beforeDate.trim().take(24)
+        val compact = tokenArea.replace(Regex("[^A-Za-z0-9]"), "").uppercase()
+        if (compact.length !in 6..9) return null
+        if (!compact.any(Char::isLetter) || !compact.any(Char::isDigit)) return null
+        val residue = tokenArea.replace(Regex("[A-Za-z0-9 ._-]"), "")
+        if (residue.isNotBlank()) return null
+        return compact
+    }
+
+    private fun normalizeDate(m: MatchResult): String {
+        val d = m.groupValues[1].toIntOrNull() ?: return m.value
+        val month = m.groupValues[2].toIntOrNull() ?: return m.value
+        val year = m.groupValues[3].toIntOrNull() ?: return m.value
+        return String.format("%02d.%02d.%04d", d, month, year)
     }
 
     private fun parseChunk(lines: List<String>): SgkImportRow? {
         val text = lines.joinToString(" ").replace(Regex("\\s+"), " ").trim()
-        val dates = dateRegex.findAll(text).map { it.value }.toList()
+        val dates = dateRegex.findAll(text).map(::normalizeDate).toList()
         if (dates.size < 2) return null
-        val code = lines.first().split(Regex("\\s+")).firstOrNull().orEmpty()
+        val code = extractPrescriptionCode(lines.first()).orEmpty()
+        if (code.isBlank()) return null
         val rxDate = dates.first()
         val fillDate = if (dates.size >= 3) dates[dates.size - 2] else dates.first()
         val endDate = dates.last()
-        val dose = doseRegex.find(text)?.value?.replace(" ", "") ?: ""
+        val dose = doseRegex.find(text)?.value?.replace(" ", "")?.replace('×', 'x') ?: ""
         val period = periodRegex.find(text)?.value ?: ""
         val doseIndex = doseRegex.find(text)?.range?.first ?: text.length
         val box = boxRegex.findAll(text.substring(0, doseIndex)).lastOrNull()?.groupValues?.getOrNull(1)?.toIntOrNull()
         val name = extractMedicationName(lines, text).ifBlank { return null }
-        val endIndex = text.lastIndexOf(endDate)
-        val diagnosis = if (endIndex >= 0) text.substring(endIndex + endDate.length).trim().take(220) else ""
+        val endMatch = dateRegex.findAll(text).lastOrNull()
+        val diagnosis = if (endMatch != null) text.substring(endMatch.range.last + 1).trim().take(220) else ""
         val start = parseDate(fillDate)
         val end = parseDate(endDate)
         val duration = if (start != null && end != null) ChronoUnit.DAYS.between(start, end) + 1 else 0
@@ -219,7 +246,7 @@ object SgkMedicationParser {
         if (anchor >= 0) {
             val from = (anchor - 2).coerceAtLeast(0)
             val picked = lines.subList(from, (anchor + 1).coerceAtMost(lines.size))
-                .filterNot { dateRegex.containsMatchIn(it) || codeRegex.matches(it) || it.equals("Adet", true) }
+                .filterNot { dateRegex.containsMatchIn(it) || extractPrescriptionCode(it) != null || it.equals("Adet", true) || headerRegex.containsMatchIn(it) }
                 .joinToString(" ")
                 .replace(Regex("(?i)^(NAR|BENGİ|BENGI)\\s+"), "")
                 .trim()
@@ -334,7 +361,7 @@ fun PrescriptionTrackerScreen(c: Context, meds: List<Medication>, onMedsChanged:
                     val existing = Store.load(c).toMutableList()
                     val newMeds = mutableListOf<Medication>()
                     val records = importRows.map { row ->
-                        val matched = (existing + newMeds).firstOrNull { it.name.normalizedName() == row.medicationName.normalizedName() }
+                        val matched = (existing + newMeds).firstOrNull { MedicationIdentity.same(it.name, row.medicationName) }
                         val suggestion = MedicationSuggestionEngine.suggest(row.medicationName, row.raw)
                         val metaTemplate = MedicationMeta(
                             medicationId = "",
@@ -442,5 +469,4 @@ private fun formLabelForSgk(form: MedicationForm): String = when (form) {
 private val sgkDateFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy")
 private fun parseDate(value: String): LocalDate? = runCatching { LocalDate.parse(value, sgkDateFormatter) }.getOrNull()
 private fun formatDate(value: LocalDate): String = value.format(sgkDateFormatter)
-private fun String.normalizedName(): String = lowercase().replace(Regex("[^a-z0-9çğıöşü]+"), " ").trim()
 private fun pt(tr: String, en: String) = if (I18n.language() == "tr") tr else en
