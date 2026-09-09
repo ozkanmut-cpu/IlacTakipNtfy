@@ -1,5 +1,6 @@
 package com.ozkanmut.ilactakip
 
+import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
@@ -13,6 +14,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import java.time.LocalDate
+import java.util.concurrent.CountDownLatch
 
 @RunWith(RobolectricTestRunner::class)
 class AlarmActionEscalationTest {
@@ -45,6 +47,13 @@ class AlarmActionEscalationTest {
         .putExtra("names", med.name)
         .putExtra("ids", med.id)
         .putExtra("scheduledDate", date)
+
+    private fun alarmIntent(deliveryId: String = "alarm-delivery-$date") = Intent(c, AlarmReceiver::class.java)
+        .putExtra("time", "08:00")
+        .putExtra("names", "${med.name} (${med.dose})")
+        .putExtra("ids", med.id)
+        .putExtra("scheduledDate", date)
+        .putExtra("deliveryId", deliveryId)
 
     private fun pendingAlarm() {
         EventStore.append(c, DoseEvent(
@@ -149,6 +158,41 @@ class AlarmActionEscalationTest {
         assertEquals(first?.eventId, second?.eventId)
         assertEquals(first?.snoozeUntil, second?.snoozeUntil)
         assertEquals(1, EventStore.load(c).count { it.type == "snoozed" && it.time == "08:00" && it.scheduledDate == date })
+    }
+
+    @Test
+    fun terminalAction_clearsVisibleMedicationNotification() {
+        AlarmReceiver().onReceive(c, alarmIntent("visible-notification"))
+        val manager = c.getSystemService(NotificationManager::class.java)
+        assertEquals(1, manager.activeNotifications.count { it.id == ("group-$date-08:00").hashCode() })
+
+        ActionReceiver().onReceive(c, actionIntent("taken"))
+
+        assertEquals(0, manager.activeNotifications.count { it.id == ("group-$date-08:00").hashCode() })
+    }
+
+    @Test
+    fun appAndNotificationRace_createsOnlyOneTerminalFact() {
+        pendingAlarm()
+        val start = CountDownLatch(1)
+        val done = CountDownLatch(2)
+        val t1 = Thread {
+            start.await()
+            Ntfy.sendEvent(c, "taken", "08:00", listOf(med), date)
+            done.countDown()
+        }
+        val t2 = Thread {
+            start.await()
+            Ntfy.sendEvent(c, "missed", "08:00", listOf(med), date)
+            done.countDown()
+        }
+        t1.start(); t2.start(); start.countDown(); done.await()
+
+        val terminal = EventStore.load(c).filter {
+            it.time == "08:00" && it.scheduledDate == date && it.type in setOf("taken", "missed")
+        }
+        assertEquals(1, terminal.size)
+        assertTrue(DoseStateEngine.stateForTime(c, "08:00", LocalDate.now()).status in setOf(DoseSessionStatus.TAKEN, DoseSessionStatus.MISSED))
     }
 
     @Test
