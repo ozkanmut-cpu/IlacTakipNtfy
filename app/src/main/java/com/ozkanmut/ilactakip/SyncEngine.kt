@@ -75,7 +75,6 @@ object SyncEngine {
                         val event = parseDoseEvent(payload) ?: return@forEach
                         if (!IncomingEventGuard.shouldProcess(context, event)) return@forEach
 
-                        // Merge the remote logical clock before any later local event can be created.
                         EventStore.observeRevision(context, event.revision)
                         EventStore.append(context, event.copy(syncState = "synced"))
                         OwnerScopeStore.remember(context, event)
@@ -83,7 +82,10 @@ object SyncEngine {
                         if (ownerId.isNotBlank() && ownerId != OwnerScopeStore.localOwnerId(context)) {
                             event.medicationMeta.forEach { MedicationMetaStore.saveRemote(context, ownerId, it) }
                         }
-                        if (ownerId.isBlank() || ownerId == OwnerScopeStore.localOwnerId(context)) StockEngine.applyEvent(context, event)
+                        if (ownerId.isBlank() || ownerId == OwnerScopeStore.localOwnerId(context)) {
+                            PrnUsageLedger.observe(context,event)
+                            StockEngine.applyEvent(context, event)
+                        }
                         applyRemoteState(context, event)
                         RemoteEventReceiptStore.markProcessed(context, event.eventId)
                     }
