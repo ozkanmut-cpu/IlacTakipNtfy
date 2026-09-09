@@ -33,6 +33,9 @@ object PermissionPolicy {
     fun set(c: Context, topic: String, permission: CirclePermission, allowed: Boolean) {
         if (topic.isBlank()) return
         prefs(c).edit().putBoolean(key(topic, permission), allowed).commit()
+        if (permission == CirclePermission.EDIT_PROGRAM || permission == CirclePermission.EDIT_STOCK) {
+            CapabilitySync.publish(c, topic, permission, allowed)
+        }
     }
 
     fun acceptRemote(c: Context, event: DoseEvent): Boolean {
@@ -43,6 +46,8 @@ object PermissionPolicy {
             "snoozed" -> CirclePermission.SNOOZE
             "program_added", "program_updated", "program_deleted", "program_rule_updated" -> CirclePermission.EDIT_PROGRAM
             "stock_configured", "stock_adjusted", "stock_new_box" -> CirclePermission.EDIT_STOCK
+            "capability_edit_program_granted", "capability_edit_program_revoked",
+            "capability_edit_stock_granted", "capability_edit_stock_revoked" -> CirclePermission.VIEW
             else -> CirclePermission.VIEW
         }
         return allowed(c, event.actorTopic, permission)
