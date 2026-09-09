@@ -39,6 +39,19 @@ object EventStore {
         return next
     }
 
+    /**
+     * Lamport-style clock merge. After observing a remote event, the next local
+     * revision is guaranteed to be greater than the observed remote revision.
+     * This gives program edits a clock-skew-free causal order across devices.
+     */
+    @Synchronized
+    fun observeRevision(c: Context, remoteRevision: Long) {
+        if (remoteRevision <= 0L) return
+        val p = prefs(c)
+        val current = p.getLong(KEY_REVISION, 0L)
+        if (remoteRevision > current) p.edit().putLong(KEY_REVISION, remoteRevision).commit()
+    }
+
     @Synchronized
     fun append(c: Context, event: DoseEvent) {
         val current = load(c).toMutableList()
@@ -64,18 +77,6 @@ object EventStore {
         }.getOrDefault(emptyList())
     }
 
-    /**
-     * Retention is reliability-first, not a blind rolling window.
-     *
-     * - Never discard an unsent local event merely because history is busy.
-     * - Keep all events for today's dose sessions so conflict/undo/snooze state can
-     *   still be reconstructed even after a very large catch-up batch.
-     * - Fill the remaining normal history budget with the newest other events.
-     *
-     * The store may temporarily exceed MAX_EVENTS while there are many pending or
-     * same-day operational events. Once they are synced/age out, normal compaction
-     * brings the historical portion back to the bounded window.
-     */
     private fun compact(events: List<DoseEvent>): List<DoseEvent> {
         val today = LocalDate.now().toString()
         val protected = events.filter { it.syncState != "synced" || eventDate(it) == today }
