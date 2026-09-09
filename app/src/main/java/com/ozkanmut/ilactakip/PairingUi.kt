@@ -27,6 +27,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -38,6 +39,9 @@ import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.MultiFormatWriter
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.UUID
 
 private data class PairPayload(val topic: String, val name: String)
@@ -77,9 +81,20 @@ fun PairingCard(c: Context, people: List<Person>, save: (List<Person>) -> Unit) 
     var showQr by remember { mutableStateOf(false) }
     var scanMessage by remember { mutableStateOf<String?>(null) }
     var pendingRevoke by remember { mutableStateOf<Person?>(null) }
+    var rePairing by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
     val ownTopic = remember { Store.topic(c) }
     val payload = remember(ownTopic) { pairingPayload(c) }
     val qr = remember(payload) { qrBitmap(payload) }
+
+    fun finishPair(targetTopic: String) {
+        val updated = people + Person(UUID.randomUUID().toString(), name.trim(), targetTopic)
+        save(updated)
+        CircleInitialSync.publishToPeer(c, targetTopic)
+        name = ""
+        topic = ""
+        scanMessage = if (I18n.language() == "tr") "Circle'a eklendi; ilaç programı, kurallar, ayrıntılar ve stok senkron sırasına alındı." else "Added to Circle; medication program, rules, details, and stock were queued for sync."
+    }
 
     val scannerOptions = remember { GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).enableAutoZoom().build() }
     val scanner = remember { GmsBarcodeScanning.getClient(c, scannerOptions) }
@@ -114,18 +129,24 @@ fun PairingCard(c: Context, people: List<Person>, save: (List<Person>) -> Unit) 
             OutlinedTextField(name, { name = it }, label = { Text(if (I18n.language() == "tr") "Kişinin adı" else "Person name") }, modifier = Modifier.fillMaxWidth())
             OutlinedTextField(topic, { topic = it.trim() }, label = { Text(if (I18n.language() == "tr") "Topic kodu" else "Topic code") }, modifier = Modifier.fillMaxWidth())
             Button(
-                enabled = name.isNotBlank() && topic.isNotBlank() && topic != ownTopic && people.none { it.topic == topic },
+                enabled = !rePairing && name.isNotBlank() && topic.isNotBlank() && topic != ownTopic && people.none { it.topic == topic },
                 onClick = {
                     val targetTopic = topic.trim()
-                    val updated = people + Person(UUID.randomUUID().toString(), name.trim(), targetTopic)
-                    save(updated)
-                    CircleInitialSync.publishToPeer(c, targetTopic)
-                    name = ""
-                    topic = ""
-                    scanMessage = if (I18n.language() == "tr") "Circle'a eklendi; ilaç programı, kurallar, ayrıntılar ve stok senkron sırasına alındı." else "Added to Circle; medication program, rules, details, and stock were queued for sync."
+                    if (!RevokedPeerFence.isRevoked(c, targetTopic)) {
+                        finishPair(targetTopic)
+                    } else {
+                        rePairing = true
+                        scanMessage = if (I18n.language() == "tr") "Eski eşleşme kuyruğu güvenli şekilde temizleniyor…" else "Safely clearing the previous relationship backlog…"
+                        scope.launch {
+                            val ready = withContext(Dispatchers.IO) { PairingLifecycle.prepareRePair(c, targetTopic) }
+                            rePairing = false
+                            if (ready) finishPair(targetTopic)
+                            else scanMessage = if (I18n.language() == "tr") "Eski eşleşme kuyruğu doğrulanamadı. İnternet bağlantısını kontrol edip tekrar dene." else "The previous relationship backlog could not be verified. Check the connection and try again."
+                        }
+                    }
                 },
                 modifier = Modifier.fillMaxWidth()
-            ) { Text(if (I18n.language() == "tr") "Circle'a ekle" else "Add to Circle") }
+            ) { Text(if (I18n.language() == "tr") if (rePairing) "Kontrol ediliyor…" else "Circle'a ekle" else if (rePairing) "Checking…" else "Add to Circle") }
 
             scanMessage?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             if (topic.isNotBlank() && people.any { it.topic == topic }) Text(if (I18n.language() == "tr") "Bu kişi zaten Circle'da." else "This person is already in Circle.", style = MaterialTheme.typography.bodySmall)
