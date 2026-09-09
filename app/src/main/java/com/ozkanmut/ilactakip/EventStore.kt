@@ -65,7 +65,7 @@ object EventStore {
     }
 
     fun payload(event: DoseEvent): JSONObject = JSONObject()
-        .put("v", 6)
+        .put("v", 7)
         .put("eventId", event.eventId)
         .put("type", event.type)
         .put("time", event.time)
@@ -77,7 +77,7 @@ object EventStore {
         .put("revision", event.revision)
         .put("syncState", event.syncState)
         .put("medications", JSONArray(event.medications.map { med ->
-            JSONObject().put("id", med.id).put("name", med.name).put("dose", med.dose)
+            JSONObject().put("id", med.id).put("name", med.name).put("dose", med.dose).put("times", JSONArray(med.times))
         }))
 
     private fun toJson(event: DoseEvent): JSONObject = payload(event)
@@ -87,7 +87,11 @@ object EventStore {
         val medsJson = o.optJSONArray("medications") ?: JSONArray()
         val meds = (0 until medsJson.length()).mapNotNull { index ->
             medsJson.optJSONObject(index)?.let { med ->
-                Medication(med.optString("id"), med.optString("name"), med.optString("dose"), emptyList())
+                val times = med.optJSONArray("times") ?: JSONArray()
+                Medication(
+                    med.optString("id"), med.optString("name"), med.optString("dose"),
+                    (0 until times.length()).map { times.optString(it) }.filter { it.isNotBlank() }
+                )
             }
         }
         val timestamp = o.optLong("timestamp")
