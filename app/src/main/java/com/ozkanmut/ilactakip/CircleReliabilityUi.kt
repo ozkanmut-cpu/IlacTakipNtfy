@@ -12,6 +12,7 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -32,6 +33,7 @@ import java.time.format.DateTimeFormatter
 fun CircleReliabilityCard(c: Context, people: List<Person>, externalRefresh: Int, onChanged: () -> Unit) {
     var localRefresh by remember { mutableIntStateOf(0) }
     var showDigest by remember { mutableStateOf(false) }
+    var showPermissions by remember { mutableStateOf(false) }
     val active = remember(externalRefresh, localRefresh) { TemporaryCareStore.active(c) }
     val receipt = remember(externalRefresh, localRefresh) { OfflineTrustReceipt.snapshot(c) }
     val digest = remember(externalRefresh, localRefresh) { CareInsights.handover(c, 12) }
@@ -41,6 +43,62 @@ fun CircleReliabilityCard(c: Context, people: List<Person>, externalRefresh: Int
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Text(if (I18n.language() == "tr") "Bakım ve güven" else "Care & trust", fontWeight = FontWeight.Bold)
+
+            if (people.isNotEmpty()) {
+                TextButton(onClick = { showPermissions = !showPermissions }) {
+                    Text(
+                        if (I18n.language() == "tr") {
+                            if (showPermissions) "İzinleri gizle" else "Circle izinleri"
+                        } else {
+                            if (showPermissions) "Hide permissions" else "Circle permissions"
+                        }
+                    )
+                }
+                if (showPermissions) {
+                    Text(
+                        if (I18n.language() == "tr")
+                            "İzinler bu telefonda uygulanır; karşı taraf kendi cihazından yetkisini artıramaz."
+                        else
+                            "Permissions are enforced on this phone; the other person cannot elevate them from their own device.",
+                        style = MaterialTheme.typography.bodySmall
+                    )
+                    people.forEach { person ->
+                        val canStatus = PermissionPolicy.allowed(c, person.topic, CirclePermission.SET_STATUS) &&
+                            PermissionPolicy.allowed(c, person.topic, CirclePermission.SNOOZE)
+                        val canRemind = PermissionPolicy.allowed(c, person.topic, CirclePermission.REMIND)
+                        val canEdit = PermissionPolicy.allowed(c, person.topic, CirclePermission.EDIT_PROGRAM) &&
+                            PermissionPolicy.allowed(c, person.topic, CirclePermission.EDIT_STOCK)
+                        Card(Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text(person.name, fontWeight = FontWeight.Bold)
+                                PermissionRow(
+                                    if (I18n.language() == "tr") "Doz durumunu girsin / ertelesin" else "Set dose status / snooze",
+                                    canStatus
+                                ) { value ->
+                                    PermissionPolicy.set(c, person.topic, CirclePermission.SET_STATUS, value)
+                                    PermissionPolicy.set(c, person.topic, CirclePermission.SNOOZE, value)
+                                    localRefresh++; onChanged()
+                                }
+                                PermissionRow(
+                                    if (I18n.language() == "tr") "Hatırlatma gönderebilsin" else "Can send reminders",
+                                    canRemind
+                                ) { value ->
+                                    PermissionPolicy.set(c, person.topic, CirclePermission.REMIND, value)
+                                    localRefresh++; onChanged()
+                                }
+                                PermissionRow(
+                                    if (I18n.language() == "tr") "Program ve stoku düzenlesin" else "Edit program and stock",
+                                    canEdit
+                                ) { value ->
+                                    PermissionPolicy.set(c, person.topic, CirclePermission.EDIT_PROGRAM, value)
+                                    PermissionPolicy.set(c, person.topic, CirclePermission.EDIT_STOCK, value)
+                                    localRefresh++; onChanged()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             if (active != null) {
                 val remainingMinutes = ((active.endsAt - System.currentTimeMillis()).coerceAtLeast(0L) / 60_000L)
@@ -88,7 +146,7 @@ fun CircleReliabilityCard(c: Context, people: List<Person>, externalRefresh: Int
             when {
                 receipt.pendingEvents > 0 -> AssistChip(
                     onClick = { DosefolkSyncScheduler.kick(c) },
-                    label = { Text(if (I18n.language() == "tr") "${receipt.pendingEvents} kayıt telefonda güvende, gönderim bekliyor" else "${receipt.pendingEvents} record(s) safe on phone, waiting to send") }
+                    label = { Text(if (I18n.language() == "tr") "${receipt.pendingEvents} kayıt telefonda, gönderim bekliyor" else "${receipt.pendingEvents} record(s) on phone, waiting to send") }
                 )
                 receipt.lastSuccessfulSync > 0L -> Text(
                     if (I18n.language() == "tr") "✓ Circle ile senkronize" else "✓ Synced with Circle",
@@ -97,8 +155,8 @@ fun CircleReliabilityCard(c: Context, people: List<Person>, externalRefresh: Int
             }
             receipt.latestLocalEventAt?.let { at ->
                 Text(
-                    if (I18n.language() == "tr") "Son yerel kayıt: ${formatTime(at)} • cihazda kalıcı olarak saklandı"
-                    else "Latest local record: ${formatTime(at)} • durably stored on device",
+                    if (I18n.language() == "tr") "Son yerel kayıt: ${formatTime(at)} • cihazda kaydedildi"
+                    else "Latest local record: ${formatTime(at)} • saved on this device",
                     style = MaterialTheme.typography.bodySmall
                 )
             }
@@ -164,6 +222,14 @@ fun CircleReliabilityCard(c: Context, people: List<Person>, externalRefresh: Int
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun PermissionRow(label: String, checked: Boolean, onChanged: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Text(label, modifier = Modifier.weight(1f))
+        Switch(checked = checked, onCheckedChange = onChanged)
     }
 }
 
