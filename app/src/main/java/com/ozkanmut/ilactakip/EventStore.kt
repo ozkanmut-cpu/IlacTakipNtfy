@@ -4,6 +4,7 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
+import java.time.LocalDate
 import java.time.ZoneId
 
 data class DoseEvent(
@@ -42,7 +43,7 @@ object EventStore {
     fun append(c: Context, event: DoseEvent) {
         val current = load(c).toMutableList()
         if (current.none { it.eventId == event.eventId }) current.add(0, event)
-        save(c, current.take(MAX_EVENTS))
+        save(c, compact(current))
     }
 
     fun contains(c: Context, eventId: String): Boolean =
@@ -50,7 +51,7 @@ object EventStore {
 
     @Synchronized
     fun markSynced(c: Context, eventId: String) {
-        save(c, load(c).map { if (it.eventId == eventId) it.copy(syncState = "synced") else it })
+        save(c, compact(load(c).map { if (it.eventId == eventId) it.copy(syncState = "synced") else it }))
     }
 
     fun pending(c: Context): List<DoseEvent> = load(c).filter { it.syncState != "synced" }
@@ -61,6 +62,37 @@ object EventStore {
             val array = JSONArray(raw)
             (0 until array.length()).mapNotNull { index -> fromJson(array.optJSONObject(index)) }
         }.getOrDefault(emptyList())
+    }
+
+    /**
+     * Retention is reliability-first, not a blind rolling window.
+     *
+     * - Never discard an unsent local event merely because history is busy.
+     * - Keep all events for today's dose sessions so conflict/undo/snooze state can
+     *   still be reconstructed even after a very large catch-up batch.
+     * - Fill the remaining normal history budget with the newest other events.
+     *
+     * The store may temporarily exceed MAX_EVENTS while there are many pending or
+     * same-day operational events. Once they are synced/age out, normal compaction
+     * brings the historical portion back to the bounded window.
+     */
+    private fun compact(events: List<DoseEvent>): List<DoseEvent> {
+        val today = LocalDate.now().toString()
+        val protected = events.filter { it.syncState != "synced" || eventDate(it) == today }
+        val protectedIds = protected.mapTo(mutableSetOf()) { it.eventId }
+        val historyBudget = (MAX_EVENTS - protected.size).coerceAtLeast(0)
+        val history = events.asSequence()
+            .filterNot { it.eventId in protectedIds }
+            .take(historyBudget)
+            .toList()
+        val keepIds = (protected + history).mapTo(mutableSetOf()) { it.eventId }
+        return events.filter { it.eventId in keepIds }
+    }
+
+    private fun eventDate(event: DoseEvent): String {
+        if (event.scheduledDate.isNotBlank()) return event.scheduledDate
+        if (event.timestamp <= 0L) return ""
+        return Instant.ofEpochMilli(event.timestamp).atZone(ZoneId.systemDefault()).toLocalDate().toString()
     }
 
     private fun save(c: Context, events: List<DoseEvent>) {
