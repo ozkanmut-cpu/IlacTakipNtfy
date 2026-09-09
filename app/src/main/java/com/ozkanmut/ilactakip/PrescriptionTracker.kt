@@ -154,7 +154,10 @@ data class SgkImportRow(
     val diagnosis: String,
     val likelyContinuous: Boolean,
     val raw: String,
-    val times: List<String> = emptyList()
+    val times: List<String> = emptyList(),
+    val form: MedicationForm = MedicationForm.OTHER,
+    val administrationQuantity: Double? = null,
+    val administrationUnit: String = ""
 )
 
 object SgkMedicationParser {
@@ -199,7 +202,10 @@ object SgkMedicationParser {
         val end = parseDate(endDate)
         val duration = if (start != null && end != null) ChronoUnit.DAYS.between(start, end) + 1 else 0
         val likelyContinuous = diagnosis.isNotBlank() && duration >= 28
-        return SgkImportRow(code, rxDate, name, box, dose, period, fillDate, endDate, diagnosis, likelyContinuous, text)
+        val suggestion = MedicationSuggestionEngine.suggest(name, text)
+        val quantity = dose.substringAfter('x', "").replace(',', '.').toDoubleOrNull()
+        val unit = sgkAdministrationUnit(suggestion.form, text)
+        return SgkImportRow(code, rxDate, name, box, dose, period, fillDate, endDate, diagnosis, likelyContinuous, text, emptyList(), suggestion.form, quantity, unit)
     }
 
     private fun extractMedicationName(lines: List<String>, flat: String): String {
@@ -222,6 +228,23 @@ object SgkMedicationParser {
         val m = strengthRegex.find(flat) ?: return ""
         val prefix = flat.substring(0, m.range.first).trim().split(' ').takeLast(3).joinToString(" ")
         return (prefix + " " + m.value).trim().take(100)
+    }
+
+    private fun sgkAdministrationUnit(form: MedicationForm, text: String): String = when (form) {
+        MedicationForm.INSULIN -> "U"
+        MedicationForm.TABLET -> if (Regex("(?i)kapsül|kapsul|capsule").containsMatchIn(text)) pt("kapsül", "capsule") else "tablet"
+        MedicationForm.NEBULE -> when {
+            Regex("(?i)flakon|flk|vial").containsMatchIn(text) -> pt("flakon", "vial")
+            Regex("(?i)ampul|ampoule").containsMatchIn(text) -> pt("ampul", "ampoule")
+            else -> pt("nebül", "nebule")
+        }
+        MedicationForm.INHALER -> if (Regex("(?i)kapsül|kapsul|capsule").containsMatchIn(text)) pt("kapsül", "capsule") else pt("puf", "puff")
+        MedicationForm.DROP -> pt("damla", "drop")
+        MedicationForm.LIQUID -> "mL"
+        MedicationForm.CREAM -> pt("uygulama", "application")
+        MedicationForm.PATCH -> pt("yama", "patch")
+        MedicationForm.INJECTION -> pt("doz", "dose")
+        MedicationForm.OTHER -> pt("doz", "dose")
     }
 }
 
@@ -283,6 +306,10 @@ fun PrescriptionTrackerScreen(c: Context, meds: List<Medication>, onMedsChanged:
                     Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(7.dp)) {
                         OutlinedTextField(name, { name = it; importRows = importRows.toMutableList().also { list -> list[index] = row.copy(medicationName = it) } }, label = { Text(pt("İlaç adı", "Medication name")) }, modifier = Modifier.fillMaxWidth())
                         Text("${row.dosePattern}${if (row.period.isBlank()) "" else " • ${row.period}"}${row.boxCount?.let { " • $it kutu" } ?: ""}")
+                        if (row.form != MedicationForm.OTHER || row.administrationQuantity != null) {
+                            val q = row.administrationQuantity?.let { if (it % 1.0 == 0.0) it.toInt().toString() else it.toString() }
+                            Text(listOf(formLabelForSgk(row.form), q?.let { "$it ${row.administrationUnit}" }.orEmpty()).filter { it.isNotBlank() }.joinToString(" • "), style = MaterialTheme.typography.bodySmall, fontWeight = FontWeight.Bold)
+                        }
                         Text(pt("Alım: ${row.fillDate} • Doz bitiş: ${row.doseEndDate}", "Fill: ${row.fillDate} • Dose end: ${row.doseEndDate}"))
                         if (row.diagnosis.isNotBlank()) Text(row.diagnosis, style = MaterialTheme.typography.bodySmall)
                         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -308,12 +335,40 @@ fun PrescriptionTrackerScreen(c: Context, meds: List<Medication>, onMedsChanged:
                     val newMeds = mutableListOf<Medication>()
                     val records = importRows.map { row ->
                         val matched = (existing + newMeds).firstOrNull { it.name.normalizedName() == row.medicationName.normalizedName() }
+                        val suggestion = MedicationSuggestionEngine.suggest(row.medicationName, row.raw)
+                        val metaTemplate = MedicationMeta(
+                            medicationId = "",
+                            form = row.form,
+                            quantity = row.administrationQuantity,
+                            administrationSite = suggestion.administrationSite,
+                            packageCount = suggestion.packageCount,
+                            packageUnit = suggestion.packageUnit,
+                            source = "sgk_pdf",
+                            doseUnitOverride = row.administrationUnit
+                        )
                         val med = when {
-                            matched != null -> matched
-                            row.times.isNotEmpty() -> Medication(UUID.randomUUID().toString(), row.medicationName.trim(), row.dosePattern, row.times.distinct().sorted()).also { created ->
-                                newMeds += created
-                                val suggestion = MedicationSuggestionEngine.suggest(created.name, row.raw)
-                                MedicationMetaStore.save(c, MedicationMeta(created.id, suggestion.form, suggestion.quantity, suggestion.administrationSite, suggestion.packageCount, suggestion.packageUnit, "sgk_pdf"))
+                            matched != null -> {
+                                val currentMeta = MedicationMetaStore.get(c, matched.id)
+                                if (currentMeta == null || currentMeta.form == MedicationForm.OTHER || currentMeta.quantity == null) {
+                                    MedicationMetaStore.save(c, metaTemplate.copy(
+                                        medicationId = matched.id,
+                                        form = if (currentMeta?.form != null && currentMeta.form != MedicationForm.OTHER) currentMeta.form else metaTemplate.form,
+                                        quantity = currentMeta?.quantity ?: metaTemplate.quantity,
+                                        administrationSite = currentMeta?.administrationSite?.takeIf { it.isNotBlank() } ?: metaTemplate.administrationSite,
+                                        packageCount = currentMeta?.packageCount ?: metaTemplate.packageCount,
+                                        packageUnit = currentMeta?.packageUnit?.takeIf { it.isNotBlank() } ?: metaTemplate.packageUnit,
+                                        source = currentMeta?.source ?: "sgk_pdf",
+                                        doseUnitOverride = currentMeta?.doseUnitOverride?.takeIf { it.isNotBlank() } ?: metaTemplate.doseUnitOverride
+                                    ))
+                                }
+                                matched
+                            }
+                            row.times.isNotEmpty() -> {
+                                val doseLabel = metaTemplate.doseLabel().ifBlank { row.dosePattern }
+                                Medication(UUID.randomUUID().toString(), row.medicationName.trim(), doseLabel, row.times.distinct().sorted()).also { created ->
+                                    newMeds += created
+                                    MedicationMetaStore.save(c, metaTemplate.copy(medicationId = created.id))
+                                }
                             }
                             else -> null
                         }
@@ -369,6 +424,19 @@ private fun PrescriptionRecordCard(c: Context, r: PrescriptionRecord, changed: (
             }
         }
     }
+}
+
+private fun formLabelForSgk(form: MedicationForm): String = when (form) {
+    MedicationForm.TABLET -> pt("Tablet / kapsül", "Tablet / capsule")
+    MedicationForm.INSULIN -> pt("İnsülin", "Insulin")
+    MedicationForm.INJECTION -> pt("Enjeksiyon", "Injection")
+    MedicationForm.NEBULE -> pt("Nebül", "Nebule")
+    MedicationForm.INHALER -> pt("İnhaler / inhalasyon", "Inhaler / inhalation")
+    MedicationForm.DROP -> pt("Damla", "Drops")
+    MedicationForm.LIQUID -> pt("Sıvı", "Liquid")
+    MedicationForm.CREAM -> pt("Krem / merhem / jel", "Cream / ointment / gel")
+    MedicationForm.PATCH -> pt("Yama", "Patch")
+    MedicationForm.OTHER -> ""
 }
 
 private val sgkDateFormatter = DateTimeFormatter.ofPattern("dd.MM.yyyy")
