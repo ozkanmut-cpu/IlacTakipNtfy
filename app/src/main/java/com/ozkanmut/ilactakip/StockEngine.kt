@@ -17,6 +17,16 @@ object StockEngine {
 
     @Synchronized fun configure(c:Context,medication:Medication,packSize:Int,currentDoses:Int=packSize,lowThreshold:Int=5){if(packSize<=0)return;val s=MedicationStock(medication.id,medication.name,currentDoses.coerceAtLeast(0),packSize,lowThreshold.coerceAtLeast(0));save(c,listOf(s)+load(c).filterNot{it.medicationId==medication.id});LowStockNotifier.evaluate(c,s);StockSync.publishToCircle(c,s)}
     @Synchronized fun openNewBox(c:Context,medicationId:String):MedicationStock?{val x=forMedication(c,medicationId)?:return null;val u=x.copy(remainingDoses=x.remainingDoses+x.packSize,updatedAt=System.currentTimeMillis());save(c,listOf(u)+load(c).filterNot{it.medicationId==medicationId});LowStockNotifier.evaluate(c,u);StockSync.publishToCircle(c,u);return u}
+    @Synchronized fun addSupply(c:Context,medication:Medication,units:Int,lowThreshold:Int=5):MedicationStock?{
+        if(units<=0)return null
+        val current=forMedication(c,medication.id)
+        val updated=if(current==null) MedicationStock(medication.id,medication.name,units,units,lowThreshold.coerceAtLeast(0))
+        else current.copy(remainingDoses=current.remainingDoses+units,updatedAt=System.currentTimeMillis())
+        save(c,listOf(updated)+load(c).filterNot{it.medicationId==medication.id})
+        LowStockNotifier.evaluate(c,updated)
+        StockSync.publishToCircle(c,updated)
+        return updated
+    }
     fun lowStock(c:Context)=load(c).filter{it.remainingDoses<=it.lowThreshold}
 
     fun toJson(s:MedicationStock)=JSONObject().put("medicationId",s.medicationId).put("medicationName",s.medicationName).put("remainingDoses",s.remainingDoses).put("packSize",s.packSize).put("lowThreshold",s.lowThreshold).put("updatedAt",s.updatedAt)
