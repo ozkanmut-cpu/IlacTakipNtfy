@@ -21,13 +21,20 @@ object DeliveryLedger {
         val p = prefs(c)
         val k = key(eventId, topic)
         if (p.getBoolean(k, false)) return
+
+        val existingKeys = p.all.keys.toList()
+        val pendingIds = EventStore.pending(c).mapTo(mutableSetOf()) { it.eventId }
+        val protectedKeys = existingKeys.filter { ledgerEventId(it) in pendingIds }.toSet()
+        val removable = existingKeys.filterNot { it in protectedKeys }
+        val projectedSize = existingKeys.size + 1
+        val removeCount = (projectedSize - MAX_KEYS + 500).coerceAtLeast(0)
+
         val editor = p.edit().putBoolean(k, true)
-        val keys = p.all.keys
-        if (keys.size >= MAX_KEYS) {
-            keys.take(keys.size - MAX_KEYS + 500).forEach { editor.remove(it) }
-        }
+        removable.take(removeCount).forEach { editor.remove(it) }
         editor.commit()
     }
+
+    private fun ledgerEventId(key: String): String = key.substringBefore('|')
 
     @Synchronized
     fun clearEvent(c: Context, eventId: String) {
