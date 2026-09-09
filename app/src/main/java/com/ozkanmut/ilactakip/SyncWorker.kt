@@ -13,16 +13,26 @@ import androidx.work.Worker
 import androidx.work.WorkerParameters
 import java.util.concurrent.TimeUnit
 
+internal object SyncWorkDecision {
+    fun shouldRetry(outboundOk: Boolean, alertsOk: Boolean, inboundOk: Boolean, hasMoreOutbound: Boolean): Boolean =
+        !outboundOk || !alertsOk || !inboundOk || hasMoreOutbound
+}
+
 class DosefolkSyncWorker(appContext: Context, params: WorkerParameters) : Worker(appContext, params) {
     override fun doWork(): Result {
         // Local maintenance does not need network success and is idempotent.
         SgkStockAutoImporter.reconcile(applicationContext)
         PrescriptionNotifier.evaluate(applicationContext)
 
+        // Each pass intentionally sends at most one bounded outbound batch. If more
+        // durable events remain, Result.retry() schedules the next pass with backoff
+        // instead of falsely declaring success and leaving event 101+ stranded until
+        // an unrelated future kick or the 15-minute periodic run.
         val outboundOk = Ntfy.flushPendingBlocking(applicationContext)
+        val hasMoreOutbound = EventStore.pending(applicationContext).isNotEmpty()
         val alertsOk = AlertOutbox.flushBlocking(applicationContext)
         val inboundOk = SyncEngine.pullBlocking(applicationContext)
-        return if (outboundOk && alertsOk && inboundOk) Result.success() else Result.retry()
+        return if (SyncWorkDecision.shouldRetry(outboundOk, alertsOk, inboundOk, hasMoreOutbound)) Result.retry() else Result.success()
     }
 }
 
