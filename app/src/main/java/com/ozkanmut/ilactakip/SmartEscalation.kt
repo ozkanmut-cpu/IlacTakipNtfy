@@ -18,18 +18,25 @@ object SmartEscalation {
     private const val FIRST_DELAY_MIN = 10L
     private const val SECOND_DELAY_MIN = 25L
     private const val BATON_GRACE_MS = 5_000L
+    private const val PREFS = "dosefolk_smart_escalation"
+    private const val ANCHOR_PREFIX = "anchor|"
+
+    private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private fun anchorKey(time: String, scheduledDate: String) = "$ANCHOR_PREFIX$scheduledDate|$time"
 
     fun schedule(c: Context, time: String, scheduledDate: String = LocalDate.now().toString()) {
         cancelAlarms(c, time, scheduledDate)
         AlertOutbox.dropEscalationSession(c.applicationContext, time, scheduledDate)
         AttentionBudget.clear(c, time, scheduledDate)
-        scheduleFresh(c, time, scheduledDate)
+        val anchor = ensureAnchor(c, time, scheduledDate)
+        scheduleFromAnchor(c, time, scheduledDate, anchor)
     }
 
     fun cancel(c: Context, time: String, scheduledDate: String = LocalDate.now().toString()) {
         cancelAlarms(c, time, scheduledDate)
         AlertOutbox.dropEscalationSession(c.applicationContext, time, scheduledDate)
         AttentionBudget.clear(c, time, scheduledDate)
+        prefs(c).edit().remove(anchorKey(time, scheduledDate)).commit()
     }
 
     fun deferUntil(c: Context, time: String, expiresAt: Long, scheduledDate: String = LocalDate.now().toString()) {
@@ -51,23 +58,51 @@ object SmartEscalation {
                     if (baton != null) deferUntil(c, state.time, baton.expiresAt, scheduledDate)
                     else {
                         cancelAlarms(c, state.time, scheduledDate)
-                        scheduleFresh(c, state.time, scheduledDate)
+                        val anchor = ensureAnchor(c, state.time, scheduledDate)
+                        scheduleFromAnchor(c, state.time, scheduledDate, anchor)
                     }
                 }
                 DoseSessionStatus.SNOOZED -> {
                     if (baton != null) deferUntil(c, state.time, baton.expiresAt, scheduledDate)
                     else cancelAlarms(c, state.time, scheduledDate)
                 }
-                else -> cancelAlarms(c, state.time, scheduledDate)
+                else -> {
+                    cancelAlarms(c, state.time, scheduledDate)
+                    prefs(c).edit().remove(anchorKey(state.time, scheduledDate)).commit()
+                }
             }
         }
     }
 
-    private fun scheduleFresh(c: Context, time: String, scheduledDate: String) {
-        val now = System.currentTimeMillis()
-        scheduleStage(c, time, scheduledDate, 0, now + FIRST_DELAY_MIN * 60_000L)
-        scheduleStage(c, time, scheduledDate, 1, now + SECOND_DELAY_MIN * 60_000L)
+    private fun ensureAnchor(c: Context, time: String, scheduledDate: String): Long {
+        val key = anchorKey(time, scheduledDate)
+        val stored = prefs(c).getLong(key, 0L)
+        if (stored > 0L) return stored
+
+        // The canonical alarm event is durable before presentation/escalation. If the
+        // process died before the anchor was saved, recover the original session time
+        // from that event instead of restarting the 10/25 minute clocks from reboot.
+        val eventAnchor = EventStore.load(c)
+            .asSequence()
+            .filter { it.type == "alarm" && it.time == time && it.scheduledDate == scheduledDate }
+            .minOfOrNull { it.timestamp }
+            ?.takeIf { it > 0L }
+        val anchor = eventAnchor ?: System.currentTimeMillis()
+        prefs(c).edit().putLong(key, anchor).commit()
+        return anchor
     }
+
+    private fun scheduleFromAnchor(c: Context, time: String, scheduledDate: String, anchor: Long) {
+        val now = System.currentTimeMillis()
+        scheduleStage(c, time, scheduledDate, 0, triggerFor(anchor, FIRST_DELAY_MIN, now))
+        scheduleStage(c, time, scheduledDate, 1, triggerFor(anchor, SECOND_DELAY_MIN, now))
+    }
+
+    internal fun triggerFor(anchor: Long, delayMinutes: Long, now: Long): Long =
+        maxOf(now + 1_000L, anchor + delayMinutes * 60_000L)
+
+    internal fun storedAnchor(c: Context, time: String, scheduledDate: String): Long =
+        prefs(c).getLong(anchorKey(time, scheduledDate), 0L)
 
     private fun cancelAlarms(c: Context, time: String, scheduledDate: String) {
         val alarmManager = c.getSystemService(AlarmManager::class.java)
