@@ -185,4 +185,42 @@ class TwoDeviceOfflineRaceTest {
 
         assertEquals(afterOtherDose, StockEngine.forMedication(c, med.id)?.remainingDoses)
     }
+
+    @Test
+    fun ancientRegularSession_survivesLedgerAndProcessedReceiptRollover() {
+        val base = System.currentTimeMillis()
+        val oldDate = "2020-01-01"
+        val oldKey = "dose|$oldDate|08:00|${med.id}"
+        StockEngine.configure(c, med, packSize = 20, currentDoses = 20, lowThreshold = 2)
+
+        val ledger = JSONArray().put(oldKey)
+        repeat(4100) { ledger.put("dose|2021-02-${(it % 28) + 1}|${(it % 24).toString().padStart(2, '0')}:${(it % 60).toString().padStart(2, '0')}|old-$it") }
+        val processed = JSONArray()
+        repeat(2000) { processed.put("processed-$it") }
+        c.getSharedPreferences("dosefolk_stock", Context.MODE_PRIVATE).edit()
+            .putString("consumed_sessions", ledger.toString())
+            .putString("processed_events", processed.toString())
+            .commit()
+
+        // Force a normal stock write/ledger persistence after both bounded windows are full.
+        StockEngine.applyEvent(c, event("current-dose-after-rollover", "taken", Store.topic(c), base, 50L, time = "20:00"))
+        val afterCurrentDose = StockEngine.forMedication(c, med.id)?.remainingDoses
+
+        val ancientReplay = DoseEvent(
+            eventId = "ancient-replay-new-id",
+            type = "taken",
+            time = "08:00",
+            actor = "phone-b",
+            actorTopic = "phone-b",
+            timestamp = base - 1_000L,
+            medications = listOf(med),
+            syncState = "synced",
+            revision = 51L,
+            scheduledDate = oldDate,
+            ownerId = Store.topic(c)
+        )
+        StockEngine.applyEvent(c, ancientReplay)
+
+        assertEquals(afterCurrentDose, StockEngine.forMedication(c, med.id)?.remainingDoses)
+    }
 }
