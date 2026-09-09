@@ -37,6 +37,9 @@ object RevocationCleanup {
             .putString("remote_rules", filteredArray("remote_rules"))
         p.all.forEach { (key, value) ->
             if (key.startsWith("rule_stamp|$topic|")) edit.remove(key)
+            if (key.startsWith("rule_rev|$topic|")) edit.remove(key)
+            if (key.startsWith("rule_actor|$topic|")) edit.remove(key)
+            if (key.startsWith("rule_event|$topic|")) edit.remove(key)
             if (key.startsWith("owner|") && value == topic) edit.remove(key)
         }
         edit.commit()
