@@ -112,6 +112,46 @@ class AlarmActionEscalationTest {
     }
 
     @Test
+    fun doubleTakenNotificationAction_onlyCreatesOneDoseConsumption() {
+        pendingAlarm()
+        StockEngine.configure(c, med, packSize = 10, currentDoses = 10, lowThreshold = 2)
+
+        ActionReceiver().onReceive(c, actionIntent("taken"))
+        ActionReceiver().onReceive(c, actionIntent("taken"))
+
+        assertEquals(DoseSessionStatus.TAKEN, DoseStateEngine.stateForTime(c, "08:00", LocalDate.now()).status)
+        assertEquals(1, EventStore.load(c).count { it.type == "taken" && it.time == "08:00" && it.scheduledDate == date })
+        assertEquals(9, StockEngine.forMedication(c, med.id)?.remainingDoses)
+    }
+
+    @Test
+    fun staleMissedAction_afterTaken_isIgnored() {
+        pendingAlarm()
+        ActionReceiver().onReceive(c, actionIntent("taken"))
+
+        ActionReceiver().onReceive(c, actionIntent("missed"))
+
+        val state = DoseStateEngine.stateForTime(c, "08:00", LocalDate.now())
+        assertEquals(DoseSessionStatus.TAKEN, state.status)
+        assertEquals(0, EventStore.load(c).count { it.type == "missed" && it.time == "08:00" && it.scheduledDate == date })
+    }
+
+    @Test
+    fun duplicateSnoozeAction_doesNotExtendDeadlineOrCreateSecondEvent() {
+        pendingAlarm()
+        ActionReceiver().onReceive(c, actionIntent("snooze"))
+        val first = DoseStateEngine.stateForTime(c, "08:00", LocalDate.now()).latestEvent
+        assertNotNull(first)
+
+        ActionReceiver().onReceive(c, actionIntent("snooze"))
+
+        val second = DoseStateEngine.stateForTime(c, "08:00", LocalDate.now()).latestEvent
+        assertEquals(first?.eventId, second?.eventId)
+        assertEquals(first?.snoozeUntil, second?.snoozeUntil)
+        assertEquals(1, EventStore.load(c).count { it.type == "snoozed" && it.time == "08:00" && it.scheduledDate == date })
+    }
+
+    @Test
     fun terminalAction_clearsAttentionBudgetSoOldEscalationCannotRemainConsumed() {
         AttentionBudget.mark(c, "08:00", "care-topic", 0, date)
         assertFalse(AttentionBudget.allow(c, "08:00", "care-topic", 0, date))
@@ -157,8 +197,6 @@ class AlarmActionEscalationTest {
         assertEquals(null, CareBatonStore.active(c, "08:00", date))
         assertEquals(DoseSessionStatus.PENDING, DoseStateEngine.stateForTime(c, "08:00", LocalDate.now()).status)
 
-        // Simulate a caregiver stage being consumed after the first successful release.
-        // A replay of the same release must be a no-op and must not clear the budget again.
         AttentionBudget.mark(c, "08:00", "care-topic", 0, date)
         assertFalse(AttentionBudget.allow(c, "08:00", "care-topic", 0, date))
 
