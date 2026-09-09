@@ -47,6 +47,12 @@ object SyncEngine {
         thread { DosefolkSyncScheduler.ensure(context); pullBlocking(context) }
     }
 
+    /**
+     * All inbound pulls are serialized process-wide. Circle UI, WorkManager,
+     * startup recovery and re-pair drain can otherwise read the same checkpoint
+     * concurrently and both pass IncomingEventGuard before the receipt is written.
+     */
+    @Synchronized
     fun pullBlocking(c: Context): Boolean {
         val context = c.applicationContext
         val topic = Store.topic(context)
