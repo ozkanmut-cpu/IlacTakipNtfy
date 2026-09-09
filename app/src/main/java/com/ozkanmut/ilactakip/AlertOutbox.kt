@@ -26,8 +26,6 @@ object AlertOutbox {
         if (topic.isBlank()) return
         val current = load(c).toMutableList()
         current.add(0, PendingAlert(UUID.randomUUID().toString(), topic, title, message, System.currentTimeMillis()))
-        // Pending caregiver alerts are reliability data. Never discard them merely
-        // because the device stayed offline for a long time.
         save(c, current)
         DosefolkSyncScheduler.kick(c)
     }
@@ -41,16 +39,15 @@ object AlertOutbox {
         save(c, load(c).filterNot { it.topic == topic })
     }
 
-    internal fun batchForFlush(all: List<PendingAlert>): List<PendingAlert> = all.takeLast(FLUSH_BATCH)
+    /** Stored lists are newest-first; network delivery is strictly oldest-first. */
+    internal fun batchForFlush(all: List<PendingAlert>): List<PendingAlert> =
+        all.takeLast(FLUSH_BATCH).asReversed()
 
     @Synchronized
     fun flushBlocking(c: Context): Boolean {
         val all = load(c)
         if (all.isEmpty()) return true
 
-        // Lists are newest-first. Drain the oldest alerts first so long-offline
-        // caregiver notifications preserve chronology. Keep each worker pass small:
-        // every HTTP call can consume its full timeout on a bad network.
         val batch = batchForFlush(all)
         val deliveredIds = mutableSetOf<String>()
         for (alert in batch) {
