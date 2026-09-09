@@ -38,6 +38,13 @@ object PermissionPolicy {
         }
     }
 
+    fun clearPeer(c: Context, topic: String) {
+        if (topic.isBlank()) return
+        val edit = prefs(c).edit()
+        CirclePermission.entries.forEach { edit.remove(key(topic, it)) }
+        edit.commit()
+    }
+
     fun acceptRemote(c: Context, event: DoseEvent): Boolean {
         if (event.actorTopic == Store.topic(c)) return true
         val permission = when (event.type) {
@@ -47,7 +54,8 @@ object PermissionPolicy {
             "program_added", "program_updated", "program_deleted", "program_rule_updated" -> CirclePermission.EDIT_PROGRAM
             "stock_configured", "stock_adjusted", "stock_new_box" -> CirclePermission.EDIT_STOCK
             "capability_edit_program_granted", "capability_edit_program_revoked",
-            "capability_edit_stock_granted", "capability_edit_stock_revoked" -> CirclePermission.VIEW
+            "capability_edit_stock_granted", "capability_edit_stock_revoked",
+            "circle_revoked" -> CirclePermission.VIEW
             else -> CirclePermission.VIEW
         }
         return allowed(c, event.actorTopic, permission)
