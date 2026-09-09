@@ -44,8 +44,9 @@ object SyncEngine {
                     if(ownerId.isBlank() || ownerId==OwnerScopeStore.localOwnerId(context)) StockEngine.applyEvent(context,event)
                     applyRemoteState(context,event)
                 }}
-                // Reconcile after the whole catch-up batch so a later terminal event can cancel an older snooze.
+                // Reconcile only after the whole catch-up batch so later terminal events win over stale snooze/undo rows.
                 SnoozeRecovery.reconcileToday(context)
+                UndoRecovery.recoverCurrent(context)
                 val edit=prefs(context).edit().putLong(LAST_SUCCESS,System.currentTimeMillis());newestId?.let{edit.putString(LAST_ID,it)};edit.commit();connection.disconnect();true
             }
         }catch(_:Exception){false}
