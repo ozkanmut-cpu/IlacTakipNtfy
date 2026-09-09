@@ -48,7 +48,8 @@ object PermissionPolicy {
     fun acceptRemote(c: Context, event: DoseEvent): Boolean {
         if (event.actorTopic == Store.topic(c)) return true
         val permission = when (event.type) {
-            "taken", "missed", "prn_taken", "conflict_resolved_taken", "conflict_resolved_missed",
+            "taken", "missed", "prn_taken", "undo_taken", "undo_missed",
+            "conflict_resolved_taken", "conflict_resolved_missed",
             "care_claimed", "care_released" -> CirclePermission.SET_STATUS
             "snoozed" -> CirclePermission.SNOOZE
             "program_added", "program_updated", "program_deleted", "program_rule_updated" -> CirclePermission.EDIT_PROGRAM
