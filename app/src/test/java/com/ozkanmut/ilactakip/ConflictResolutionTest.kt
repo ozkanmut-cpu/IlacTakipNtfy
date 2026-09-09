@@ -129,4 +129,34 @@ class ConflictResolutionTest {
 
         assertEquals(DoseSessionStatus.PENDING, DoseStateEngine.stateForTime(c, "08:00").status)
     }
+
+    @Test
+    fun futureClockAlarmRetryCannotEraseTakenState() {
+        EventStore.append(c, event("alarm-old", "alarm", "phone-a", 100_000L, 1L))
+        EventStore.append(c, event("taken", "taken", "phone-a", 200_000L, 2L))
+        EventStore.append(c, event("alarm-future", "alarm", "phone-b", 9_999_999L, 1L))
+
+        val state = DoseStateEngine.stateForTime(c, "08:00")
+        assertEquals(DoseSessionStatus.TAKEN, state.status)
+        assertEquals("taken", state.latestEvent?.eventId)
+    }
+
+    @Test
+    fun futureClockAlarmRetryCannotEraseMissedState() {
+        EventStore.append(c, event("alarm-old", "alarm", "phone-a", 100_000L, 1L))
+        EventStore.append(c, event("missed", "missed", "phone-a", 200_000L, 2L))
+        EventStore.append(c, event("alarm-future", "alarm", "phone-b", 9_999_999L, 1L))
+
+        val state = DoseStateEngine.stateForTime(c, "08:00")
+        assertEquals(DoseSessionStatus.MISSED, state.status)
+        assertEquals("missed", state.latestEvent?.eventId)
+    }
+
+    @Test
+    fun repeatedAlarmWithoutTerminalRemainsPending() {
+        EventStore.append(c, event("alarm-1", "alarm", "phone-a", 100_000L, 1L))
+        EventStore.append(c, event("alarm-2", "alarm", "phone-b", 9_999_999L, 1L))
+
+        assertEquals(DoseSessionStatus.PENDING, DoseStateEngine.stateForTime(c, "08:00").status)
+    }
 }
