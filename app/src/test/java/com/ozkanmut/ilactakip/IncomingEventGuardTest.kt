@@ -58,6 +58,28 @@ class IncomingEventGuardTest {
     }
 
     @Test
+    fun revokedPeerEvent_isRejectedBeforePersistence() {
+        val topic = "peer-revoked"
+        val person = Person("person-1", "Peer", topic)
+        Store.savePeople(c, listOf(person))
+
+        val authorized = selfEvent("authorized-before-revoke").copy(
+            actor = "Peer",
+            actorTopic = topic,
+            ownerId = Store.topic(c)
+        )
+        assertTrue(IncomingEventGuard.shouldProcess(c, authorized))
+
+        Store.savePeople(c, emptyList())
+        PermissionPolicy.clearPeer(c, topic)
+        RevocationCleanup.clearPeer(c, topic)
+
+        val delayed = authorized.copy(eventId = "delayed-after-revoke", revision = 2L)
+        assertFalse(IncomingEventGuard.shouldProcess(c, delayed))
+        assertFalse(EventStore.contains(c, delayed.eventId))
+    }
+
+    @Test
     fun futureProtocolVersion_isRejected() {
         assertTrue(IncomingEventGuard.supportedDosePayload(JSONObject().put("v", 9)))
         assertFalse(IncomingEventGuard.supportedDosePayload(JSONObject().put("v", 10)))
