@@ -76,7 +76,10 @@ object StockEngine {
     private fun compactLedger(values:Set<String>,limit:Int=4000):List<String>{
         val ordered=values.toList()
         val todayPrefix="dose|${LocalDate.now()}|"
-        val protected=ordered.filter{it.startsWith(todayPrefix)}
+        // PRN administrations are event-identity based rather than schedule-session based.
+        // Keep their exact keys indefinitely so an ancient replay cannot consume stock twice
+        // after the generic processed-event window has rolled over.
+        val protected=ordered.filter{it.startsWith(todayPrefix)||it.startsWith("prn|")}
         val protectedSet=protected.toSet()
         val budget=(limit-protected.size).coerceAtLeast(0)
         val recent=ordered.asReversed().asSequence().filterNot{it in protectedSet}.take(budget).toList().asReversed()
