@@ -16,7 +16,13 @@ object SyncEngine {
     private const val LAST_SUCCESS = "last_success_ms"
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     fun lastSuccess(c: Context): Long = prefs(c).getLong(LAST_SUCCESS, 0L)
-    fun pullOnce(c: Context) = thread { DosefolkSyncScheduler.ensure(c.applicationContext); pullBlocking(c.applicationContext) }
+    fun pullOnce(c: Context) {
+        val context = c.applicationContext
+        SgkStockAutoImporter.start(context)
+        SgkStockAutoImporter.reconcile(context)
+        PrescriptionNotifier.evaluate(context)
+        thread { DosefolkSyncScheduler.ensure(context); pullBlocking(context) }
+    }
 
     fun pullBlocking(c: Context): Boolean {
         val context=c.applicationContext; val topic=Store.topic(context); val since=prefs(context).getString(LAST_ID,null)?:"24h"; val encodedSince=URLEncoder.encode(since,"UTF-8"); val url=URL("https://ntfy.sh/$topic/json?poll=1&since=$encodedSince")
@@ -29,8 +35,6 @@ object SyncEngine {
                     if(envelope.optString("event")!="message")return@forEach
                     val ntfyId=envelope.optString("id");if(ntfyId.isNotBlank())newestId=ntfyId
                     val payload=runCatching{JSONObject(envelope.optString("message"))}.getOrNull()?:return@forEach
-                    // Stock uses a deliberately small owner-authored snapshot protocol rather than
-                    // pretending to be a dose event. Consume it before DoseEvent parsing.
                     if(StockSync.applyIncoming(context,payload))return@forEach
                     val event=parseDoseEvent(payload)?:return@forEach
                     if(!PermissionPolicy.acceptRemote(context,event))return@forEach
