@@ -23,7 +23,7 @@ class ConflictResolutionTest {
         Store.save(c, listOf(med))
     }
 
-    private fun event(id: String, type: String, actorTopic: String, timestamp: Long) = DoseEvent(
+    private fun event(id: String, type: String, actorTopic: String, timestamp: Long, revision: Long = timestamp) = DoseEvent(
         eventId = id,
         type = type,
         time = "08:00",
@@ -32,7 +32,7 @@ class ConflictResolutionTest {
         timestamp = timestamp,
         medications = listOf(med),
         syncState = "synced",
-        revision = timestamp,
+        revision = revision,
         scheduledDate = today,
         ownerId = Store.topic(c)
     )
@@ -46,18 +46,18 @@ class ConflictResolutionTest {
     }
 
     @Test
-    fun oppositeTerminalEventsMoreThanTwoMinutesApart_doNotCreateConflict() {
+    fun oppositeTerminalEventsRemainConflictEvenWhenPhoneClocksDifferByMinutes() {
         EventStore.append(c, event("taken-a", "taken", "phone-a", 100_000L))
-        EventStore.append(c, event("missed-b", "missed", "phone-b", 221_000L))
+        EventStore.append(c, event("missed-b", "missed", "phone-b", 700_000L))
 
-        assertEquals(DoseSessionStatus.MISSED, DoseStateEngine.stateForTime(c, "08:00").status)
+        assertEquals(DoseSessionStatus.CONFLICT, DoseStateEngine.stateForTime(c, "08:00").status)
     }
 
     @Test
     fun explicitConflictResolution_winsWithoutDeletingOriginalEvents() {
         EventStore.append(c, event("taken-a", "taken", "phone-a", 100_000L))
         EventStore.append(c, event("missed-b", "missed", "phone-b", 150_000L))
-        EventStore.append(c, event("resolve", "conflict_resolved_taken", "owner", 200_000L))
+        EventStore.append(c, event("resolve", "conflict_resolved_taken", "owner", 200_000L, 10L))
 
         val state = DoseStateEngine.stateForTime(c, "08:00")
         assertEquals(DoseSessionStatus.TAKEN, state.status)
@@ -66,11 +66,23 @@ class ConflictResolutionTest {
     }
 
     @Test
+    fun staleFutureClockTerminalCannotReopenResolvedConflict() {
+        EventStore.append(c, event("taken-a", "taken", "phone-a", 100_000L))
+        EventStore.append(c, event("missed-b", "missed", "phone-b", 150_000L))
+        EventStore.append(c, event("resolve", "conflict_resolved_taken", "owner", 200_000L, 10L))
+        EventStore.append(c, event("late-stale", "missed", "phone-b", 9_999_999L, 2L))
+
+        val state = DoseStateEngine.stateForTime(c, "08:00")
+        assertEquals(DoseSessionStatus.TAKEN, state.status)
+        assertEquals("conflict_resolved_taken", state.latestEvent?.type)
+    }
+
+    @Test
     fun undoAfterExplicitResolution_returnsDoseToPending() {
         EventStore.append(c, event("taken-a", "taken", "phone-a", 100_000L))
         EventStore.append(c, event("missed-b", "missed", "phone-b", 150_000L))
-        EventStore.append(c, event("resolve", "conflict_resolved_taken", "owner", 200_000L))
-        EventStore.append(c, event("undo", "undo_taken", "owner", 250_000L))
+        EventStore.append(c, event("resolve", "conflict_resolved_taken", "owner", 200_000L, 10L))
+        EventStore.append(c, event("undo", "undo_taken", "owner", 250_000L, 11L))
 
         assertEquals(DoseSessionStatus.PENDING, DoseStateEngine.stateForTime(c, "08:00").status)
     }
