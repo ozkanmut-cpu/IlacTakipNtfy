@@ -25,9 +25,8 @@ object StockEngine {
     /** Last-write-wins per owner+medication. Older ntfy history cannot roll stock backwards. */
     @Synchronized fun applyRemoteSnapshot(c:Context,ownerId:String,stock:MedicationStock){
         if(ownerId.isBlank()||ownerId==OwnerScopeStore.localOwnerId(c))return
-        val all=loadRemote().toMutableList()
+        saveRemoteSnapshot(c,ownerId,stock)
     }
-
     @Synchronized fun saveRemoteSnapshot(c:Context,ownerId:String,stock:MedicationStock){
         if(ownerId.isBlank())return
         val rows=loadRemote(c).toMutableList(); val i=rows.indexOfFirst{it.first==ownerId&&it.second.medicationId==stock.medicationId}
