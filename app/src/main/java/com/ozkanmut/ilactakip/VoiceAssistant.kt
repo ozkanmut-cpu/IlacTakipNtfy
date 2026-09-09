@@ -139,8 +139,8 @@ object AssistantLocalRouter {
         if (snoozeWords.any { q.contains(it) }) {
             if (target == null) return I18n.t("all_good")
             val minutes = Regex("(\\d+)\\s*(dk|dakika|min|minute|minuto|minuten)").find(q)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 30
-            AlarmScheduler.snoozeGroup(c, target.first, target.second, minutes)
-            Ntfy.sendEvent(c, "snoozed", target.first, target.second)
+            val until = AlarmScheduler.snoozeGroup(c, target.first, target.second, minutes)
+            Ntfy.sendEvent(c, "snoozed", target.first, target.second, snoozeUntil = until)
             return "${target.first} • $minutes min"
         }
 
