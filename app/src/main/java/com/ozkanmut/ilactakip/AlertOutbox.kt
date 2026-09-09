@@ -21,13 +21,30 @@ object AlertOutbox {
     private const val FLUSH_BATCH = 10
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
+    /**
+     * Optional deterministic IDs let crash-retried escalation stages converge on
+     * one durable queue row. kick=false is used when another durable state write
+     * must happen before WorkManager is allowed to drain the row.
+     */
     @Synchronized
-    fun enqueue(c: Context, topic: String, title: String, message: String) {
-        if (topic.isBlank()) return
+    fun enqueue(
+        c: Context,
+        topic: String,
+        title: String,
+        message: String,
+        id: String = UUID.randomUUID().toString(),
+        kick: Boolean = true
+    ): Boolean {
+        if (topic.isBlank() || id.isBlank()) return false
         val current = load(c).toMutableList()
-        current.add(0, PendingAlert(UUID.randomUUID().toString(), topic, title, message, System.currentTimeMillis()))
+        if (current.any { it.id == id }) {
+            if (kick) DosefolkSyncScheduler.kick(c)
+            return false
+        }
+        current.add(0, PendingAlert(id, topic, title, message, System.currentTimeMillis()))
         save(c, current)
-        DosefolkSyncScheduler.kick(c)
+        if (kick) DosefolkSyncScheduler.kick(c)
+        return true
     }
 
     @Synchronized
@@ -39,7 +56,6 @@ object AlertOutbox {
         save(c, load(c).filterNot { it.topic == topic })
     }
 
-    /** Stored lists are newest-first; network delivery is strictly oldest-first. */
     internal fun batchForFlush(all: List<PendingAlert>): List<PendingAlert> =
         all.takeLast(FLUSH_BATCH).asReversed()
 
