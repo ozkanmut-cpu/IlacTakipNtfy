@@ -138,9 +138,9 @@ fun AddMedicationDialogEnhanced(c: Context, close: () -> Unit, add: (Medication)
                 val doseLabel = MedicationMeta("", form, q, site.trim()).doseLabel()
                 val finalDose = listOf(doseLabel, doseNote.trim()).filter { it.isNotBlank() }.joinToString(" • ")
                 val med = Medication(UUID.randomUUID().toString(), name.trim(), finalDose, if (prnOnly) emptyList() else times)
-                add(med)
                 val meta = MedicationMeta(med.id, form, q, site.trim(), packCount.toIntOrNull(), packUnit.trim(), source)
                 MedicationMetaStore.save(c, meta)
+                add(med)
                 meta.packageCount?.takeIf { it > 0 }?.let { StockEngine.configure(c, med, it) }
                 if (prnOnly) PrnEngine.create(c, med, minInterval.toIntOrNull(), maxPerDay.toIntOrNull())
                 if (shortCourse && duration != null) {
