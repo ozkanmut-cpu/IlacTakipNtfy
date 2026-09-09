@@ -116,6 +116,13 @@ class OfflineReliabilityTest {
     }
 
     @Test
+    fun caregiverAlertOutbox_neverTrimsPendingAlertsAtFormerTwoHundredLimit() {
+        repeat(250) { i -> AlertOutbox.enqueue(c, "care-a", "title", "alert-$i") }
+
+        assertEquals(250, AlertOutbox.pendingCount(c))
+    }
+
+    @Test
     fun attentionBudget_blocksDuplicateEscalationButClearRearmsIt() {
         val date = LocalDate.now().toString()
         assertTrue(AttentionBudget.allow(c, "08:00", "care-a", 0, date))
