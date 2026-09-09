@@ -30,9 +30,9 @@ object NaturalActionRouter {
             return rows.joinToString("\n"){s->val warn=if(s.remainingDoses<=s.lowThreshold)tr(" — düşük stok"," — low stock")else "";"${s.medicationName}: ${s.remainingDoses}$warn"}
         }
         if(listOf("reçete","recete","yeniden temin","refill","prescription").any{q.contains(it)}){
-            val due=PrescriptionRecordStore.due(c)
+            val due=PrescriptionLifecycle.due(c)
             if(due.isNotEmpty())return tr("Yeniden temin zamanı gelenler:\n","Ready for refill:\n")+due.joinToString("\n"){"${it.medicationName}: ${it.eligibleDate()}"}
-            val upcoming=PrescriptionRecordStore.upcoming(c,days=45).take(5)
+            val upcoming=PrescriptionLifecycle.upcoming(c,days=45).take(5)
             return if(upcoming.isEmpty())tr("Önümüzdeki 45 gün için kayıtlı yeniden temin zamanı görünmüyor.","No recorded refill date is coming up in the next 45 days.") else tr("Yaklaşan yeniden temin tarihleri:\n","Upcoming refill dates:\n")+upcoming.joinToString("\n"){"${it.medicationName}: ${it.eligibleDate()}"}
         }
         if(listOf("bugün","bugun","today","ilaçlarımı içtim","ilaclarimi ictim","ne kaldı","ne kaldi").any{q.contains(it)}){
