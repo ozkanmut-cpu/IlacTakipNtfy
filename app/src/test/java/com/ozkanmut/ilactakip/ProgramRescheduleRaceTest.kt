@@ -62,6 +62,29 @@ class ProgramRescheduleRaceTest {
         ownerId = ownerId
     )
 
+    private fun remoteRuleEvent(
+        eventId: String,
+        revision: Long,
+        timestamp: Long,
+        rule: ProgramRule,
+        actorTopic: String = "device-a",
+        ownerId: String = "remote-owner"
+    ): DoseEvent {
+        val carrier = Medication(rule.medicationId, "Rule carrier", ProgramRuleStore.encode(rule).toString(), emptyList())
+        return DoseEvent(
+            eventId = eventId,
+            type = "program_rule_updated",
+            time = "program",
+            actor = actorTopic,
+            actorTopic = actorTopic,
+            timestamp = timestamp,
+            medications = listOf(carrier),
+            syncState = "synced",
+            revision = revision,
+            ownerId = ownerId
+        )
+    }
+
     @Test
     fun movingMedication_replacesOldAlarmWithNewAlarm() {
         AlarmScheduler.scheduleAll(c, Store.load(c), observeProgramChanges = false)
@@ -184,5 +207,18 @@ class ProgramRescheduleRaceTest {
     fun observedRemoteRevisionAdvancesNextLocalRevision() {
         EventStore.observeRevision(c, 42L)
         assertEquals(43L, EventStore.nextRevision(c))
+    }
+
+    @Test
+    fun newerRemoteRuleRevisionWinsDespiteOlderWallClock() {
+        val oldRule = ProgramRule(medicationId = med.id, weekdays = setOf(1, 3, 5), routineLabel = "old")
+        val newRule = ProgramRule(medicationId = med.id, weekdays = setOf(2, 4), routineLabel = "new")
+
+        ProgramRuleStore.applyRemote(c, remoteRuleEvent("rule-5", 5L, 900_000L, oldRule))
+        ProgramRuleStore.applyRemote(c, remoteRuleEvent("rule-6", 6L, 100_000L, newRule))
+
+        val stored = OwnerScopeStore.remoteRule(c, "remote-owner", med.id)
+        assertEquals("new", stored.routineLabel)
+        assertEquals(setOf(2, 4), stored.weekdays)
     }
 }
