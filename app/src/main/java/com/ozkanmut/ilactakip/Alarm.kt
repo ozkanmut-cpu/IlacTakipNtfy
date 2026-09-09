@@ -85,12 +85,6 @@ object AlarmScheduler {
         return safeTrigger
     }
 
-    /**
-     * Schedules a snooze only while the merged session is still SNOOZED.
-     * The post-schedule check closes the race where a terminal event lands
-     * between the first state check and AlarmManager.set*(). A later terminal
-     * event is also safe because its normal side effects cancel the snooze.
-     */
     fun scheduleSnoozeIfActive(c: Context, time: String, meds: List<Medication>, triggerAtMillis: Long, scheduledDate: String): Boolean {
         if (meds.isEmpty() || triggerAtMillis <= System.currentTimeMillis()) return false
         val date = runCatching { LocalDate.parse(scheduledDate) }.getOrNull() ?: return false
@@ -158,7 +152,12 @@ class AlarmReceiver : BroadcastReceiver() {
         val alarmMeds = ids.mapNotNull { stored[it] }.ifEmpty { names.mapIndexed { index, label -> Medication("legacy-$index", label, "", listOf(time)) } }
         val deliveryId = i.getStringExtra("deliveryId")?.takeIf { it.isNotBlank() }
             ?: "legacy-alarm|$scheduledDate|$time|${if (isSnooze) "snooze" else "regular"}|${ids.sorted().joinToString(",")}"        
-        if (!Ntfy.sendEvent(c, "alarm", time, alarmMeds, scheduledDate, eventId = deliveryId)) return
+
+        val created = Ntfy.sendEvent(c, "alarm", time, alarmMeds, scheduledDate, eventId = deliveryId)
+        if (!created) {
+            val canonical = AlarmPresentationLedger.canonicalAlarmForRedelivery(c, deliveryId, time, scheduledDate) ?: return
+            if (canonical.type != "alarm" || AlarmPresentationLedger.isPresented(c, deliveryId)) return
+        }
 
         val channel = "medication"
         val notificationManager = c.getSystemService(NotificationManager::class.java)
@@ -169,6 +168,7 @@ class AlarmReceiver : BroadcastReceiver() {
         notificationManager.notify(("group-$scheduledDate-$time").hashCode(), notification)
         SmartEscalation.schedule(c, time, scheduledDate)
         AlarmScheduler.scheduleAll(c, Store.load(c))
+        AlarmPresentationLedger.markPresented(c, deliveryId)
     }
 }
 
