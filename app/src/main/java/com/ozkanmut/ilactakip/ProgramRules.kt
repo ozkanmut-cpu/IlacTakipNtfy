@@ -5,6 +5,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.time.DayOfWeek
 import java.time.LocalDate
+import java.util.UUID
 
 /** Optional operational scheduling constraints. Prescription details are never inferred. */
 data class ProgramRule(
@@ -24,7 +25,10 @@ object ProgramRuleStore {
     private const val REV_PREFIX = "rev|"
     private const val ACTOR_PREFIX = "actor|"
     private const val EVENT_PREFIX = "event|"
+    private const val PENDING_PREFIX = "pending|"
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    private data class PendingRuleChange(val signature: String, val eventId: String)
 
     fun get(c: Context, medicationId: String): ProgramRule =
         load(c).firstOrNull { it.medicationId == medicationId } ?: ProgramRule(medicationId)
@@ -32,15 +36,37 @@ object ProgramRuleStore {
     @Synchronized
     fun save(c: Context, rule: ProgramRule) {
         val normalized = normalize(rule)
-        val before = get(c, normalized.medicationId)
-        persist(c, listOf(normalized) + load(c).filterNot { it.medicationId == normalized.medicationId })
-        AlarmScheduler.scheduleAll(c, Store.load(c), observeProgramChanges = false)
-        if (before != normalized) {
-            val medName = Store.load(c).firstOrNull { it.id == normalized.medicationId }?.name ?: "Program"
-            val carrier = Medication(normalized.medicationId, medName, encode(normalized).toString(), emptyList())
-            if (Ntfy.sendEvent(c, "program_rule_updated", "program", listOf(carrier))) {
-                val emitted = latestLocalRuleEvent(c, normalized.medicationId)
-                if (emitted != null) persistOrdering(c, normalized.medicationId, emitted)
+        val id = normalized.medicationId
+        val before = get(c, id)
+        val signature = ruleSignature(normalized)
+        val existingPending = loadPending(prefs(c).getString(PENDING_PREFIX + id, null))
+        val needsNewEvent = before != normalized
+
+        val pending = when {
+            needsNewEvent && existingPending?.signature == signature -> existingPending
+            needsNewEvent -> PendingRuleChange(signature, UUID.randomUUID().toString()).also { persistPending(c, id, it) }
+            existingPending?.signature == signature -> existingPending
+            else -> null
+        }
+
+        if (needsNewEvent) {
+            persist(c, listOf(normalized) + load(c).filterNot { it.medicationId == id })
+            AlarmScheduler.scheduleAll(c, Store.load(c), observeProgramChanges = false)
+        }
+
+        // A pending operation means the rule body may already have been committed in
+        // a previous process lifetime while its sync event/checkpoint was not. Reuse
+        // the exact event id so replay cannot create a semantic duplicate or Lamport gap.
+        if (pending != null) {
+            val medName = Store.load(c).firstOrNull { it.id == id }?.name ?: "Program"
+            val carrier = Medication(id, medName, encode(normalized).toString(), emptyList())
+            if (!EventStore.contains(c, pending.eventId)) {
+                Ntfy.sendEvent(c, "program_rule_updated", "program", listOf(carrier), eventId = pending.eventId)
+            }
+            val emitted = EventStore.load(c).firstOrNull { it.eventId == pending.eventId }
+            if (emitted != null) {
+                persistOrdering(c, id, emitted)
+                prefs(c).edit().remove(PENDING_PREFIX + id).commit()
             }
         }
     }
@@ -118,6 +144,24 @@ object ProgramRuleStore {
             .putString(EVENT_PREFIX + medicationId, event.eventId)
             .commit()
     }
+
+    private fun persistPending(c: Context, medicationId: String, pending: PendingRuleChange) {
+        val raw = JSONObject()
+            .put("signature", pending.signature)
+            .put("eventId", pending.eventId)
+            .toString()
+        prefs(c).edit().putString(PENDING_PREFIX + medicationId, raw).commit()
+    }
+
+    private fun loadPending(raw: String?): PendingRuleChange? = runCatching {
+        if (raw.isNullOrBlank()) return@runCatching null
+        val o = JSONObject(raw)
+        val signature = o.optString("signature")
+        val eventId = o.optString("eventId")
+        if (signature.isBlank() || eventId.isBlank()) null else PendingRuleChange(signature, eventId)
+    }.getOrNull()
+
+    private fun ruleSignature(rule: ProgramRule): String = encode(rule).toString()
 
     fun isActiveOn(c: Context, medicationId: String, date: LocalDate): Boolean {
         val r = get(c, medicationId)
