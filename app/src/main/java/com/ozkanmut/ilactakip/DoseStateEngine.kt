@@ -77,11 +77,13 @@ object DoseStateEngine {
     private fun reduce(time: String, events: List<DoseEvent>, scheduleMeds: List<Medication>, scheduledDate: String): DoseSessionState {
         if (events.isEmpty()) return DoseSessionState(time, DoseSessionStatus.UNKNOWN, null, scheduleMeds, scheduledDate = scheduledDate)
 
-        val relevant = events.filter { it.type in stateTypes }
-        if (relevant.isEmpty()) return DoseSessionState(time, DoseSessionStatus.UNKNOWN, events.lastOrNull(), scheduleMeds, scheduledDate = scheduledDate)
+        val sessionEvents = events.filter { it.type in stateTypes }
+        if (sessionEvents.isEmpty()) return DoseSessionState(time, DoseSessionStatus.UNKNOWN, events.lastOrNull(), scheduleMeds, scheduledDate = scheduledDate)
 
-        val latestAlarmIndex = relevant.indexOfLast { it.type == "alarm" }
-        val sessionEvents = if (latestAlarmIndex >= 0) relevant.drop(latestAlarmIndex) else relevant
+        // scheduledDate + time identify the dose session. Repeated alarm deliveries are
+        // retries/recovery signals for that same session, not boundaries that may erase
+        // a valid terminal fact. This also makes state reconstruction immune to a device
+        // clock that puts an alarm artificially in the future.
 
         // Resolve explicit human decisions by per-device revision rather than wall clock.
         // If two different devices explicitly resolve the same conflict in opposite
