@@ -77,23 +77,21 @@ object DoseStateEngine {
         }
 
         if (effective.isNotEmpty()) {
-            // Revision is a Lamport-style causal clock. Only opposing terminal
-            // facts at the same highest logical revision are truly concurrent.
-            // A higher revision is a later decision and must settle older facts.
-            val maxRevision = effective.maxOf { it.revision }
-            val top = effective.filter { it.revision == maxRevision }
-            val topTaken = top.filter { it.type == "taken" }
-            val topMissed = top.filter { it.type == "missed" }
-
-            if (topTaken.isNotEmpty() && topMissed.isNotEmpty()) {
+            // Opposing terminal facts from different actors are safety-significant.
+            // A Lamport revision orders events deterministically, but it does not
+            // prove the medication was or was not actually taken. Keep the session
+            // in conflict until an explicit conflict_resolved_* event settles it.
+            val taken = effective.filter { it.type == "taken" }
+            val missed = effective.filter { it.type == "missed" }
+            if (taken.isNotEmpty() && missed.isNotEmpty()) {
                 val conflicts = ordered(listOf(
-                    topTaken.maxWithOrNull(DoseEventOrder.global)!!,
-                    topMissed.maxWithOrNull(DoseEventOrder.global)!!
+                    taken.maxWithOrNull(DoseEventOrder.global)!!,
+                    missed.maxWithOrNull(DoseEventOrder.global)!!
                 ))
                 return DoseSessionState(time, DoseSessionStatus.CONFLICT, conflicts.last(), medsFrom(conflicts.last(), scheduleMeds), conflicts, scheduledDate)
             }
 
-            val terminal = top.maxWithOrNull(DoseEventOrder.global)!!
+            val terminal = effective.maxWithOrNull(DoseEventOrder.global)!!
             val status = if (terminal.type == "taken") DoseSessionStatus.TAKEN else DoseSessionStatus.MISSED
             return DoseSessionState(time, status, terminal, medsFrom(terminal, scheduleMeds), scheduledDate = scheduledDate)
         }
