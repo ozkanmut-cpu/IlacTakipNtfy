@@ -1,6 +1,7 @@
 package com.ozkanmut.ilactakip
 
 import android.content.Context
+import android.content.SharedPreferences
 import java.text.Normalizer
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -16,8 +17,28 @@ import kotlin.math.roundToInt
 object SgkStockAutoImporter {
     private const val PREFS = "dosefolk_sgk_stock_import"
     private const val KEY_APPLIED = "applied_cycles"
+    private const val PRESCRIPTION_PREFS = "dosefolk_prescription_tracker"
     private val dotDate = DateTimeFormatter.ofPattern("dd.MM.yyyy")
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    @Volatile private var listener: SharedPreferences.OnSharedPreferenceChangeListener? = null
+
+    /** Keep a strong listener reference so PDF imports are reconciled immediately after records are saved. */
+    fun start(c: Context) {
+        if (listener != null) return
+        synchronized(this) {
+            if (listener != null) return
+            val context = c.applicationContext
+            val p = context.getSharedPreferences(PRESCRIPTION_PREFS, Context.MODE_PRIVATE)
+            val l = SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+                if (key == "records") {
+                    reconcile(context)
+                    PrescriptionNotifier.evaluate(context)
+                }
+            }
+            p.registerOnSharedPreferenceChangeListener(l)
+            listener = l
+        }
+    }
 
     @Synchronized
     fun reconcile(c: Context): Int {
@@ -31,14 +52,13 @@ object SgkStockAutoImporter {
             val cycle = cycleKey(r)
             if (cycle in applied) return@forEach
 
-            var meds = Store.load(context)
+            val meds = Store.load(context)
             var med = r.medicationId.takeIf { it.isNotBlank() }?.let { id -> meds.firstOrNull { it.id == id } }
                 ?: meds.firstOrNull { normalize(it.name) == normalize(r.medicationName) }
 
             if (med == null) {
                 med = Medication(UUID.randomUUID().toString(), r.medicationName.trim(), r.dosePattern, emptyList())
                 Store.save(context, meds + med)
-                meds = meds + med
                 val suggestion = MedicationSuggestionEngine.suggest(r.medicationName)
                 MedicationMetaStore.save(context, MedicationMeta(
                     medicationId = med.id,
@@ -49,6 +69,7 @@ object SgkStockAutoImporter {
                     source = "sgk_pdf",
                     doseUnitOverride = suggestion.doseUnit
                 ))
+                // Link the refill record to the newly created no-alarm medication entry.
                 PrescriptionRecordStore.update(context, r.copy(medicationId = med.id))
             }
 
