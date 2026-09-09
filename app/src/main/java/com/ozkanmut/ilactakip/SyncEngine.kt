@@ -51,7 +51,7 @@ object SyncEngine {
                 }
                 val edit = prefs(context).edit().putLong(LAST_SUCCESS, System.currentTimeMillis())
                 newestId?.let { edit.putString(LAST_ID, it) }
-                edit.apply()
+                edit.commit()
                 connection.disconnect()
                 true
             }
@@ -62,7 +62,10 @@ object SyncEngine {
         val eventId=o.optString("eventId"); val type=o.optString("type"); val time=o.optString("time")
         if(eventId.isBlank()||type.isBlank()||time.isBlank()) return null
         val medsJson=o.optJSONArray("medications")?:JSONArray()
-        val meds=(0 until medsJson.length()).mapNotNull{index->medsJson.optJSONObject(index)?.let{med->Medication(med.optString("id"),med.optString("name"),med.optString("dose"),emptyList())}}
+        val meds=(0 until medsJson.length()).mapNotNull{index->medsJson.optJSONObject(index)?.let{med->
+            val timesJson=med.optJSONArray("times")?:JSONArray()
+            Medication(med.optString("id"),med.optString("name"),med.optString("dose"),(0 until timesJson.length()).map{timesJson.optString(it)}.filter{it.isNotBlank()})
+        }}
         val timestamp = o.optLong("timestamp")
         val fallbackDate = if (timestamp > 0L) Instant.ofEpochMilli(timestamp).atZone(ZoneId.systemDefault()).toLocalDate().toString() else ""
         return DoseEvent(
@@ -89,6 +92,7 @@ object SyncEngine {
                     AlarmScheduler.scheduleSnoozeUntil(c,event.time,event.medications,event.snoozeUntil,scheduledDate)
                 }
             }
+            "program_added","program_updated","program_deleted" -> ProgramSync.applyRemote(c,event)
         }
     }
 }
