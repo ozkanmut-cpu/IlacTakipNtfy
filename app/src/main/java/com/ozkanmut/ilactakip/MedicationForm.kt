@@ -24,9 +24,10 @@ data class MedicationMeta(
     val administrationSite: String = "",
     val packageCount: Int? = null,
     val packageUnit: String = "",
-    val source: String = "manual"
+    val source: String = "manual",
+    val doseUnitOverride: String = ""
 ) {
-    fun unit(): String = if (I18n.language() == "tr") form.unitTr else form.unitEn
+    fun unit(): String = doseUnitOverride.ifBlank { if (I18n.language() == "tr") form.unitTr else form.unitEn }
     fun doseLabel(): String = quantity?.let {
         val n = if (it % 1.0 == 0.0) it.toInt().toString() else it.toString()
         "$n ${unit()}${if (administrationSite.isBlank()) "" else " • $administrationSite"}"
@@ -40,7 +41,8 @@ data class MedicationSuggestion(
     val packageCount: Int? = null,
     val packageUnit: String = "",
     val suggestedName: String = "",
-    val confidence: Float = 0f
+    val confidence: Float = 0f,
+    val doseUnit: String = ""
 )
 
 object MedicationMetaStore {
@@ -85,6 +87,7 @@ object MedicationMetaStore {
         .put("packageCount", m.packageCount ?: JSONObject.NULL)
         .put("packageUnit", m.packageUnit)
         .put("source", m.source)
+        .put("doseUnitOverride", m.doseUnitOverride)
 
     fun fromJson(o: JSONObject?): MedicationMeta? {
         if (o == null) return null
@@ -97,7 +100,8 @@ object MedicationMetaStore {
             administrationSite = o.optString("administrationSite"),
             packageCount = if (o.isNull("packageCount")) null else o.optInt("packageCount"),
             packageUnit = o.optString("packageUnit"),
-            source = o.optString("source", "manual")
+            source = o.optString("source", "manual"),
+            doseUnitOverride = o.optString("doseUnitOverride")
         )
     }
 
@@ -139,7 +143,7 @@ object MedicationSuggestionEngine {
             Regex("(?i)inhaler|inhalasyon|puf|puff|turbuhaler|diskus|ellipta|aerosol").containsMatchIn(text) -> MedicationForm.INHALER
             Regex("(?i)göz damlası|goz damlasi|eye drops|kulak damlası|burun damlası|damla|drops?").containsMatchIn(text) -> MedicationForm.DROP
             Regex("(?i)şurup|surup|syrup|oral solüsyon|oral solusyon|solution|süspansiyon|suspension").containsMatchIn(text) -> MedicationForm.LIQUID
-            Regex("(?i)krem|cream|merhem|ointment|jel|gel").containsMatchIn(text) -> MedicationForm.CREAM
+            Regex("(?i)krem|cream|merhem|ointment|jel|gel|pomad").containsMatchIn(text) -> MedicationForm.CREAM
             Regex("(?i)yama|patch|transdermal").containsMatchIn(text) -> MedicationForm.PATCH
             Regex("(?i)enjeksiyon|injection|enjektabl|ampul|ampoule|flakon|vial|prefilled|kalem|pen").containsMatchIn(text) -> MedicationForm.INJECTION
             Regex("(?i)tablet|kapsül|kapsul|capsule|draje|film tablet").containsMatchIn(text) -> MedicationForm.TABLET
@@ -159,9 +163,31 @@ object MedicationSuggestionEngine {
             "iki göz" in lower || "both eyes" in lower -> if (I18n.language() == "tr") "iki göz" else "both eyes"
             else -> ""
         }
+        val doseUnit = when (form) {
+            MedicationForm.INSULIN -> "U"
+            MedicationForm.TABLET -> when {
+                Regex("(?i)kapsül|kapsul|capsule").containsMatchIn(text) -> if (I18n.language() == "tr") "kapsül" else "capsule"
+                else -> if (I18n.language() == "tr") "tablet" else "tablet"
+            }
+            MedicationForm.NEBULE -> when {
+                Regex("(?i)flakon|flk|vial").containsMatchIn(text) -> if (I18n.language() == "tr") "flakon" else "vial"
+                Regex("(?i)ampul|ampoule").containsMatchIn(text) -> if (I18n.language() == "tr") "ampul" else "ampoule"
+                else -> if (I18n.language() == "tr") "nebül" else "nebule"
+            }
+            MedicationForm.INHALER -> when {
+                Regex("(?i)kapsül|kapsul|capsule").containsMatchIn(text) -> if (I18n.language() == "tr") "kapsül" else "capsule"
+                else -> if (I18n.language() == "tr") "puf" else "puff"
+            }
+            MedicationForm.DROP -> if (I18n.language() == "tr") "damla" else "drop"
+            MedicationForm.LIQUID -> "mL"
+            MedicationForm.CREAM -> if (I18n.language() == "tr") "uygulama" else "application"
+            MedicationForm.PATCH -> if (I18n.language() == "tr") "yama" else "patch"
+            MedicationForm.INJECTION -> if (I18n.language() == "tr") "doz" else "dose"
+            MedicationForm.OTHER -> ""
+        }
         val suggestedName = ocrText.lines().map { it.trim() }
             .firstOrNull { it.length in 3..40 && it.any(Char::isLetter) && !it.matches(Regex(".*\\d{3,}.*")) }
             .orEmpty()
-        return MedicationSuggestion(form, quantity, site, pack?.first, pack?.second.orEmpty(), suggestedName, if (ocrText.isNotBlank()) 0.82f else 0.65f)
+        return MedicationSuggestion(form, quantity, site, pack?.first, pack?.second.orEmpty(), suggestedName, if (ocrText.isNotBlank()) 0.82f else 0.65f, doseUnit)
     }
 }
