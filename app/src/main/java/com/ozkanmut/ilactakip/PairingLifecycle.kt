@@ -73,14 +73,17 @@ object PairingLifecycle {
     /**
      * Before trusting a previously revoked topic again, drain the current ntfy
      * catch-up while that topic is still unauthorized. Rejected old messages are
-     * receipted by IncomingEventGuard. Only a successful drain clears the tombstone.
+     * receipted by IncomingEventGuard. The tombstone intentionally remains until
+     * completeRePair() runs after the peer record has been written.
      */
     fun prepareRePair(c: Context, topic: String): Boolean {
         val context = c.applicationContext
         if (!RevokedPeerFence.isRevoked(context, topic)) return true
-        if (!SyncEngine.pullBlocking(context)) return false
-        RevokedPeerFence.clear(context, topic)
-        return true
+        return SyncEngine.pullBlocking(context)
+    }
+
+    fun completeRePair(c: Context, topic: String) {
+        RevokedPeerFence.clear(c.applicationContext, topic)
     }
 
     private fun cleanupPeer(c: Context, topic: String, dropOutbox: Boolean) {
