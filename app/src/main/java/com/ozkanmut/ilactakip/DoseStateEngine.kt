@@ -25,7 +25,7 @@ data class DoseSessionState(
 
 object DoseStateEngine {
     private val stateTypes = setOf(
-        "alarm", "snoozed", "taken", "missed",
+        "alarm", "snoozed", "taken", "missed", "undo_taken", "undo_missed",
         "conflict_resolved_taken", "conflict_resolved_missed"
     )
 
@@ -81,9 +81,14 @@ object DoseStateEngine {
         val latestExplicitResolution = sessionEvents.lastOrNull {
             it.type == "conflict_resolved_taken" || it.type == "conflict_resolved_missed"
         }
-        if (latestExplicitResolution != null) {
+        if (latestExplicitResolution != null && sessionEvents.last().timestamp <= latestExplicitResolution.timestamp) {
             val status = if (latestExplicitResolution.type == "conflict_resolved_taken") DoseSessionStatus.TAKEN else DoseSessionStatus.MISSED
             return DoseSessionState(time, status, latestExplicitResolution, medsFrom(latestExplicitResolution, scheduleMeds), scheduledDate = scheduledDate)
+        }
+
+        val latest = sessionEvents.last()
+        if (latest.type == "undo_taken" || latest.type == "undo_missed") {
+            return DoseSessionState(time, DoseSessionStatus.PENDING, latest, medsFrom(latest, scheduleMeds), scheduledDate = scheduledDate)
         }
 
         val terminal = sessionEvents.filter { it.type == "taken" || it.type == "missed" }
@@ -105,7 +110,6 @@ object DoseStateEngine {
             }
         }
 
-        val latest = sessionEvents.last()
         val status = when (latest.type) {
             "taken" -> DoseSessionStatus.TAKEN
             "missed" -> DoseSessionStatus.MISSED
