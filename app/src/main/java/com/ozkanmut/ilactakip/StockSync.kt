@@ -10,13 +10,14 @@ object StockSync {
     fun publish(c: Context, targetTopic: String, stock: MedicationStock) {
         if (targetTopic.isBlank() || targetTopic == Store.topic(c)) return
         val payload = JSONObject()
-            .put("protocolVersion", 1)
+            .put("protocolVersion", 2)
             .put("eventId", UUID.randomUUID().toString())
             .put("type", EVENT_TYPE)
             .put("ownerId", Store.topic(c))
             .put("actor", Store.myName(c))
             .put("actorTopic", Store.topic(c))
             .put("timestamp", System.currentTimeMillis())
+            .put("revision", EventStore.nextRevision(c))
             .put("stock", StockEngine.toJson(stock))
         AlertOutbox.enqueue(c.applicationContext, targetTopic, "Dosefolk sync", payload.toString())
     }
@@ -42,7 +43,16 @@ object StockSync {
         val known = Store.people(c).any { it.topic == ownerId }
         if (!known || ownerId == Store.topic(c)) return true
         val stock = StockEngine.fromJson(payload.optJSONObject("stock")) ?: return true
-        StockEngine.applyRemoteSnapshot(c, ownerId, stock)
+        val revision = payload.optLong("revision", 0L)
+        EventStore.observeRevision(c, revision)
+        StockEngine.applyRemoteSnapshot(
+            c = c,
+            ownerId = ownerId,
+            stock = stock,
+            revision = revision,
+            actorTopic = actorTopic,
+            eventId = payload.optString("eventId")
+        )
         return true
     }
 }
