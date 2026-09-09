@@ -259,3 +259,14 @@ object OfflineTrustReceipt {
 private fun formatTime(ms: Long): String = DateTimeFormatter.ofPattern("dd.MM HH:mm")
     .withZone(ZoneId.systemDefault())
     .format(Instant.ofEpochMilli(ms))
+
+private fun formatDuration(minutes: Long): String {
+    val safe = minutes.coerceAtLeast(0L)
+    val hours = safe / 60L
+    val mins = safe % 60L
+    return when {
+        hours > 0L && mins > 0L -> if (I18n.language() == "tr") "${hours} sa ${mins} dk" else "${hours}h ${mins}m"
+        hours > 0L -> if (I18n.language() == "tr") "${hours} sa" else "${hours}h"
+        else -> if (I18n.language() == "tr") "${mins} dk" else "${mins}m"
+    }
+}
