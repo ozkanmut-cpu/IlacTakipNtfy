@@ -3,6 +3,7 @@ package com.ozkanmut.ilactakip
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
+import java.util.UUID
 
 object ProgramSync {
     private const val PREFS = "dosefolk_program_sync"
@@ -14,6 +15,12 @@ object ProgramSync {
     private fun revisionKey(ownerId: String, id: String) = "order_rev|$ownerId|$id"
     private fun actorKey(ownerId: String, id: String) = "order_actor|$ownerId|$id"
     private fun eventKey(ownerId: String, id: String) = "order_event|$ownerId|$id"
+    private fun pendingKey(ownerId: String, id: String) = "pending|$ownerId|$id"
+
+    private data class PendingChange(
+        val signature: String,
+        val eventId: String
+    )
 
     @Synchronized
     fun observeLocal(c: Context, meds: List<Medication>) {
@@ -28,27 +35,90 @@ object ProgramSync {
         val old = loadBaseline(c).associateBy { it.id }
         val current = meds.associateBy { it.id }
         val now = System.currentTimeMillis()
+        val touched = linkedSetOf<String>()
 
         (current.keys - old.keys).forEach { id ->
             val med = current.getValue(id)
-            p.edit().putLong(stampKey(ownerId, id), now).commit()
-            Ntfy.sendEvent(c, "program_added", med.times.firstOrNull() ?: "program", listOf(med))
+            emitLocalChange(c, ownerId, "program_added", med, null, now)
+            touched += id
         }
         (old.keys - current.keys).forEach { id ->
             val med = old.getValue(id)
-            p.edit().putLong(stampKey(ownerId, id), now).commit()
-            Ntfy.sendEvent(c, "program_deleted", med.times.firstOrNull() ?: "program", listOf(med))
+            emitLocalChange(c, ownerId, "program_deleted", med, med, now)
+            touched += id
         }
         (current.keys intersect old.keys).forEach { id ->
             val before = old.getValue(id)
             val after = current.getValue(id)
             if (before != after) {
-                p.edit().putLong(stampKey(ownerId, id), now).commit()
-                Ntfy.sendEvent(c, "program_updated", after.times.firstOrNull() ?: before.times.firstOrNull() ?: "program", listOf(after))
+                emitLocalChange(c, ownerId, "program_updated", after, before, now)
+                touched += id
             }
         }
+
+        // Baseline is committed only after all corresponding durable events exist.
+        // If the process dies earlier, the pending operation id survives and the
+        // next observation reuses the exact same event instead of creating a new one.
         saveBaseline(c, meds)
+        if (touched.isNotEmpty()) {
+            val editor = p.edit()
+            touched.forEach { id -> editor.remove(pendingKey(ownerId, id)) }
+            editor.commit()
+        }
     }
+
+    private fun emitLocalChange(
+        c: Context,
+        ownerId: String,
+        type: String,
+        med: Medication,
+        before: Medication?,
+        timestamp: Long
+    ) {
+        val p = prefs(c)
+        val signature = transitionSignature(type, before, med)
+        val pending = loadPending(p.getString(pendingKey(ownerId, med.id), null))
+        val eventId = if (pending?.signature == signature) pending.eventId else UUID.randomUUID().toString().also { id ->
+            val raw = JSONObject().put("signature", signature).put("eventId", id).toString()
+            p.edit().putString(pendingKey(ownerId, med.id), raw).commit()
+        }
+
+        p.edit().putLong(stampKey(ownerId, med.id), timestamp).commit()
+        if (!EventStore.contains(c, eventId)) {
+            Ntfy.sendEvent(
+                c,
+                type,
+                med.times.firstOrNull() ?: before?.times?.firstOrNull() ?: "program",
+                listOf(med),
+                eventId = eventId
+            )
+        }
+    }
+
+    private fun transitionSignature(type: String, before: Medication?, after: Medication): String =
+        buildString {
+            append(type).append('|')
+            append(medFingerprint(before)).append("->")
+            append(medFingerprint(after))
+        }
+
+    private fun medFingerprint(med: Medication?): String {
+        if (med == null) return "<none>"
+        return listOf(
+            med.id,
+            med.name,
+            med.dose,
+            med.times.joinToString("\u001f")
+        ).joinToString("\u001e")
+    }
+
+    private fun loadPending(raw: String?): PendingChange? = runCatching {
+        if (raw.isNullOrBlank()) return@runCatching null
+        val o = JSONObject(raw)
+        val signature = o.optString("signature")
+        val eventId = o.optString("eventId")
+        if (signature.isBlank() || eventId.isBlank()) null else PendingChange(signature, eventId)
+    }.getOrNull()
 
     /**
      * Applies an authorized remote program event without touching the local medication list.
