@@ -42,7 +42,7 @@ object DoseStateEngine {
     private fun reduce(time: String, events: List<DoseEvent>, scheduleMeds: List<Medication>, scheduledDate: String): DoseSessionState {
         if (events.isEmpty()) return DoseSessionState(time, DoseSessionStatus.UNKNOWN, null, scheduleMeds, scheduledDate = scheduledDate)
         val sessionEvents = events.filter { it.type in stateTypes }
-        if (sessionEvents.isEmpty()) return DoseSessionState(time, DoseSessionStatus.UNKNOWN, events.lastOrNull(), scheduleMeds, scheduledDate = scheduledDate)
+        if (sessionEvents.isEmpty()) return DoseSessionState(time, DoseSessionStatus.UNKNOWN, events.firstOrNull(), scheduleMeds, scheduledDate = scheduledDate)
 
         val resolutions = sessionEvents.filter { it.type == "conflict_resolved_taken" || it.type == "conflict_resolved_missed" }
         if (resolutions.isNotEmpty()) {
@@ -91,7 +91,9 @@ object DoseStateEngine {
             return DoseSessionState(time, status, effectiveTerminal, medsFrom(effectiveTerminal, scheduleMeds), scheduledDate = scheduledDate)
         }
 
-        val latest = sessionEvents.last()
+        val latest = sessionEvents.maxWithOrNull(
+            compareBy<DoseEvent> { it.revision }.thenBy { it.timestamp }.thenBy { it.actorTopic }.thenBy { it.eventId }
+        )!!
         val status = when (latest.type) {
             "snoozed" -> DoseSessionStatus.SNOOZED
             "alarm" -> DoseSessionStatus.PENDING
