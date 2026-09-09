@@ -17,7 +17,8 @@ data class DoseEvent(
     val syncState: String = "pending",
     val revision: Long = 0L,
     val scheduledDate: String = "",
-    val snoozeUntil: Long = 0L
+    val snoozeUntil: Long = 0L,
+    val ownerId: String = ""
 )
 
 object EventStore {
@@ -65,12 +66,13 @@ object EventStore {
     }
 
     fun payload(event: DoseEvent): JSONObject = JSONObject()
-        .put("v", 7)
+        .put("v", 8)
         .put("eventId", event.eventId)
         .put("type", event.type)
         .put("time", event.time)
         .put("scheduledDate", event.scheduledDate)
         .put("snoozeUntil", event.snoozeUntil)
+        .put("ownerId", event.ownerId)
         .put("actor", event.actor)
         .put("actorTopic", event.actorTopic)
         .put("timestamp", event.timestamp)
@@ -109,7 +111,8 @@ object EventStore {
             syncState = o.optString("syncState", "pending"),
             revision = o.optLong("revision", 0L),
             scheduledDate = o.optString("scheduledDate", fallbackDate).ifBlank { fallbackDate },
-            snoozeUntil = o.optLong("snoozeUntil", 0L)
+            snoozeUntil = o.optLong("snoozeUntil", 0L),
+            ownerId = o.optString("ownerId")
         )
     }
 }
