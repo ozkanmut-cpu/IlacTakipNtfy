@@ -52,8 +52,6 @@ object DoseStateEngine {
             val topTaken = top.filter { it.type == "conflict_resolved_taken" }
             val topMissed = top.filter { it.type == "conflict_resolved_missed" }
 
-            // Only genuinely concurrent top-revision opposite decisions remain a conflict.
-            // Any later higher revision is a new explicit human decision and settles it.
             if (topTaken.isNotEmpty() && topMissed.isNotEmpty()) {
                 val conflicts = ordered(listOf(topTaken.maxBy { it.eventId }, topMissed.maxBy { it.eventId }))
                 return DoseSessionState(time, DoseSessionStatus.CONFLICT, conflicts.last(), medsFrom(conflicts.last(), scheduleMeds), conflicts, scheduledDate)
@@ -105,6 +103,18 @@ object DoseStateEngine {
 
     private fun medsFrom(event: DoseEvent, fallback: List<Medication>): List<Medication> = if (event.medications.isNotEmpty()) event.medications else fallback
     private fun eventDate(event: DoseEvent): String = event.scheduledDate.ifBlank { LocalDate.now().toString() }
-    private fun ordered(events: List<DoseEvent>) = events.sortedWith(compareBy<DoseEvent> { it.timestamp }.thenBy { it.revision }.thenBy { it.actorTopic }.thenBy { it.eventId })
+
+    /**
+     * Logical revision is the causal clock. Wall-clock timestamps are only a final
+     * display fallback so a device with a badly skewed clock cannot become the
+     * apparent newest conflict event or supply the winning medication payload.
+     */
+    private fun ordered(events: List<DoseEvent>) = events.sortedWith(
+        compareBy<DoseEvent> { it.revision }
+            .thenBy { it.actorTopic }
+            .thenBy { it.eventId }
+            .thenBy { it.timestamp }
+    )
+
     private fun newestForActor(events: List<DoseEvent>): DoseEvent? = events.maxWithOrNull(compareBy<DoseEvent> { it.revision }.thenBy { it.timestamp }.thenBy { it.eventId })
 }
