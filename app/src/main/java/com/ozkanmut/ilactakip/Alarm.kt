@@ -35,7 +35,10 @@ object AlarmScheduler {
     }
 
     private fun cancelGroup(c: Context, time: String) = cancelByKey(c, "group-$time")
-    fun cancelSnooze(c: Context, time: String) = cancelByKey(c, "snooze-$time")
+    fun cancelSnooze(c: Context, time: String, scheduledDate: String = LocalDate.now().toString()) =
+        cancelByKey(c, snoozeKey(time, scheduledDate))
+
+    internal fun snoozeKey(time: String, scheduledDate: String) = "snooze-$scheduledDate-$time"
 
     private fun cancelByKey(c: Context, key: String) {
         val alarmManager = c.getSystemService(AlarmManager::class.java)
@@ -71,7 +74,7 @@ object AlarmScheduler {
 
     fun scheduleSnoozeUntil(c: Context, time: String, meds: List<Medication>, triggerAtMillis: Long, scheduledDate: String = LocalDate.now().toString()): Long {
         val safeTrigger = maxOf(System.currentTimeMillis() + 1_000L, triggerAtMillis)
-        scheduleAt(c, time, meds, safeTrigger, "snooze-$time", true, scheduledDate)
+        scheduleAt(c, time, meds, safeTrigger, snoozeKey(time, scheduledDate), true, scheduledDate)
         return safeTrigger
     }
 
@@ -142,7 +145,7 @@ object Ntfy {
 
     fun sendEvent(c: Context, type: String, time: String, meds: List<Medication>, scheduledDate: String = LocalDate.now().toString(), snoozeUntil: Long = 0L) {
         when {
-            type in terminalTypes -> { AlarmScheduler.cancelSnooze(c, time); SmartEscalation.cancel(c, time, scheduledDate); CareBatonStore.resolve(c, time, scheduledDate) }
+            type in terminalTypes -> { AlarmScheduler.cancelSnooze(c, time, scheduledDate); SmartEscalation.cancel(c, time, scheduledDate); CareBatonStore.resolve(c, time, scheduledDate) }
             type == "snoozed" -> SmartEscalation.cancel(c, time, scheduledDate)
         }
         val ownerId = OwnerScopeStore.ownerFor(c, meds)
