@@ -85,26 +85,23 @@ object StockEngine {
         else "dose|${event.scheduledDate}|${event.time}|$medicationId"
 
     @Synchronized fun applyEvent(c:Context,event:DoseEvent){
-        if(event.type !in setOf("taken","prn_taken","undo_taken")||alreadyProcessed(c,event.eventId))return
+        val stockTypes=setOf("taken","prn_taken","undo_taken","conflict_resolved_taken","conflict_resolved_missed")
+        if(event.type !in stockTypes||alreadyProcessed(c,event.eventId))return
         val ownerId=event.ownerId.ifBlank{event.actorTopic}
         if(ownerId.isNotBlank() && ownerId!=OwnerScopeStore.localOwnerId(c)) return
 
         val current=load(c).associateBy{it.medicationId}.toMutableMap()
         val changed=mutableListOf<MedicationStock>()
         val consumed=consumed(c).toMutableSet()
-        val restore=event.type=="undo_taken"
+        val shouldBeConsumed=event.type in setOf("taken","prn_taken","conflict_resolved_taken")
         event.medications.distinctBy{it.id}.forEach{med->
             val s=current[med.id]?:return@forEach
             val key=consumptionKey(event,med.id)
-            if(restore){
-                if(key !in consumed)return@forEach
-                consumed.remove(key)
-            }else{
-                if(key in consumed)return@forEach
-                consumed.add(key)
-            }
+            val isConsumed=key in consumed
+            if(shouldBeConsumed==isConsumed)return@forEach
+            if(shouldBeConsumed) consumed.add(key) else consumed.remove(key)
             val units=consumptionUnits(c,med.id)
-            val remaining=if(restore)s.remainingDoses+units else (s.remainingDoses-units).coerceAtLeast(0)
+            val remaining=if(shouldBeConsumed)(s.remainingDoses-units).coerceAtLeast(0) else s.remainingDoses+units
             val u=s.copy(remainingDoses=remaining,updatedAt=event.timestamp)
             current[med.id]=u
             changed+=u
