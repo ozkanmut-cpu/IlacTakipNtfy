@@ -36,11 +36,27 @@ object ProgramRuleStore {
         persist(c, listOf(normalized) + load(c).filterNot { it.medicationId == normalized.medicationId })
         AlarmScheduler.scheduleAll(c, Store.load(c), observeProgramChanges = false)
         if (before != normalized) {
-            val now = System.currentTimeMillis()
-            prefs(c).edit().putLong(STAMP_PREFIX + normalized.medicationId, now).commit()
             val medName = Store.load(c).firstOrNull { it.id == normalized.medicationId }?.name ?: "Program"
             val carrier = Medication(normalized.medicationId, medName, encode(normalized).toString(), emptyList())
-            Ntfy.sendEvent(c, "program_rule_updated", "program", listOf(carrier))
+            if (Ntfy.sendEvent(c, "program_rule_updated", "program", listOf(carrier))) {
+                // save() and applyRemote() share the same object lock, so the local
+                // event can be captured here before any remote rule is allowed to
+                // race in. Persist the exact event ordering metadata that was sent.
+                val localTopic = Store.topic(c)
+                val emitted = EventStore.load(c).firstOrNull { event ->
+                    event.type == "program_rule_updated" &&
+                        event.actorTopic == localTopic &&
+                        event.medications.firstOrNull()?.id == normalized.medicationId
+                }
+                if (emitted != null) {
+                    prefs(c).edit()
+                        .putLong(STAMP_PREFIX + normalized.medicationId, emitted.timestamp)
+                        .putLong(REV_PREFIX + normalized.medicationId, emitted.revision)
+                        .putString(ACTOR_PREFIX + normalized.medicationId, emitted.actorTopic)
+                        .putString(EVENT_PREFIX + normalized.medicationId, emitted.eventId)
+                        .commit()
+                }
+            }
         }
     }
 
