@@ -149,6 +149,7 @@ class BootReceiver : BroadcastReceiver() {
         AlarmScheduler.scheduleAll(c, Store.load(c))
         AlarmScheduler.restoreActiveSnoozes(c)
         UndoRecovery.recoverCurrent(c)
+        SmartEscalation.restore(c)
         DosefolkSyncScheduler.ensure(c)
         DosefolkSyncScheduler.kick(c)
     }
