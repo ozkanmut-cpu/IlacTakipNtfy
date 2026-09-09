@@ -80,6 +80,17 @@ object CareBatonStore {
         save(c, load(c).filterNot { it.doseKey == doseKey(time, scheduledDate) })
     }
 
+    /** Remove claims owned by a revoked Circle peer and immediately resume any unresolved dose. */
+    @Synchronized fun clearPeer(c: Context, topic: String) {
+        if (topic.isBlank()) return
+        val current = load(c)
+        val removed = current.filter { it.actorTopic == topic }
+        if (removed.isEmpty()) return
+        // Restore escalation before durable removal so a crash replays safely.
+        removed.forEach { resumeIfUnresolved(c, it.time, it.scheduledDate) }
+        save(c, current.filterNot { it.actorTopic == topic })
+    }
+
     @Synchronized fun cleanup(c: Context) {
         val current = load(c)
         val now = System.currentTimeMillis()
