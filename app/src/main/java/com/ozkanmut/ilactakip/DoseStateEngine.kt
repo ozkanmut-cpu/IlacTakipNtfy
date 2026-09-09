@@ -59,7 +59,7 @@ object DoseStateEngine {
 
             val resolution = top.maxWithOrNull(compareBy<DoseEvent> { it.actorTopic }.thenBy { it.eventId })!!
             val laterUndo = sessionEvents.filter { (it.type == "undo_taken" || it.type == "undo_missed") && it.actorTopic == resolution.actorTopic }
-                .maxWithOrNull(compareBy<DoseEvent> { it.revision }.thenBy { it.timestamp }.thenBy { it.eventId })
+                .maxWithOrNull(compareBy<DoseEvent> { it.revision }.thenBy { it.eventId }.thenBy { it.timestamp })
             if (laterUndo != null && laterUndo.revision > resolution.revision) {
                 return DoseSessionState(time, DoseSessionStatus.PENDING, laterUndo, medsFrom(laterUndo, scheduleMeds), scheduledDate = scheduledDate)
             }
@@ -90,7 +90,7 @@ object DoseStateEngine {
         }
 
         val latest = sessionEvents.maxWithOrNull(
-            compareBy<DoseEvent> { it.revision }.thenBy { it.timestamp }.thenBy { it.actorTopic }.thenBy { it.eventId }
+            compareBy<DoseEvent> { it.revision }.thenBy { it.actorTopic }.thenBy { it.eventId }.thenBy { it.timestamp }
         )!!
         val status = when (latest.type) {
             "snoozed" -> DoseSessionStatus.SNOOZED
@@ -105,9 +105,9 @@ object DoseStateEngine {
     private fun eventDate(event: DoseEvent): String = event.scheduledDate.ifBlank { LocalDate.now().toString() }
 
     /**
-     * Logical revision is the causal clock. Wall-clock timestamps are only a final
-     * display fallback so a device with a badly skewed clock cannot become the
-     * apparent newest conflict event or supply the winning medication payload.
+     * Logical revision is the causal clock. Actor/topic and event ID are stable
+     * deterministic tie-breakers. Wall-clock time is used only after those fields
+     * so device clock skew cannot change convergence or the winning UI payload.
      */
     private fun ordered(events: List<DoseEvent>) = events.sortedWith(
         compareBy<DoseEvent> { it.revision }
@@ -116,5 +116,7 @@ object DoseStateEngine {
             .thenBy { it.timestamp }
     )
 
-    private fun newestForActor(events: List<DoseEvent>): DoseEvent? = events.maxWithOrNull(compareBy<DoseEvent> { it.revision }.thenBy { it.timestamp }.thenBy { it.eventId })
+    private fun newestForActor(events: List<DoseEvent>): DoseEvent? = events.maxWithOrNull(
+        compareBy<DoseEvent> { it.revision }.thenBy { it.eventId }.thenBy { it.timestamp }
+    )
 }
