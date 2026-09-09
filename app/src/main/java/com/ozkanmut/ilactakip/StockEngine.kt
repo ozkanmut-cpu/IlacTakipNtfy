@@ -3,7 +3,6 @@ package com.ozkanmut.ilactakip
 import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
-import java.time.LocalDate
 import kotlin.math.roundToInt
 
 data class MedicationStock(val medicationId:String,val medicationName:String,val remainingDoses:Int,val packSize:Int,val lowThreshold:Int=5,val updatedAt:Long=System.currentTimeMillis())
@@ -73,17 +72,12 @@ object StockEngine {
 
     private fun consumptionUnits(c:Context,id:String):Int{val m=MedicationMetaStore.get(c,id)?:return 1;val countable=m.form in setOf(MedicationForm.TABLET,MedicationForm.INSULIN,MedicationForm.NEBULE,MedicationForm.INHALER,MedicationForm.DROP,MedicationForm.PATCH);return if(countable)(m.quantity?:1.0).roundToInt().coerceAtLeast(1) else 1}
     private fun consumptionKey(event:DoseEvent,medicationId:String):String = if(event.type=="prn_taken") "prn|${event.eventId}|$medicationId" else "dose|${event.scheduledDate}|${event.time}|$medicationId"
-    private fun compactLedger(values:Set<String>,limit:Int=4000):List<String>{
-        val ordered=values.toList()
-        val todayPrefix="dose|${LocalDate.now()}|"
-        // PRN administrations are event-identity based rather than schedule-session based.
-        // Keep their exact keys indefinitely so an ancient replay cannot consume stock twice
-        // after the generic processed-event window has rolled over.
-        val protected=ordered.filter{it.startsWith(todayPrefix)||it.startsWith("prn|")}
-        val protectedSet=protected.toSet()
-        val budget=(limit-protected.size).coerceAtLeast(0)
-        val recent=ordered.asReversed().asSequence().filterNot{it in protectedSet}.take(budget).toList().asReversed()
-        return (recent+protected).distinct()
+    private fun compactLedger(values:Set<String>):List<String>{
+        // These are semantic facts, not merely replay receipts. Forgetting an old regular
+        // dose session would allow a sufficiently old replay to consume or restore stock
+        // a second time after bounded receipt/processed-event windows roll over.
+        // Keep both regular dose-session and PRN event identity keys durably.
+        return values.toList()
     }
 
     @Synchronized fun applyEvent(c:Context,event:DoseEvent){
