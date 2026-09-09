@@ -30,7 +30,9 @@ class ReliabilityCoreTest {
             "dosefolk_program_rules",
             "dosefolk_owner_scope",
             "dosefolk_low_stock_alerts",
-            "dosefolk_prescription_tracker"
+            "dosefolk_prescription_tracker",
+            "dosefolk_sgk_stock_import",
+            "dosefolk_refill_alerts"
         ).forEach { c.getSharedPreferences(it, Context.MODE_PRIVATE).edit().clear().commit() }
     }
 
@@ -52,7 +54,6 @@ class ReliabilityCoreTest {
     fun eventStore_deduplicatesSameEventId() {
         EventStore.append(c, event("same-id", "taken", 100L))
         EventStore.append(c, event("same-id", "missed", 200L))
-
         val events = EventStore.load(c)
         assertEquals(1, events.size)
         assertEquals("taken", events.single().type)
@@ -63,7 +64,6 @@ class ReliabilityCoreTest {
         Store.save(c, listOf(med))
         EventStore.append(c, event("taken-1", "taken", 100L))
         EventStore.append(c, event("undo-1", "undo_taken", 200L))
-
         val state = DoseStateEngine.stateForTime(c, "08:00", LocalDate.now())
         assertEquals(DoseSessionStatus.PENDING, state.status)
         assertEquals("undo_taken", state.latestEvent?.type)
@@ -73,11 +73,9 @@ class ReliabilityCoreTest {
     fun stock_takenIsIdempotentAndUndoRestoresDose() {
         StockEngine.configure(c, med, packSize = 10, currentDoses = 10, lowThreshold = 2)
         val taken = event("taken-stock", "taken", 100L)
-
         StockEngine.applyEvent(c, taken)
         StockEngine.applyEvent(c, taken)
         assertEquals(9, StockEngine.forMedication(c, med.id)?.remainingDoses)
-
         StockEngine.applyEvent(c, event("undo-stock", "undo_taken", 200L))
         assertEquals(10, StockEngine.forMedication(c, med.id)?.remainingDoses)
     }
@@ -86,7 +84,6 @@ class ReliabilityCoreTest {
     fun remoteStock_olderSnapshotCannotRollBackNewerState() {
         StockEngine.saveRemoteSnapshot(c, "owner-2", MedicationStock(med.id, med.name, 6, 10, 2, updatedAt = 200L))
         StockEngine.saveRemoteSnapshot(c, "owner-2", MedicationStock(med.id, med.name, 9, 10, 2, updatedAt = 100L))
-
         val stock = StockEngine.remoteForMedication(c, "owner-2", med.id)
         assertNotNull(stock)
         assertEquals(6, stock?.remainingDoses)
@@ -97,9 +94,7 @@ class ReliabilityCoreTest {
     fun alarmPlan_canBeRebuiltFromPersistedMedicationAfterSchedulerStateLoss() {
         Store.save(c, listOf(med))
         c.getSharedPreferences("dosefolk_alarm_scheduler", Context.MODE_PRIVATE).edit().clear().commit()
-
         AlarmScheduler.scheduleAll(c, Store.load(c), observeProgramChanges = false)
-
         val scheduled = c.getSharedPreferences("dosefolk_alarm_scheduler", Context.MODE_PRIVATE)
             .getStringSet("scheduled_times", emptySet()).orEmpty()
         assertTrue("08:00" in scheduled)
@@ -107,15 +102,8 @@ class ReliabilityCoreTest {
 
     @Test
     fun prescriptionLifecycle_newestCycleSupersedesOlderFill() {
-        val old = PrescriptionRecord(
-            id = "old", medicationName = "Vasoxen 5 mg 28 tablet",
-            fillDate = "01.06.2026", doseEndDate = "01.09.2026", continuous = true
-        )
-        val newer = PrescriptionRecord(
-            id = "new", medicationName = "Vasoxen 5 mg 28 tablet",
-            fillDate = "01.08.2026", doseEndDate = "01.11.2026", continuous = true
-        )
-
+        val old = PrescriptionRecord(id = "old", medicationName = "Vasoxen 5 mg 28 tablet", fillDate = "01.06.2026", doseEndDate = "01.09.2026", continuous = true)
+        val newer = PrescriptionRecord(id = "new", medicationName = "Vasoxen 5 mg 28 tablet", fillDate = "01.08.2026", doseEndDate = "01.11.2026", continuous = true)
         val current = PrescriptionLifecycle.current(listOf(old, newer))
         assertEquals(1, current.size)
         assertEquals("new", current.single().id)
@@ -123,18 +111,43 @@ class ReliabilityCoreTest {
 
     @Test
     fun prescriptionLifecycle_dueDoesNotSurfaceSupersededOldCycle() {
-        val old = PrescriptionRecord(
-            id = "old", medicationName = "Vasoxen 5 mg 28 tablet",
-            fillDate = "01.05.2026", doseEndDate = "01.06.2026", continuous = true
-        )
-        val newer = PrescriptionRecord(
-            id = "new", medicationName = "Vasoxen 5 mg 28 tablet",
-            fillDate = "01.08.2026", doseEndDate = "01.12.2026", continuous = true
-        )
+        val old = PrescriptionRecord(id = "old", medicationName = "Vasoxen 5 mg 28 tablet", fillDate = "01.05.2026", doseEndDate = "01.06.2026", continuous = true)
+        val newer = PrescriptionRecord(id = "new", medicationName = "Vasoxen 5 mg 28 tablet", fillDate = "01.08.2026", doseEndDate = "01.12.2026", continuous = true)
         PrescriptionRecordStore.upsertAll(c, listOf(old, newer))
-
         val due = PrescriptionLifecycle.due(c, LocalDate.of(2026, 9, 9))
         assertTrue(due.none { it.id == "old" })
         assertTrue(due.none { it.medicationName.contains("Vasoxen") })
+    }
+
+    @Test
+    fun sgkStockImport_addsNewCycleOnlyOnce() {
+        val sgkMed = Medication("sgk-med", "Vasoxen 5 mg 28 tablet", "1 tablet", emptyList())
+        Store.save(c, listOf(sgkMed))
+        MedicationMetaStore.save(c, MedicationMeta(
+            medicationId = sgkMed.id,
+            form = MedicationForm.TABLET,
+            quantity = 1.0,
+            packageCount = 28,
+            packageUnit = "tablet",
+            source = "sgk_pdf",
+            doseUnitOverride = "tablet"
+        ))
+        PrescriptionRecordStore.upsertAll(c, listOf(PrescriptionRecord(
+            id = "sgk-cycle-1",
+            medicationId = sgkMed.id,
+            medicationName = sgkMed.name,
+            prescriptionNo = "RX1",
+            prescriptionDate = "21.08.2026",
+            fillDate = "21.08.2026",
+            doseEndDate = "16.10.2026",
+            boxCount = 2,
+            dosePattern = "1x1",
+            continuous = true
+        )))
+
+        SgkStockAutoImporter.reconcile(c)
+        assertEquals(56, StockEngine.forMedication(c, sgkMed.id)?.remainingDoses)
+        SgkStockAutoImporter.reconcile(c)
+        assertEquals(56, StockEngine.forMedication(c, sgkMed.id)?.remainingDoses)
     }
 }
