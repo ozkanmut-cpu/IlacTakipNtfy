@@ -49,20 +49,27 @@ object OwnerScopeStore {
     fun applyRemoteProgram(c: Context, ownerId: String, type: String, medication: Medication) {
         if (ownerId.isBlank() || medication.id.isBlank() || ownerId == localOwnerId(c)) return
         val all = loadRemote(c).toMutableList()
+        var rules: List<ScopedRule>? = null
         when (type) {
             "program_deleted" -> {
                 all.removeAll { it.first == ownerId && it.second.id == medication.id }
-                val rules = loadRemoteRules(c).filterNot { it.ownerId == ownerId && it.rule.medicationId == medication.id }
-                saveRemoteRules(c, rules)
+                rules = loadRemoteRules(c).filterNot { it.ownerId == ownerId && it.rule.medicationId == medication.id }
             }
             "program_added", "program_updated" -> {
                 val index = all.indexOfFirst { it.first == ownerId && it.second.id == medication.id }
                 val scoped = ownerId to medication
                 if (index >= 0) all[index] = scoped else all += scoped
             }
+            else -> return
         }
-        saveRemote(c, all)
-        prefs(c).edit().putString(ownerKey(medication.id), ownerId).commit()
+
+        // Remote program state, optional rule deletion, and owner binding share the
+        // same SharedPreferences file. Commit them together so a process death can
+        // never expose a half-applied program mutation. ProgramSync's ordering
+        // checkpoint is intentionally separate; replay is idempotent and finishes it.
+        val edit = prefs(c).edit().putString(KEY_REMOTE, encodeRemote(all))
+        if (rules != null) edit.putString(KEY_REMOTE_RULES, encodeRemoteRules(rules))
+        edit.putString(ownerKey(medication.id), ownerId).commit()
     }
 
     @Synchronized
@@ -146,7 +153,7 @@ object OwnerScopeStore {
         }.getOrDefault(emptyList())
     }
 
-    private fun saveRemote(c: Context, items: List<Pair<String, Medication>>) {
+    private fun encodeRemote(items: List<Pair<String, Medication>>): String {
         val a = JSONArray()
         items.forEach { (owner, med) ->
             a.put(JSONObject()
@@ -156,7 +163,11 @@ object OwnerScopeStore {
                 .put("dose", med.dose)
                 .put("times", JSONArray(med.times)))
         }
-        prefs(c).edit().putString(KEY_REMOTE, a.toString()).commit()
+        return a.toString()
+    }
+
+    private fun saveRemote(c: Context, items: List<Pair<String, Medication>>) {
+        prefs(c).edit().putString(KEY_REMOTE, encodeRemote(items)).commit()
     }
 
     private fun loadRemoteRules(c: Context): List<ScopedRule> {
@@ -185,7 +196,7 @@ object OwnerScopeStore {
         }.getOrDefault(emptyList())
     }
 
-    private fun saveRemoteRules(c: Context, items: List<ScopedRule>) {
+    private fun encodeRemoteRules(items: List<ScopedRule>): String {
         val a = JSONArray()
         items.forEach { item ->
             val r = item.rule
@@ -199,6 +210,10 @@ object OwnerScopeStore {
                 .put("anchorDate", r.anchorDate ?: "")
                 .put("routineLabel", r.routineLabel))
         }
-        prefs(c).edit().putString(KEY_REMOTE_RULES, a.toString()).commit()
+        return a.toString()
+    }
+
+    private fun saveRemoteRules(c: Context, items: List<ScopedRule>) {
+        prefs(c).edit().putString(KEY_REMOTE_RULES, encodeRemoteRules(items)).commit()
     }
 }
