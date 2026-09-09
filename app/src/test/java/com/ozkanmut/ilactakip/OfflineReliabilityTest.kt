@@ -32,7 +32,8 @@ class OfflineReliabilityTest {
             "dosefolk_alarm_scheduler",
             "dosefolk_program_rules",
             "dosefolk_permissions",
-            "dosefolk_stock"
+            "dosefolk_stock",
+            "dosefolk_owner_scope"
         ).forEach { c.getSharedPreferences(it, Context.MODE_PRIVATE).edit().clear().commit() }
     }
 
@@ -152,6 +153,41 @@ class OfflineReliabilityTest {
 
         assertEquals(null, CareBatonStore.active(c, "08:00", date))
         assertTrue(CareBatonStore.load(c).isEmpty())
+    }
+
+    @Test
+    fun circleRevoke_clearsRuleOrderingSoRepairingCanStartFresh() {
+        val peer = "peer-old"
+        val ownerPrefs = c.getSharedPreferences("dosefolk_owner_scope", Context.MODE_PRIVATE)
+        ownerPrefs.edit()
+            .putLong("rule_stamp|$peer|${med.id}", 999_999L)
+            .putLong("rule_rev|$peer|${med.id}", 50L)
+            .putString("rule_actor|$peer|${med.id}", peer)
+            .putString("rule_event|$peer|${med.id}", "old-event")
+            .commit()
+
+        RevocationCleanup.clearPeer(c, peer)
+
+        assertFalse(ownerPrefs.contains("rule_stamp|$peer|${med.id}"))
+        assertFalse(ownerPrefs.contains("rule_rev|$peer|${med.id}"))
+        assertFalse(ownerPrefs.contains("rule_actor|$peer|${med.id}"))
+        assertFalse(ownerPrefs.contains("rule_event|$peer|${med.id}"))
+
+        val freshRule = ProgramRule(medicationId = med.id, everyNDays = 2, routineLabel = "fresh")
+        val freshEvent = DoseEvent(
+            eventId = "fresh-event",
+            type = "program_rule_updated",
+            time = "program",
+            actor = "peer",
+            actorTopic = peer,
+            timestamp = 1L,
+            medications = listOf(med),
+            syncState = "synced",
+            revision = 1L,
+            ownerId = peer
+        )
+        assertTrue(OwnerScopeStore.applyRemoteRule(c, peer, freshRule, freshEvent))
+        assertEquals("fresh", OwnerScopeStore.remoteRule(c, peer, med.id).routineLabel)
     }
 
     @Test
