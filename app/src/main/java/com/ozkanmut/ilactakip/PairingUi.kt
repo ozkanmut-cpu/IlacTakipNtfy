@@ -119,11 +119,10 @@ fun PairingCard(c: Context, people: List<Person>, save: (List<Person>) -> Unit) 
                     val targetTopic = topic.trim()
                     val updated = people + Person(UUID.randomUUID().toString(), name.trim(), targetTopic)
                     save(updated)
-                    StockSync.publishAll(c, targetTopic)
-                    DosefolkSyncScheduler.kick(c)
+                    CircleInitialSync.publishToPeer(c, targetTopic)
                     name = ""
                     topic = ""
-                    scanMessage = if (I18n.language() == "tr") "Circle'a eklendi; mevcut stok bilgileri senkron sırasına alındı." else "Added to Circle; current stock was queued for sync."
+                    scanMessage = if (I18n.language() == "tr") "Circle'a eklendi; ilaç programı, kurallar, ayrıntılar ve stok senkron sırasına alındı." else "Added to Circle; medication program, rules, details, and stock were queued for sync."
                 },
                 modifier = Modifier.fillMaxWidth()
             ) { Text(if (I18n.language() == "tr") "Circle'a ekle" else "Add to Circle") }
