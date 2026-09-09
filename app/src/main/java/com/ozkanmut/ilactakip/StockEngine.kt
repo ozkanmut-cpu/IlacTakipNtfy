@@ -52,14 +52,26 @@ object StockEngine {
             }
         } else current==null || stock.updatedAt>=current.updatedAt
         if(!accept)return
-        saveRemoteSnapshot(c,ownerId,stock)
+        writeRemoteSnapshot(c,ownerId,stock)
         p.edit()
             .putLong(remoteRevisionKey(ownerId,medId),revision)
             .putString(remoteActorKey(ownerId,medId),actorTopic)
             .putString(remoteEventKey(ownerId,medId),eventId)
             .commit()
     }
-    @Synchronized fun saveRemoteSnapshot(c:Context,ownerId:String,stock:MedicationStock){if(ownerId.isBlank())return;val rows=loadRemote(c).toMutableList();val i=rows.indexOfFirst{it.first==ownerId&&it.second.medicationId==stock.medicationId};if(i>=0)rows[i]=ownerId to stock else rows.add(ownerId to stock);saveRemote(c,rows)}
+    // Legacy/internal callers without protocol ordering metadata retain the old timestamp guard.
+    @Synchronized fun saveRemoteSnapshot(c:Context,ownerId:String,stock:MedicationStock){
+        if(ownerId.isBlank())return
+        val current=loadRemote(c).firstOrNull{it.first==ownerId&&it.second.medicationId==stock.medicationId}?.second
+        if(current!=null&&current.updatedAt>stock.updatedAt)return
+        writeRemoteSnapshot(c,ownerId,stock)
+    }
+    private fun writeRemoteSnapshot(c:Context,ownerId:String,stock:MedicationStock){
+        val rows=loadRemote(c).toMutableList()
+        val i=rows.indexOfFirst{it.first==ownerId&&it.second.medicationId==stock.medicationId}
+        if(i>=0)rows[i]=ownerId to stock else rows.add(ownerId to stock)
+        saveRemote(c,rows)
+    }
     @Synchronized fun clearRemoteOwner(c:Context,ownerId:String){
         saveRemote(c,loadRemote(c).filterNot{it.first==ownerId})
         val p=prefs(c); val edit=p.edit()
@@ -85,8 +97,6 @@ object StockEngine {
             changed+=u
         }
 
-        // Stock mutation and its idempotency receipt must become durable together.
-        // Otherwise a process death between the two writes could decrement stock twice on replay.
         val processedIds=(listOf(event.eventId)+processed(c)).distinct().take(2000)
         val editor=prefs(c).edit().putString(KEY_PROCESSED,JSONArray(processedIds).toString())
         if(changed.isNotEmpty()) editor.putString(KEY_STOCK,stockJson(current.values.toList()).toString())
