@@ -91,7 +91,7 @@ private fun ui(tr:String,en:String)=if(I18n.language()=="tr")tr else en
 @Composable fun StockScreen(c:Context,meds:List<Medication>){var refresh by remember{mutableIntStateOf(0)};LazyColumn(Modifier.fillMaxWidth().padding(horizontal=16.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){item{Text(ui("Stok","Stock"),style=MaterialTheme.typography.headlineSmall,fontWeight=FontWeight.Bold);Text(ui("Paket boyutunu bir kez gir. Sonra Yeni kutu tek dokunuş.","Set pack size once. New Box is then one tap."))};items(meds,key={it.id}){m->val current=remember(refresh,m.id){StockEngine.forMedication(c,m.id)};var pack by remember(m.id){mutableStateOf("")};Card(Modifier.fillMaxWidth()){Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)){Text(m.name,fontWeight=FontWeight.Bold);if(current==null){OutlinedTextField(pack,{pack=it.filter(Char::isDigit)},label={Text(ui("Paket dozu","Pack doses"))});Button(enabled=(pack.toIntOrNull()?:0)>0,onClick={StockEngine.configure(c,m,pack.toInt());pack="";refresh++}){Text(ui("Stok takibini başlat","Start stock tracking"))}}else{Text(ui("Kalan: ${current.remainingDoses} doz","Remaining: ${current.remainingDoses} doses"));Text(ui("Kutu: ${current.packSize} doz","Pack: ${current.packSize} doses"),style=MaterialTheme.typography.bodySmall);if(current.remainingDoses<=current.lowThreshold)Text(ui("⚠ Düşük stok","⚠ Low stock"),fontWeight=FontWeight.Bold);Button(onClick={StockEngine.openNewBox(c,m.id);refresh++},modifier=Modifier.fillMaxWidth()){Text(ui("Yeni kutu","New box"))}}}}}}}
 
 @Composable fun CircleScreen(c:Context,people:List<Person>,save:(List<Person>)->Unit){
- var name by remember{mutableStateOf("")};var topic by remember{mutableStateOf("")};var refresh by remember{mutableIntStateOf(0)}
+ var refresh by remember{mutableIntStateOf(0)}
  LaunchedEffect(Unit){while(true){withContext(Dispatchers.IO){SyncEngine.pullBlocking(c)};refresh++;delay(20_000L)}}
  val unresolved=remember(refresh){CircleState.unresolved(c)}
  LazyColumn(Modifier.fillMaxSize().padding(16.dp),verticalArrangement=Arrangement.spacedBy(10.dp)){
@@ -109,7 +109,7 @@ private fun ui(tr:String,en:String)=if(I18n.language()=="tr")tr else en
   }
   item{HorizontalDivider();Text(ui("Circle üyeleri","Circle members"),fontWeight=FontWeight.Bold)}
   items(people,key={it.id}){p->Card(Modifier.fillMaxWidth()){Column(Modifier.padding(14.dp)){Text(p.name,fontWeight=FontWeight.Bold);Row(verticalAlignment=Alignment.CenterVertically){Text(I18n.t("can_edit"),Modifier.weight(1f));Switch(checked=p.canEdit,onCheckedChange={v->save(people.map{if(it.id==p.id)it.copy(canEdit=v)else it})})};TextButton(onClick={Ntfy.sendTo(c,p.topic,I18n.t("reminder_title"),I18n.t("reminder_body"))}){Text(I18n.t("remind"))}}}}
-  item{HorizontalDivider();Text(I18n.t("add_person"),fontWeight=FontWeight.Bold);OutlinedTextField(name,{name=it},label={Text(I18n.t("name"))});OutlinedTextField(topic,{topic=it},label={Text(I18n.t("pair_code"))});Button(enabled=name.isNotBlank()&&topic.isNotBlank(),onClick={save(people+Person(UUID.randomUUID().toString(),name.trim(),topic.trim()));name="";topic=""}){Text(I18n.t("add"))};Text(I18n.t("my_code",Store.topic(c)),style=MaterialTheme.typography.bodySmall)}
+  item{HorizontalDivider();PairingCard(c,people,save)}
  }
 }
 
