@@ -156,9 +156,7 @@ object SyncEngine {
             "snoozed" -> {
                 SmartEscalation.cancel(c, event.time, scheduledDate)
                 DoseNotificationLifecycle.cancel(c, event.time, scheduledDate)
-                if (event.snoozeUntil > System.currentTimeMillis() && event.medications.isNotEmpty()) {
-                    AlarmScheduler.scheduleSnoozeUntil(c, event.time, event.medications, event.snoozeUntil, scheduledDate)
-                }
+                AlarmScheduler.scheduleSnoozeIfActive(c, event.time, event.medications, event.snoozeUntil, scheduledDate)
             }
             "program_added", "program_updated", "program_deleted" -> ProgramSync.applyRemote(c, event)
             "program_rule_updated" -> ProgramRuleStore.applyRemote(c, event)
