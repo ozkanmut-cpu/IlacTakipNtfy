@@ -41,7 +41,10 @@ object SyncEngine {
                     EventStore.append(context,event.copy(syncState="synced"));OwnerScopeStore.remember(context,event)
                     val ownerId=event.ownerId.ifBlank{event.actorTopic}
                     if(ownerId.isNotBlank()&&ownerId!=OwnerScopeStore.localOwnerId(context))event.medicationMeta.forEach{MedicationMetaStore.saveRemote(context,ownerId,it)}
-                    StockEngine.applyEvent(context,event);applyRemoteState(context,event)
+                    // Only the medication owner's device may mutate its authoritative local inventory.
+                    // Followers receive the resulting stock through StockSync snapshots instead.
+                    if(ownerId.isBlank() || ownerId==OwnerScopeStore.localOwnerId(context)) StockEngine.applyEvent(context,event)
+                    applyRemoteState(context,event)
                 }}
                 val edit=prefs(context).edit().putLong(LAST_SUCCESS,System.currentTimeMillis());newestId?.let{edit.putString(LAST_ID,it)};edit.commit();connection.disconnect();true
             }
