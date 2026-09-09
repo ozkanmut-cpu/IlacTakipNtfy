@@ -2,11 +2,9 @@ package com.ozkanmut.ilactakip
 
 import android.content.Context
 import android.content.SharedPreferences
-import java.text.Normalizer
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
 import java.time.temporal.ChronoUnit
-import java.util.Locale
 import java.util.UUID
 import kotlin.math.roundToInt
 
@@ -24,10 +22,6 @@ object SgkStockAutoImporter {
     @Volatile private var listener: SharedPreferences.OnSharedPreferenceChangeListener? = null
     @Volatile private var reconciling = false
 
-    /**
-     * Keep a strong listener reference so PDF imports are reconciled immediately after records are saved.
-     * On first activation, pre-existing SGK history is baselined so an app update cannot inflate stock.
-     */
     fun start(c: Context) {
         if (listener != null) return
         synchronized(this) {
@@ -65,13 +59,12 @@ object SgkStockAutoImporter {
                 val cycle = cycleKey(r)
                 if (cycle in applied) return@forEach
 
-                // Mark this SGK cycle before any nested preference write so callbacks can never add it twice.
                 applied += cycle
-                prefs(context).edit().putStringSet(KEY_APPLIED, applied.toList().let { if (it.size > 4000) it.subList(it.size - 4000, it.size) else it }.toSet()).commit()
+                prefs(context).edit().putStringSet(KEY_APPLIED, keepRecent(applied)).commit()
 
                 val meds = Store.load(context)
                 var med = r.medicationId.takeIf { it.isNotBlank() }?.let { id -> meds.firstOrNull { it.id == id } }
-                    ?: meds.firstOrNull { normalize(it.name) == normalize(r.medicationName) }
+                    ?: meds.firstOrNull { MedicationIdentity.same(it.name, r.medicationName) }
 
                 if (med == null) {
                     med = Medication(UUID.randomUUID().toString(), r.medicationName.trim(), r.dosePattern, emptyList())
@@ -86,7 +79,9 @@ object SgkStockAutoImporter {
                         source = "sgk_pdf",
                         doseUnitOverride = suggestion.doseUnit
                     ))
-                    // A medication with no times is valid: it participates in stock/refill tracking but creates no alarm.
+                    PrescriptionRecordStore.update(context, r.copy(medicationId = med.id))
+                } else if (r.medicationId != med.id) {
+                    // Persist the resolved link so later SGK cycles do not have to guess again.
                     PrescriptionRecordStore.update(context, r.copy(medicationId = med.id))
                 }
 
@@ -97,11 +92,16 @@ object SgkStockAutoImporter {
                 }
             }
 
-            prefs(context).edit().putStringSet(KEY_APPLIED, applied.toList().let { if (it.size > 4000) it.subList(it.size - 4000, it.size) else it }.toSet()).commit()
+            prefs(context).edit().putStringSet(KEY_APPLIED, keepRecent(applied)).commit()
             return changed
         } finally {
             reconciling = false
         }
+    }
+
+    private fun keepRecent(values: Set<String>): Set<String> {
+        val list = values.toList()
+        return if (list.size > 4000) list.subList(list.size - 4000, list.size).toSet() else values
     }
 
     private fun estimateSupplyUnits(c: Context, med: Medication, r: PrescriptionRecord): Int? {
@@ -110,7 +110,6 @@ object SgkStockAutoImporter {
         val pack = meta?.packageCount?.takeIf { it > 0 }
         if (boxes != null && pack != null && meta.form != MedicationForm.INSULIN) return boxes * pack
 
-        // Insulin stock is tracked in administered units, so derive dispensed units from SGK dose and cycle duration.
         if (meta?.form == MedicationForm.INSULIN) {
             val daily = dailyDoseUnits(r.dosePattern, r.period) ?: return null
             val start = parse(r.fillDate) ?: parse(r.prescriptionDate) ?: return null
@@ -118,8 +117,6 @@ object SgkStockAutoImporter {
             val days = (ChronoUnit.DAYS.between(start, end) + 1).coerceAtLeast(1)
             return (daily * days).roundToInt().coerceAtLeast(1)
         }
-
-        // If package contents cannot be determined safely, do not invent stock quantity.
         return null
     }
 
@@ -134,7 +131,6 @@ object SgkStockAutoImporter {
     private fun doseQuantity(pattern: String): Double? = Regex("(?i)\\d+(?:[.,]\\d+)?\\s*x\\s*(\\d+(?:[.,]\\d+)?)")
         .find(pattern)?.groupValues?.getOrNull(1)?.replace(',', '.')?.toDoubleOrNull()
 
-    private fun cycleKey(r: PrescriptionRecord) = listOf(normalize(r.medicationName), r.prescriptionNo, r.fillDate, r.doseEndDate).joinToString("|")
+    private fun cycleKey(r: PrescriptionRecord) = listOf(MedicationIdentity.canonical(r.medicationName), r.prescriptionNo, r.fillDate, r.doseEndDate).joinToString("|")
     private fun parse(v: String): LocalDate? = runCatching { LocalDate.parse(v) }.getOrNull() ?: runCatching { LocalDate.parse(v, dotDate) }.getOrNull()
-    private fun normalize(v: String) = Normalizer.normalize(v, Normalizer.Form.NFD).replace(Regex("\\p{M}+"), "").lowercase(Locale.ROOT).replace(Regex("[^a-z0-9]+"), " ").trim()
 }
