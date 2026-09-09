@@ -9,6 +9,8 @@ object RevocationCleanup {
         if (topic.isBlank()) return
         clearRemoteCapabilities(c, topic)
         CapabilityEventGate.clearPeer(c, topic)
+        DeliveryLedger.dropTopic(c, topic)
+        CareBatonStore.clearPeer(c, topic)
         clearOwnerScope(c, topic)
     }
 
