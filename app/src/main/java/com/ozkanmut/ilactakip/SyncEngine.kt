@@ -46,6 +46,10 @@ object SyncEngine {
                         if (!PermissionPolicy.acceptRemote(context, event)) return@forEach
                         EventStore.append(context, event.copy(syncState = "synced"))
                         OwnerScopeStore.remember(context, event)
+                        val ownerId = event.ownerId.ifBlank { event.actorTopic }
+                        if (ownerId.isNotBlank() && ownerId != OwnerScopeStore.localOwnerId(context)) {
+                            event.medicationMeta.forEach { MedicationMetaStore.saveRemote(context, ownerId, it) }
+                        }
                         StockEngine.applyEvent(context, event)
                         applyRemoteState(context, event)
                     }
@@ -67,6 +71,8 @@ object SyncEngine {
             val timesJson=med.optJSONArray("times")?:JSONArray()
             Medication(med.optString("id"),med.optString("name"),med.optString("dose"),(0 until timesJson.length()).map{timesJson.optString(it)}.filter{it.isNotBlank()})
         }}
+        val metaJson=o.optJSONArray("medicationMeta")?:JSONArray()
+        val meta=(0 until metaJson.length()).mapNotNull{ MedicationMetaStore.fromJson(metaJson.optJSONObject(it)) }
         val timestamp = o.optLong("timestamp")
         val fallbackDate = if (timestamp > 0L) Instant.ofEpochMilli(timestamp).atZone(ZoneId.systemDefault()).toLocalDate().toString() else ""
         return DoseEvent(
@@ -74,7 +80,8 @@ object SyncEngine {
             meds, "synced", o.optLong("revision",0L),
             o.optString("scheduledDate", fallbackDate).ifBlank { fallbackDate },
             o.optLong("snoozeUntil", 0L),
-            o.optString("ownerId")
+            o.optString("ownerId"),
+            meta
         )
     }
 
