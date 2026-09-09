@@ -53,10 +53,16 @@ object EventStore {
     }
 
     @Synchronized
-    fun append(c: Context, event: DoseEvent) {
+    fun appendIfAbsent(c: Context, event: DoseEvent): Boolean {
         val current = load(c).toMutableList()
-        if (current.none { it.eventId == event.eventId }) current.add(0, event)
+        if (current.any { it.eventId == event.eventId }) return false
+        current.add(0, event)
         save(c, compact(current))
+        return true
+    }
+
+    fun append(c: Context, event: DoseEvent) {
+        appendIfAbsent(c, event)
     }
 
     fun contains(c: Context, eventId: String): Boolean =
