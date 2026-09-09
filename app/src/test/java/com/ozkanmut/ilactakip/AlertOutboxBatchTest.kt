@@ -5,22 +5,22 @@ import org.junit.Test
 
 class AlertOutboxBatchTest {
     @Test
-    fun flushBatch_isBoundedAndStartsWithOldestPendingAlerts() {
+    fun flushBatch_isBoundedAndStrictlyOldestFirst() {
         val all = (0 until 25).map { i ->
-            // AlertOutbox stores newest first.
+            // AlertOutbox stores newest first: id-24 is the oldest row here.
             PendingAlert("id-$i", "care", "title", "message-$i", createdAt = 25L - i)
         }
 
         val batch = AlertOutbox.batchForFlush(all)
 
         assertEquals(10, batch.size)
-        assertEquals((15 until 25).map { "id-$it" }, batch.map { it.id })
+        assertEquals((24 downTo 15).map { "id-$it" }, batch.map { it.id })
     }
 
     @Test
-    fun flushBatch_usesEntireQueueWhenBelowLimit() {
-        val all = (0 until 4).map { i -> PendingAlert("id-$i", "care", "title", "message-$i", i.toLong()) }
+    fun flushBatch_reversesEntireQueueWhenBelowLimit() {
+        val all = (0 until 4).map { i -> PendingAlert("id-$i", "care", "title", "message-$i", 4L - i) }
 
-        assertEquals(all, AlertOutbox.batchForFlush(all))
+        assertEquals(all.asReversed(), AlertOutbox.batchForFlush(all))
     }
 }
