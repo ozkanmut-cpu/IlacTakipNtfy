@@ -18,7 +18,7 @@ class ConflictResolutionTest {
     @Before
     fun setUp() {
         c = ApplicationProvider.getApplicationContext()
-        listOf("ilac_takip", "dosefolk_events", "dosefolk_program_rules", "dosefolk_owner_scope")
+        listOf("ilac_takip", "dosefolk_events", "dosefolk_program_rules", "dosefolk_owner_scope", "dosefolk_stock")
             .forEach { c.getSharedPreferences(it, Context.MODE_PRIVATE).edit().clear().commit() }
         Store.save(c, listOf(med))
     }
@@ -128,6 +128,33 @@ class ConflictResolutionTest {
         EventStore.append(c, event("undo", "undo_taken", "owner", 250_000L, 11L))
 
         assertEquals(DoseSessionStatus.PENDING, DoseStateEngine.stateForTime(c, "08:00").status)
+    }
+
+    @Test
+    fun resolveConflictAsMissed_restoresPreviouslyConsumedStock() {
+        StockEngine.configure(c, med, packSize = 10, currentDoses = 10, lowThreshold = 2)
+        val taken = event("taken-stock", "taken", "phone-a", 100_000L, 1L)
+        StockEngine.applyEvent(c, taken)
+        assertEquals(9, StockEngine.forMedication(c, med.id)?.remainingDoses)
+
+        val resolvedMissed = event("resolve-missed-stock", "conflict_resolved_missed", "owner", 200_000L, 2L)
+        StockEngine.applyEvent(c, resolvedMissed)
+
+        assertEquals(10, StockEngine.forMedication(c, med.id)?.remainingDoses)
+        StockEngine.applyEvent(c, resolvedMissed.copy(eventId = "resolve-missed-replay", revision = 3L))
+        assertEquals(10, StockEngine.forMedication(c, med.id)?.remainingDoses)
+    }
+
+    @Test
+    fun resolveConflictAsTaken_consumesStockWhenNoTakenEventWasAppliedLocally() {
+        StockEngine.configure(c, med, packSize = 10, currentDoses = 10, lowThreshold = 2)
+        val resolvedTaken = event("resolve-taken-stock", "conflict_resolved_taken", "owner", 200_000L, 2L)
+
+        StockEngine.applyEvent(c, resolvedTaken)
+
+        assertEquals(9, StockEngine.forMedication(c, med.id)?.remainingDoses)
+        StockEngine.applyEvent(c, resolvedTaken.copy(eventId = "resolve-taken-replay", revision = 3L))
+        assertEquals(9, StockEngine.forMedication(c, med.id)?.remainingDoses)
     }
 
     @Test
