@@ -10,6 +10,9 @@ data class MedicationStock(val medicationId:String,val medicationName:String,val
 object StockEngine {
     private const val PREFS="dosefolk_stock"; private const val KEY_STOCK="stock"; private const val KEY_PROCESSED="processed_events"; private const val KEY_REMOTE="remote_stock"
     private fun prefs(c:Context)=c.getSharedPreferences(PREFS,Context.MODE_PRIVATE)
+    private fun remoteRevisionKey(ownerId:String,medicationId:String)="remote_rev|$ownerId|$medicationId"
+    private fun remoteActorKey(ownerId:String,medicationId:String)="remote_actor|$ownerId|$medicationId"
+    private fun remoteEventKey(ownerId:String,medicationId:String)="remote_event|$ownerId|$medicationId"
     fun all(c:Context):List<MedicationStock> = load(c)
     fun forMedication(c:Context,medicationId:String)=load(c).firstOrNull{it.medicationId==medicationId}
     fun remoteAll(c:Context,ownerId:String):List<MedicationStock> = loadRemote(c).filter{it.first==ownerId}.map{it.second}
@@ -32,9 +35,37 @@ object StockEngine {
     fun toJson(s:MedicationStock)=JSONObject().put("medicationId",s.medicationId).put("medicationName",s.medicationName).put("remainingDoses",s.remainingDoses).put("packSize",s.packSize).put("lowThreshold",s.lowThreshold).put("updatedAt",s.updatedAt)
     fun fromJson(o:JSONObject?):MedicationStock?{if(o==null)return null;val id=o.optString("medicationId");if(id.isBlank())return null;return MedicationStock(id,o.optString("medicationName"),o.optInt("remainingDoses").coerceAtLeast(0),o.optInt("packSize").coerceAtLeast(0),o.optInt("lowThreshold",5).coerceAtLeast(0),o.optLong("updatedAt"))}
 
-    @Synchronized fun applyRemoteSnapshot(c:Context,ownerId:String,stock:MedicationStock){if(ownerId.isBlank()||ownerId==OwnerScopeStore.localOwnerId(c))return;saveRemoteSnapshot(c,ownerId,stock)}
-    @Synchronized fun saveRemoteSnapshot(c:Context,ownerId:String,stock:MedicationStock){if(ownerId.isBlank())return;val rows=loadRemote(c).toMutableList();val i=rows.indexOfFirst{it.first==ownerId&&it.second.medicationId==stock.medicationId};if(i>=0){if(rows[i].second.updatedAt>stock.updatedAt)return;rows[i]=ownerId to stock}else rows.add(ownerId to stock);saveRemote(c,rows)}
-    @Synchronized fun clearRemoteOwner(c:Context,ownerId:String){saveRemote(c,loadRemote(c).filterNot{it.first==ownerId})}
+    @Synchronized fun applyRemoteSnapshot(c:Context,ownerId:String,stock:MedicationStock,revision:Long=0L,actorTopic:String=ownerId,eventId:String=""){
+        if(ownerId.isBlank()||ownerId==OwnerScopeStore.localOwnerId(c))return
+        val p=prefs(c)
+        val medId=stock.medicationId
+        val storedRevision=p.getLong(remoteRevisionKey(ownerId,medId),0L)
+        val storedActor=p.getString(remoteActorKey(ownerId,medId),"").orEmpty()
+        val storedEvent=p.getString(remoteEventKey(ownerId,medId),"").orEmpty()
+        val current=loadRemote(c).firstOrNull{it.first==ownerId&&it.second.medicationId==medId}?.second
+        val accept=if(revision>0L||storedRevision>0L){
+            when{
+                revision!=storedRevision -> revision>storedRevision
+                actorTopic!=storedActor -> actorTopic>storedActor
+                eventId.isNotBlank()||storedEvent.isNotBlank() -> eventId>storedEvent
+                else -> false
+            }
+        } else current==null || stock.updatedAt>=current.updatedAt
+        if(!accept)return
+        saveRemoteSnapshot(c,ownerId,stock)
+        p.edit()
+            .putLong(remoteRevisionKey(ownerId,medId),revision)
+            .putString(remoteActorKey(ownerId,medId),actorTopic)
+            .putString(remoteEventKey(ownerId,medId),eventId)
+            .commit()
+    }
+    @Synchronized fun saveRemoteSnapshot(c:Context,ownerId:String,stock:MedicationStock){if(ownerId.isBlank())return;val rows=loadRemote(c).toMutableList();val i=rows.indexOfFirst{it.first==ownerId&&it.second.medicationId==stock.medicationId};if(i>=0)rows[i]=ownerId to stock else rows.add(ownerId to stock);saveRemote(c,rows)}
+    @Synchronized fun clearRemoteOwner(c:Context,ownerId:String){
+        saveRemote(c,loadRemote(c).filterNot{it.first==ownerId})
+        val p=prefs(c); val edit=p.edit()
+        p.all.keys.filter{it.startsWith("remote_rev|$ownerId|")||it.startsWith("remote_actor|$ownerId|")||it.startsWith("remote_event|$ownerId|")}.forEach(edit::remove)
+        edit.commit()
+    }
 
     private fun consumptionUnits(c:Context,id:String):Int{val m=MedicationMetaStore.get(c,id)?:return 1;val countable=m.form in setOf(MedicationForm.TABLET,MedicationForm.INSULIN,MedicationForm.NEBULE,MedicationForm.INHALER,MedicationForm.DROP,MedicationForm.PATCH);return if(countable)(m.quantity?:1.0).roundToInt().coerceAtLeast(1) else 1}
     @Synchronized fun applyEvent(c:Context,event:DoseEvent){
