@@ -54,6 +54,15 @@ class NtfyBatchCursorTest {
     }
 
     @Test
+    fun replayTruncation_headerIsRejected() {
+        assertTrue(NtfyReplayGuard.isTruncated("1"))
+        assertTrue(NtfyReplayGuard.isTruncated(" 1 "))
+        assertFalse(NtfyReplayGuard.isTruncated(null))
+        assertFalse(NtfyReplayGuard.isTruncated("0"))
+        assertFalse(NtfyReplayGuard.isTruncated("true"))
+    }
+
+    @Test
     fun envelopeBinding_acceptsRealPublisherTopic() {
         val envelope = JSONObject().put("topic", "peer-a")
         val payload = JSONObject().put("actorTopic", "peer-a")
@@ -71,5 +80,36 @@ class NtfyBatchCursorTest {
     fun envelopeBinding_rejectsMissingTopicIdentity() {
         assertFalse(NtfyEnvelopeBinding.matches(JSONObject(), JSONObject().put("actorTopic", "peer-a")))
         assertFalse(NtfyEnvelopeBinding.matches(JSONObject().put("topic", "peer-a"), JSONObject()))
+    }
+
+    private fun event(target: String = "") = DoseEvent(
+        eventId = "event-1",
+        type = "program_updated",
+        time = "program",
+        actor = "Peer",
+        actorTopic = "peer-a",
+        timestamp = 1L,
+        medications = emptyList(),
+        syncState = "synced",
+        revision = 1L,
+        ownerId = "owner-a",
+        targetTopic = target
+    )
+
+    @Test
+    fun targetRouting_broadcastEventIsAcceptedByAnySubscriber() {
+        assertTrue(NtfyTargetRouting.accepts("phone-a", event()))
+        assertTrue(NtfyTargetRouting.accepts("phone-b", event()))
+    }
+
+    @Test
+    fun targetRouting_targetedEventOnlyAcceptedByTarget() {
+        assertTrue(NtfyTargetRouting.accepts("phone-a", event("phone-a")))
+        assertFalse(NtfyTargetRouting.accepts("phone-b", event("phone-a")))
+    }
+
+    @Test
+    fun payload_preservesExplicitTargetTopic() {
+        assertEquals("phone-a", EventStore.payload(event("phone-a")).optString("targetTopic"))
     }
 }
