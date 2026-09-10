@@ -89,6 +89,7 @@ object PairingLifecycle {
         RevocationCleanup.clearPeer(c, topic)
         MedicationMetaStore.clearRemoteOwner(c, topic)
         StockEngine.clearRemoteOwner(c, topic)
+        CirclePresence.clear(c, topic)
         if (dropOutbox) AlertOutbox.dropTopic(c, topic)
     }
 }

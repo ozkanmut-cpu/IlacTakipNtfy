@@ -235,6 +235,7 @@ object SyncEngine {
             "capability_edit_stock_granted", "capability_edit_stock_revoked" -> {
                 if (CapabilityEventGate.accept(c, event)) RemoteCapabilityStore.applyEvent(c, event)
             }
+            "circle_presence" -> CirclePresence.markSeen(c, event)
             "circle_revoked" -> PairingLifecycle.applyRemoteRevoke(c, event)
         }
     }

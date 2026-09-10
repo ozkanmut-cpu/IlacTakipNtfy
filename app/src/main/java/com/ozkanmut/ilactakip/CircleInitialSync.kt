@@ -9,6 +9,7 @@ object CircleInitialSync {
         val context = c.applicationContext
         if (targetTopic.isBlank() || targetTopic == Store.topic(context)) return
         val publisherTopic = CircleTransport.publishTopic(context)
+        CirclePresence.publish(context, targetTopic)
 
         Store.load(context).forEach { med ->
             val meta = MedicationMetaStore.get(context, med.id)?.let(::listOf).orEmpty()

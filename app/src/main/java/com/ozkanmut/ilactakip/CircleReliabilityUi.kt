@@ -35,6 +35,7 @@ fun CircleReliabilityCard(c: Context, people: List<Person>, externalRefresh: Int
     var showPermissions by remember { mutableStateOf(false) }
     val active = remember(externalRefresh, localRefresh) { TemporaryCareStore.active(c) }
     val receipt = remember(externalRefresh, localRefresh) { OfflineTrustReceipt.snapshot(c) }
+    val unconfirmed = remember(externalRefresh, localRefresh, people) { people.filterNot { CirclePresence.confirmed(c, it.topic) } }
 
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -43,8 +44,12 @@ fun CircleReliabilityCard(c: Context, people: List<Person>, externalRefresh: Int
                     onClick = { DosefolkSyncScheduler.kick(c) },
                     label = { Text(if (I18n.language() == "tr") "${receipt.pendingEvents} kayıt gönderilmeyi bekliyor" else "${receipt.pendingEvents} record(s) waiting to send") }
                 )
+                people.isNotEmpty() && unconfirmed.isNotEmpty() -> Text(
+                    if (I18n.language() == "tr") "${unconfirmed.first().name} henüz bu telefonu kendi Circle’ına eklemedi. Karşı telefonda QR ile bu telefonu da ekle." else "${unconfirmed.first().name} has not added this phone to their Circle yet. Add this phone by QR on the other device too.",
+                    fontWeight = FontWeight.Bold
+                )
                 people.isNotEmpty() && receipt.lastSuccessfulSync == 0L -> Text(
-                    if (I18n.language() == "tr") "Circle henüz ilk senkronunu tamamlamadı." else "Circle has not completed its first sync yet.",
+                    if (I18n.language() == "tr") "Circle bağlantısı doğrulandı; ilk senkron tamamlanıyor." else "Circle pairing is confirmed; first sync is finishing.",
                     fontWeight = FontWeight.Bold
                 )
                 people.isNotEmpty() -> Text(
