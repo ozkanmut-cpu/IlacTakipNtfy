@@ -5,7 +5,7 @@ import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
-/** Counts successful ntfy POSTs made by this app. This is diagnostic/soft-budget data only. */
+/** Counts successful ntfy POSTs made by this app for diagnostics. */
 object NtfyTrafficMeter {
     private const val PREFS = "dosefolk_ntfy_traffic"
     private const val KEY_DAY = "utc_day"
@@ -40,20 +40,17 @@ object NtfyTrafficMeter {
 }
 
 /**
- * Conservative local soft budget. ntfy.sh limits are visitor/IP scoped, so this
- * cannot guarantee the service-wide quota when multiple devices share a NAT.
- * It only protects a reserve by deferring replaceable, noncritical snapshots.
- * Critical dose/caregiver/control traffic is never blocked by this local budget.
+ * Public ntfy.sh needed a conservative daily soft quota. Dosefolk now uses its
+ * own ntfy server, so replaceable stock snapshots no longer need local deferral.
+ * HTTP 429 handling remains active in NtfyRateGate as a server safety backoff.
  */
 object NtfyTrafficBudget {
-    internal const val NONCRITICAL_SOFT_LIMIT = 180
+    internal const val NONCRITICAL_SOFT_LIMIT = Int.MAX_VALUE
 
-    fun shouldDeferNoncritical(c: Context, nowMs: Long = System.currentTimeMillis()): Boolean =
-        NtfyTrafficMeter.successfulPostsToday(c, nowMs) >= NONCRITICAL_SOFT_LIMIT
+    fun shouldDeferNoncritical(c: Context, nowMs: Long = System.currentTimeMillis()): Boolean = false
 
     internal fun isReplaceableNoncritical(alertId: String): Boolean =
         alertId.startsWith("stock|")
 
-    fun shouldDefer(c: Context, alertId: String, nowMs: Long = System.currentTimeMillis()): Boolean =
-        isReplaceableNoncritical(alertId) && shouldDeferNoncritical(c, nowMs)
+    fun shouldDefer(c: Context, alertId: String, nowMs: Long = System.currentTimeMillis()): Boolean = false
 }
