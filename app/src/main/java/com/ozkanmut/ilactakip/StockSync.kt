@@ -7,6 +7,9 @@ import java.util.UUID
 object StockSync {
     const val EVENT_TYPE = "stock_updated"
 
+    private fun outboxId(c: Context, targetTopic: String, stock: MedicationStock): String =
+        "stock|${Store.topic(c)}|${stock.medicationId}|$targetTopic"
+
     fun publish(c: Context, targetTopic: String, stock: MedicationStock) {
         if (targetTopic.isBlank()) return
         val payload = JSONObject()
@@ -19,7 +22,13 @@ object StockSync {
             .put("timestamp", System.currentTimeMillis())
             .put("revision", EventStore.nextRevision(c))
             .put("stock", StockEngine.toJson(stock))
-        AlertOutbox.enqueue(c.applicationContext, targetTopic, "Dosefolk sync", payload.toString())
+        AlertOutbox.enqueueLatest(
+            c.applicationContext,
+            targetTopic,
+            "Dosefolk sync",
+            payload.toString(),
+            stableId = outboxId(c, targetTopic, stock)
+        )
     }
 
     /** Normal Circle fan-out is pub/sub: publish once to this device's publisher topic. */
