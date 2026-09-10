@@ -3,8 +3,13 @@ package com.ozkanmut.ilactakip
 import android.content.Context
 
 /**
- * Keeps retry delivery idempotent per event/topic. If one Circle member received
- * an event and another delivery failed, retries only target the missing topics.
+ * Keeps retry delivery idempotent per event/topic.
+ *
+ * Normal EventStore sync uses publisher topics: each device POSTs once to its own
+ * topic, and active Circle peers subscribe to publisher topics. While older
+ * pending events still enumerate peer topics, active peer targets are treated as
+ * virtual-delivered so they are not POSTed N times. Receipt semantics for direct
+ * traffic, removed peers, tests, and cleanup remain unchanged.
  */
 object DeliveryLedger {
     private const val PREFS = "dosefolk_delivery_ledger"
@@ -13,8 +18,12 @@ object DeliveryLedger {
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private fun key(eventId: String, topic: String) = "$eventId|$topic"
 
-    fun delivered(c: Context, eventId: String, topic: String): Boolean =
-        prefs(c).getBoolean(key(eventId, topic), false)
+    fun delivered(c: Context, eventId: String, topic: String): Boolean {
+        val publisherTopic = CircleTransport.publishTopic(c)
+        val activePeerTopics = Store.people(c).mapTo(mutableSetOf()) { it.topic }
+        if (topic != publisherTopic && topic in activePeerTopics && EventStore.contains(c, eventId)) return true
+        return prefs(c).getBoolean(key(eventId, topic), false)
+    }
 
     private fun belongsToEvent(ledgerKey: String, eventId: String): Boolean =
         ledgerKey.startsWith("$eventId|")
@@ -76,7 +85,7 @@ object DeliveryLedger {
         val matching = p.all.keys.filter { it.endsWith(suffix) }
         if (matching.isEmpty()) return
         val editor = p.edit()
-        matching.forEach { editor.remove(it) }
+        matching.forEach(editor::remove)
         editor.commit()
     }
 }
