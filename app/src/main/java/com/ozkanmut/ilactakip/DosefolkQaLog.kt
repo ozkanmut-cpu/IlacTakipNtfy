@@ -1,16 +1,19 @@
 package com.ozkanmut.ilactakip
 
 import android.content.Context
+import android.os.Build
 import org.json.JSONObject
 import java.io.File
 import java.security.MessageDigest
 import java.time.Instant
+import java.util.UUID
 
 /** Lightweight local QA trace. Never sends logs off-device automatically. */
 object DosefolkQaLog {
     private const val FILE_NAME = "dosefolk-qa.jsonl"
     private const val MAX_BYTES = 2L * 1024L * 1024L
     private const val KEEP_BYTES = 1L * 1024L * 1024L
+    private val sessionId: String = UUID.randomUUID().toString().replace("-", "").take(12)
 
     enum class Category {
         APP, SYNC, NTFY_RX, NTFY_TX, PAIR, REVOKE, ALARM, ACTION, WORKER, ERROR, SECURITY_REJECT
@@ -30,6 +33,13 @@ object DosefolkQaLog {
             rotateIfNeeded(f)
             val safe = JSONObject()
                 .put("ts", Instant.now().toString())
+                .put("session", sessionId)
+                .put("appVersion", BuildConfig.VERSION_NAME)
+                .put("appCode", BuildConfig.VERSION_CODE)
+                .put("android", Build.VERSION.RELEASE ?: "")
+                .put("sdk", Build.VERSION.SDK_INT)
+                .put("manufacturer", Build.MANUFACTURER ?: "")
+                .put("model", Build.MODEL ?: "")
                 .put("category", category.name)
                 .put("event", event)
             details.forEach { (key, value) -> safe.put(key, sanitize(key, value)) }
@@ -43,6 +53,8 @@ object DosefolkQaLog {
     fun clear(c: Context) {
         runCatching { file(c).delete() }
     }
+
+    internal fun currentSessionId(): String = sessionId
 
     private fun sanitize(key: String, value: Any?): Any? {
         if (value == null) return JSONObject.NULL
