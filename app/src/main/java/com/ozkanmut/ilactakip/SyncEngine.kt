@@ -49,8 +49,14 @@ internal object NtfyEnvelopeBinding {
 }
 
 internal object NtfyTargetRouting {
+    fun accepts(localTopic: String, targetTopic: String): Boolean =
+        targetTopic.isBlank() || targetTopic == localTopic
+
     fun accepts(localTopic: String, event: DoseEvent): Boolean =
-        event.targetTopic.isBlank() || event.targetTopic == localTopic
+        accepts(localTopic, event.targetTopic)
+
+    fun accepts(localTopic: String, payload: JSONObject): Boolean =
+        accepts(localTopic, payload.optString("targetTopic"))
 }
 
 object CircleTransport {
@@ -126,10 +132,10 @@ object SyncEngine {
 
                         val payload = runCatching { JSONObject(envelope.optString("message")) }.getOrNull() ?: return@forEach
                         if (!NtfyEnvelopeBinding.matches(envelope, payload)) return@forEach
+                        if (!NtfyTargetRouting.accepts(Store.topic(context), payload)) return@forEach
                         if (StockSync.applyIncoming(context, payload)) return@forEach
                         if (!IncomingEventGuard.supportedDosePayload(payload)) return@forEach
                         val incoming = parseDoseEvent(payload) ?: return@forEach
-                        if (!NtfyTargetRouting.accepts(Store.topic(context), incoming)) return@forEach
                         if (!IncomingEventGuard.shouldProcess(context, incoming)) return@forEach
 
                         val event = persistCanonicalIncoming(context, incoming)
