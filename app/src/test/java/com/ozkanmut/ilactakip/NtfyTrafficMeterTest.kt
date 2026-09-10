@@ -6,7 +6,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -79,41 +78,31 @@ class NtfyTrafficMeterTest {
         assertEquals(2, bootstrapRows.distinct().size)
     }
 
-    private fun fillSoftBudget() {
-        repeat(NtfyTrafficBudget.NONCRITICAL_SOFT_LIMIT) {
-            NtfyTrafficMeter.recordSuccessfulPost(c)
-        }
+    @Test
+    fun selfHostedTransport_neverSoftDefersStock() {
+        repeat(500) { NtfyTrafficMeter.recordSuccessfulPost(c) }
+        assertFalse(NtfyTrafficBudget.shouldDeferNoncritical(c))
+        assertFalse(NtfyTrafficBudget.shouldDefer(c, "stock|me|med-1|peer"))
     }
 
     @Test
-    fun onlySoftDeferredStock_isSettledForCurrentBudget() {
-        fillSoftBudget()
-        val rows = listOf(
-            PendingAlert("stock|me|med-1|peer", "me", "sync", "{}", 1L)
-        )
-
-        assertTrue(AlertOutbox.settledForCurrentBudget(c, rows))
-    }
-
-    @Test
-    fun criticalBehindDeferredStock_isNotSettledForCurrentBudget() {
-        fillSoftBudget()
+    fun stockAndCriticalRows_areBothActionableOnSelfHostedServer() {
+        repeat(500) { NtfyTrafficMeter.recordSuccessfulPost(c) }
         val rows = listOf(
             PendingAlert("critical-event", "me", "sync", "{}", 2L),
             PendingAlert("stock|me|med-1|peer", "me", "sync", "{}", 1L)
         )
 
         assertFalse(AlertOutbox.settledForCurrentBudget(c, rows))
-        assertEquals(listOf("critical-event"), AlertOutbox.eligibleBatchForFlush(c, rows).map { it.id })
+        assertEquals(listOf("stock|me|med-1|peer", "critical-event"), AlertOutbox.eligibleBatchForFlush(c, rows).map { it.id })
     }
 
     @Test
-    fun actionablePendingCount_hidesOnlySoftDeferredStock() {
-        fillSoftBudget()
+    fun actionablePendingCount_includesStockOnSelfHostedServer() {
         AlertOutbox.enqueueLatest(c, "me", "sync", "{}", "stock|me|med-1|peer", kick = false)
         AlertOutbox.enqueue(c, "me", "urgent", "dose", id = "critical-event", kick = false)
 
         assertEquals(2, AlertOutbox.pendingCount(c))
-        assertEquals(1, AlertOutbox.actionablePendingCount(c))
+        assertEquals(2, AlertOutbox.actionablePendingCount(c))
     }
 }
