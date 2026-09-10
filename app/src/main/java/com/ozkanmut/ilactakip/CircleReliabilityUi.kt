@@ -83,6 +83,8 @@ fun CircleReliabilityCard(c: Context, people: List<Person>, externalRefresh: Int
                     )
                 }
 
+                QaLogControls(c)
+
                 TextButton(onClick = { showPermissions = !showPermissions }) {
                     Text(if (I18n.language() == "tr") if (showPermissions) "İzinleri gizle" else "İzinler ve program erişimi" else if (showPermissions) "Hide permissions" else "Permissions & program access")
                 }
