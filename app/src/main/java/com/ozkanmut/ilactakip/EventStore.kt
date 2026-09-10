@@ -20,7 +20,8 @@ data class DoseEvent(
     val scheduledDate: String = "",
     val snoozeUntil: Long = 0L,
     val ownerId: String = "",
-    val medicationMeta: List<MedicationMeta> = emptyList()
+    val medicationMeta: List<MedicationMeta> = emptyList(),
+    val targetTopic: String = ""
 )
 
 object EventStore {
@@ -41,11 +42,6 @@ object EventStore {
         return next
     }
 
-    /**
-     * Lamport-style clock merge. After observing a remote event, the next local
-     * revision is guaranteed to be greater than the observed remote revision.
-     * This gives program edits a clock-skew-free causal order across devices.
-     */
     @Synchronized
     fun observeRevision(c: Context, remoteRevision: Long) {
         if (remoteRevision <= 0L) return
@@ -58,14 +54,7 @@ object EventStore {
     fun appendIfAbsent(c: Context, event: DoseEvent): Boolean {
         val current = load(c).toMutableList()
         if (current.any { it.eventId == event.eventId }) return false
-
-        // EventStore is the durability boundary, so every accepted logical
-        // revision must advance the local Lamport clock here as well. Callers
-        // should not have to remember a separate observeRevision() step.
-        // Advancing before the event write is crash-safe: a skipped revision is
-        // harmless, while reusing an already-observed revision is not.
         observeRevision(c, event.revision)
-
         current.add(0, event)
         save(c, compact(current))
         return true
@@ -83,7 +72,6 @@ object EventStore {
         save(c, compact(load(c).map { if (it.eventId == eventId) it.copy(syncState = "synced") else it }))
     }
 
-    /** Pending work is exposed oldest-first so bounded reconnect batches cannot starve old events. */
     fun pending(c: Context): List<DoseEvent> = load(c).filter { it.syncState != "synced" }.asReversed()
 
     fun load(c: Context): List<DoseEvent> {
@@ -127,6 +115,7 @@ object EventStore {
         .put("scheduledDate", event.scheduledDate)
         .put("snoozeUntil", event.snoozeUntil)
         .put("ownerId", event.ownerId)
+        .put("targetTopic", event.targetTopic)
         .put("actor", event.actor)
         .put("actorTopic", event.actorTopic)
         .put("timestamp", event.timestamp)
@@ -170,7 +159,8 @@ object EventStore {
             scheduledDate = o.optString("scheduledDate", fallbackDate).ifBlank { fallbackDate },
             snoozeUntil = o.optLong("snoozeUntil", 0L),
             ownerId = o.optString("ownerId"),
-            medicationMeta = meta
+            medicationMeta = meta,
+            targetTopic = o.optString("targetTopic")
         )
     }
 }
