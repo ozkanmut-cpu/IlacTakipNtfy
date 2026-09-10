@@ -17,7 +17,8 @@ object CircleInitialSync {
                 type = "program_added",
                 time = med.times.firstOrNull() ?: "program",
                 medications = listOf(med),
-                medicationMeta = meta
+                medicationMeta = meta,
+                stableId = bootstrapId(context, targetTopic, "program", med.id)
             )
 
             val rule = ProgramRuleStore.get(context, med.id)
@@ -33,7 +34,8 @@ object CircleInitialSync {
                 type = "program_rule_updated",
                 time = "program",
                 medications = listOf(carrier),
-                medicationMeta = meta
+                medicationMeta = meta,
+                stableId = bootstrapId(context, targetTopic, "rule", med.id)
             )
         }
 
@@ -41,13 +43,17 @@ object CircleInitialSync {
         DosefolkSyncScheduler.kick(context)
     }
 
+    private fun bootstrapId(context: Context, targetTopic: String, kind: String, medicationId: String): String =
+        "bootstrap|${Store.topic(context)}|$targetTopic|$kind|$medicationId"
+
     private fun enqueueEvent(
         context: Context,
         targetTopic: String,
         type: String,
         time: String,
         medications: List<Medication>,
-        medicationMeta: List<MedicationMeta>
+        medicationMeta: List<MedicationMeta>,
+        stableId: String
     ) {
         val event = DoseEvent(
             eventId = UUID.randomUUID().toString(),
@@ -62,6 +68,12 @@ object CircleInitialSync {
             ownerId = Store.topic(context),
             medicationMeta = medicationMeta
         )
-        AlertOutbox.enqueue(context, targetTopic, "Dosefolk sync", EventStore.payload(event).toString())
+        AlertOutbox.enqueueLatest(
+            context,
+            targetTopic,
+            "Dosefolk sync",
+            EventStore.payload(event).toString(),
+            stableId = stableId
+        )
     }
 }
