@@ -47,10 +47,16 @@ object StockSync {
 
     fun applyIncoming(c: Context, payload: JSONObject): Boolean {
         if (payload.optString("type") != EVENT_TYPE) return false
+        val eventId = payload.optString("eventId")
         val ownerId = payload.optString("ownerId").ifBlank { payload.optString("actorTopic") }
         val actorTopic = payload.optString("actorTopic")
         if (ownerId.isBlank() || actorTopic.isBlank()) return true
         if (ownerId != actorTopic) return true
+        if (eventId.isNotBlank() && RemoteEventReceiptStore.processed(c, eventId)) return true
+        if (RevokedPeerFence.isRevoked(c, ownerId)) {
+            if (eventId.isNotBlank()) RemoteEventReceiptStore.markProcessed(c, eventId)
+            return true
+        }
         val known = Store.people(c).any { it.topic == ownerId }
         if (!known || ownerId == Store.topic(c)) return true
         val stock = StockEngine.fromJson(payload.optJSONObject("stock")) ?: return true
@@ -62,8 +68,9 @@ object StockSync {
             stock = stock,
             revision = revision,
             actorTopic = actorTopic,
-            eventId = payload.optString("eventId")
+            eventId = eventId
         )
+        if (eventId.isNotBlank()) RemoteEventReceiptStore.markProcessed(c, eventId)
         return true
     }
 }
