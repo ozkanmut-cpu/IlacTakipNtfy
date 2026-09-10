@@ -2,6 +2,7 @@ package com.ozkanmut.ilactakip
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -51,5 +52,28 @@ class InboundProtocolHealthTest {
 
         assertEquals(12, InboundProtocolHealth.unsupportedVersion(c))
         assertEquals(200L, InboundProtocolHealth.lastSeenAt(c))
+    }
+
+    @Test
+    fun newerStockProtocol_isRejectedRememberedAndSurfaced() {
+        val payload = JSONObject()
+            .put("type", StockSync.EVENT_TYPE)
+            .put("protocolVersion", StockSync.MAX_PROTOCOL_VERSION + 1)
+            .put("actorTopic", "peer-a")
+            .put("ownerId", "peer-a")
+            .put("eventId", "stock-newer")
+            .put("stock", JSONObject().put("medicationId", "med-1"))
+
+        assertTrue(StockSync.applyIncoming(c, payload))
+        assertEquals(StockSync.MAX_PROTOCOL_VERSION + 1, InboundProtocolHealth.unsupportedStockVersion(c))
+        assertTrue(DosefolkCheck.issues(c).any { it.id == "protocol_update_required" })
+    }
+
+    @Test
+    fun supportedStockProtocol_doesNotCreateUpdateIssue() {
+        InboundProtocolHealth.recordUnsupportedStock(c, StockSync.MAX_PROTOCOL_VERSION)
+
+        assertEquals(0, InboundProtocolHealth.unsupportedStockVersion(c))
+        assertFalse(InboundProtocolHealth.hasUnsupportedProtocol(c))
     }
 }
