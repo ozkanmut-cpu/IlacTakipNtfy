@@ -16,9 +16,10 @@ class NtfyFreeTierTrafficTest {
     @Before
     fun setup() {
         context = ApplicationProvider.getApplicationContext()
-        context.getSharedPreferences("dosefolk_store", Context.MODE_PRIVATE).edit().clear().commit()
+        context.getSharedPreferences("ilac_takip", Context.MODE_PRIVATE).edit().clear().commit()
         context.getSharedPreferences("dosefolk_events", Context.MODE_PRIVATE).edit().clear().commit()
-        Store.saveTopic(context, "publisher-topic")
+        context.getSharedPreferences("ilac_takip", Context.MODE_PRIVATE)
+            .edit().putString("topic", "publisher-topic").commit()
     }
 
     @Test
