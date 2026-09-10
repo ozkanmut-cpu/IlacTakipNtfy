@@ -50,7 +50,8 @@ object PairingLifecycle {
             medications = emptyList(),
             syncState = "synced",
             revision = EventStore.nextRevision(context),
-            ownerId = person.topic
+            ownerId = Store.topic(context),
+            targetTopic = person.topic
         )
         EventStore.append(context, event)
         AlertOutbox.enqueue(
@@ -65,7 +66,7 @@ object PairingLifecycle {
 
     fun applyRemoteRevoke(c: Context, event: DoseEvent) {
         if (event.type != "circle_revoked") return
-        if (event.ownerId != Store.topic(c)) return
+        if (event.targetTopic != Store.topic(c)) return
         val peerTopic = event.actorTopic
         if (peerTopic.isBlank() || peerTopic == Store.topic(c)) return
         cleanupPeer(c.applicationContext, peerTopic, dropOutbox = true)
