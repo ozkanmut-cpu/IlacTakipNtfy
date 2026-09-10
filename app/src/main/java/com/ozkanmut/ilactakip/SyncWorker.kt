@@ -20,20 +20,28 @@ internal object SyncWorkDecision {
 
 class DosefolkSyncWorker(appContext: Context, params: WorkerParameters) : Worker(appContext, params) {
     override fun doWork(): Result {
-        // Local maintenance does not need network success and is idempotent.
+        DosefolkQaLog.record(applicationContext, DosefolkQaLog.Category.WORKER, "sync_worker_start")
         SgkStockAutoImporter.reconcile(applicationContext)
         PrescriptionNotifier.evaluate(applicationContext)
         DeliveryLedger.pruneCompleted(applicationContext)
 
-        // Each pass intentionally sends at most one bounded outbound batch. If more
-        // durable events remain, Result.retry() schedules the next pass with backoff
-        // instead of falsely declaring success and leaving event 101+ stranded until
-        // an unrelated future kick or the 15-minute periodic run.
         val outboundOk = Ntfy.flushPendingBlocking(applicationContext)
         val hasMoreOutbound = EventStore.pending(applicationContext).isNotEmpty()
         val alertsOk = AlertOutbox.flushBlocking(applicationContext)
         val inboundOk = SyncEngine.pullBlocking(applicationContext)
-        return if (SyncWorkDecision.shouldRetry(outboundOk, alertsOk, inboundOk, hasMoreOutbound)) Result.retry() else Result.success()
+        val retry = SyncWorkDecision.shouldRetry(outboundOk, alertsOk, inboundOk, hasMoreOutbound)
+        DosefolkQaLog.record(
+            applicationContext,
+            DosefolkQaLog.Category.WORKER,
+            if (retry) "sync_worker_retry" else "sync_worker_success",
+            mapOf(
+                "outboundOk" to outboundOk,
+                "alertsOk" to alertsOk,
+                "inboundOk" to inboundOk,
+                "hasMoreOutbound" to hasMoreOutbound
+            )
+        )
+        return if (retry) Result.retry() else Result.success()
     }
 }
 
@@ -55,6 +63,7 @@ object DosefolkSyncScheduler {
     }
 
     fun kick(c: Context) {
+        DosefolkQaLog.record(c, DosefolkQaLog.Category.WORKER, "sync_worker_kick")
         val request = OneTimeWorkRequestBuilder<DosefolkSyncWorker>()
             .setConstraints(network())
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.SECONDS)
