@@ -177,7 +177,6 @@ class AlarmReceiver : BroadcastReceiver() {
         } else if (!Ntfy.sendEvent(c, "alarm", time, alarmMeds, scheduledDate, eventId = deliveryId)) {
             return
         }
-
         if (!AlarmDeliveryGuard.shouldDeliver(c, time, scheduledDate, ids, isSnooze)) {
             AlarmPresentationLedger.markPresented(c, deliveryId)
             AlarmScheduler.scheduleAll(c, Store.load(c))
@@ -304,7 +303,11 @@ object Ntfy {
     private fun post(c: Context, topic: String, title: String, message: String, priority: String): Boolean {
         val context = c.applicationContext
         val now = System.currentTimeMillis()
-        if (NtfyRateGate.isBlocked(context, now)) return false
+        if (NtfyRateGate.isBlocked(context, now)) {
+            DosefolkQaLog.record(context, DosefolkQaLog.Category.NTFY_TX, "send_blocked", mapOf("topic" to topic, "reason" to "rate_gate"))
+            return false
+        }
+        DosefolkQaLog.record(context, DosefolkQaLog.Category.NTFY_TX, "send_start", mapOf("topic" to topic, "priority" to priority))
         return try {
             val connection = URL(NtfyEndpoint.topicUrl(topic)).openConnection() as HttpURLConnection
             connection.requestMethod = "POST"
@@ -324,7 +327,16 @@ object Ntfy {
             }
             if (ok) connection.inputStream.close() else connection.errorStream?.close()
             connection.disconnect()
+            DosefolkQaLog.record(
+                context,
+                DosefolkQaLog.Category.NTFY_TX,
+                if (ok) "send_success" else "send_http_error",
+                mapOf("topic" to topic, "status" to code, "priority" to priority)
+            )
             ok
-        } catch (_: Exception) { false }
+        } catch (e: Exception) {
+            DosefolkQaLog.record(context, DosefolkQaLog.Category.ERROR, "ntfy_send_exception", mapOf("topic" to topic, "error" to e.javaClass.simpleName))
+            false
+        }
     }
 }
