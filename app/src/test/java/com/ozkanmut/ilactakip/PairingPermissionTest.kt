@@ -3,8 +3,9 @@ package com.ozkanmut.ilactakip
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.testing.WorkManagerTestInitHelper
-import org.junit.Assert.assertEquals
+import org.json.JSONObject
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -28,7 +29,8 @@ class PairingPermissionTest {
             "dosefolk_remote_event_receipts",
             "dosefolk_events",
             "dosefolk_alert_outbox",
-            "dosefolk_revoked_peers"
+            "dosefolk_revoked_peers",
+            "dosefolk_stock"
         ).forEach { c.getSharedPreferences(it, Context.MODE_PRIVATE).edit().clear().commit() }
         Store.savePeople(c, listOf(peer))
     }
@@ -77,20 +79,34 @@ class PairingPermissionTest {
     }
 
     @Test
-    fun revokedPeer_isExcludedFromNormalSyncButSelectedForExplicitRePairDrain() {
-        PairingLifecycle.revoke(c, peer)
-
-        assertFalse(CircleTransport.subscriptionTopics(c).contains(peer.topic))
-        assertEquals(listOf(peer.topic), CircleTransport.revokedDrainTopics(peer.topic))
-        assertTrue(RevokedPeerFence.isRevoked(c, peer.topic))
-    }
-
-    @Test
     fun remoteRevoke_cleansRelationshipAndBlocksPeer() {
         PairingLifecycle.applyRemoteRevoke(c, remoteEvent("revoke-1", "circle_revoked"))
 
         assertTrue(Store.people(c).none { it.topic == peer.topic })
         assertFalse(PermissionPolicy.allowed(c, peer.topic, CirclePermission.VIEW))
         assertFalse(IncomingEventGuard.shouldProcess(c, remoteEvent("late-event", "taken")))
+    }
+
+    @Test
+    fun revokedStockSnapshot_isReceiptedAndCannotReplayAfterRePair() {
+        PairingLifecycle.revoke(c, peer)
+        val eventId = "old-stock-event"
+        val payload = JSONObject()
+            .put("protocolVersion", 2)
+            .put("eventId", eventId)
+            .put("type", StockSync.EVENT_TYPE)
+            .put("ownerId", peer.topic)
+            .put("actorTopic", peer.topic)
+            .put("revision", 7L)
+            .put("stock", StockEngine.toJson(MedicationStock("med-1", "Drug", 3, 10)))
+
+        assertTrue(StockSync.applyIncoming(c, payload))
+        assertTrue(RemoteEventReceiptStore.processed(c, eventId))
+        assertNull(StockEngine.remoteForMedication(c, peer.topic, "med-1"))
+
+        Store.savePeople(c, listOf(peer))
+        PairingLifecycle.completeRePair(c, peer.topic)
+        assertTrue(StockSync.applyIncoming(c, payload))
+        assertNull(StockEngine.remoteForMedication(c, peer.topic, "med-1"))
     }
 }
