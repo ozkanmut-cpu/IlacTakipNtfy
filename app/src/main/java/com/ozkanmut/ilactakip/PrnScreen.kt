@@ -16,6 +16,7 @@ import java.time.format.DateTimeFormatter
 @Composable
 fun PrnScreen(c: Context, meds: List<Medication>) {
     var refresh by remember { mutableIntStateOf(0) }
+    var showSetup by remember { mutableStateOf(false) }
     val configured = remember(refresh) { PrnEngine.all(c) }
     LazyColumn(
         Modifier.fillMaxWidth().padding(horizontal = 16.dp),
@@ -25,26 +26,33 @@ fun PrnScreen(c: Context, meds: List<Medication>) {
             Text(if (I18n.language() == "tr") "Gerektiğinde (PRN)" else "As needed (PRN)", style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
             Text(if (I18n.language() == "tr") "Sınırlar yalnızca sen girersen uygulanır; Dosefolk klinik sınır tahmin etmez." else "Limits are enforced only when you enter them; Dosefolk never invents clinical limits.")
         }
-        items(meds.filter { med -> configured.none { it.medicationId == med.id } }, key = { "new-${it.id}" }) { med ->
-            var minInterval by remember(med.id) { mutableStateOf("") }
-            var maxDay by remember(med.id) { mutableStateOf("") }
-            Card(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(med.name, fontWeight = FontWeight.Bold)
-                    OutlinedTextField(
-                        minInterval,
-                        { minInterval = it.filter(Char::isDigit) },
-                        label = { Text(if (I18n.language() == "tr") "Minimum aralık (dakika, opsiyonel)" else "Minimum interval (minutes, optional)") }
-                    )
-                    OutlinedTextField(
-                        maxDay,
-                        { maxDay = it.filter(Char::isDigit) },
-                        label = { Text(if (I18n.language() == "tr") "Günlük maksimum (opsiyonel)" else "Daily maximum (optional)") }
-                    )
-                    Button(onClick = {
-                        PrnEngine.create(c, med, minInterval.toIntOrNull(), maxDay.toIntOrNull())
-                        refresh++
-                    }) { Text(if (I18n.language() == "tr") "PRN olarak ekle" else "Add as PRN") }
+        item {
+            TextButton(onClick = { showSetup = !showSetup }) {
+                Text(if (I18n.language() == "tr") if (showSetup) "Ekleme alanını kapat" else "PRN ilaç ekle" else if (showSetup) "Hide setup" else "Add PRN medication")
+            }
+        }
+        if (showSetup) {
+            items(meds.filter { med -> configured.none { it.medicationId == med.id } }, key = { "new-${it.id}" }) { med ->
+                var minInterval by remember(med.id) { mutableStateOf("") }
+                var maxDay by remember(med.id) { mutableStateOf("") }
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(med.name, fontWeight = FontWeight.Bold)
+                        OutlinedTextField(
+                            minInterval,
+                            { minInterval = it.filter(Char::isDigit) },
+                            label = { Text(if (I18n.language() == "tr") "Minimum aralık (dakika, opsiyonel)" else "Minimum interval (minutes, optional)") }
+                        )
+                        OutlinedTextField(
+                            maxDay,
+                            { maxDay = it.filter(Char::isDigit) },
+                            label = { Text(if (I18n.language() == "tr") "Günlük maksimum (opsiyonel)" else "Daily maximum (optional)") }
+                        )
+                        Button(onClick = {
+                            PrnEngine.create(c, med, minInterval.toIntOrNull(), maxDay.toIntOrNull())
+                            refresh++
+                        }) { Text(if (I18n.language() == "tr") "PRN olarak ekle" else "Add as PRN") }
+                    }
                 }
             }
         }
