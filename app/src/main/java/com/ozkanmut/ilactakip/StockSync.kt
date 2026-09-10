@@ -37,11 +37,6 @@ object StockSync {
         )
     }
 
-    /** Legacy/direct destination helper retained for existing callers. */
-    fun publish(c: Context, targetTopic: String, stock: MedicationStock) {
-        enqueue(c, targetTopic, stock)
-    }
-
     /** Normal Circle fan-out is pub/sub: publish once to this device's publisher topic. */
     fun publishToCircle(c: Context, stock: MedicationStock) {
         enqueue(c, CircleTransport.publishTopic(c), stock)
