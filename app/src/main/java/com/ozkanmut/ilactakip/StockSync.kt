@@ -10,8 +10,13 @@ object StockSync {
     private fun outboxId(c: Context, targetTopic: String, stock: MedicationStock): String =
         "stock|${Store.topic(c)}|${stock.medicationId}|$targetTopic"
 
-    fun publish(c: Context, targetTopic: String, stock: MedicationStock) {
-        if (targetTopic.isBlank()) return
+    private fun enqueue(
+        c: Context,
+        destinationTopic: String,
+        stock: MedicationStock,
+        targetTopic: String = ""
+    ) {
+        if (destinationTopic.isBlank()) return
         val payload = JSONObject()
             .put("protocolVersion", 2)
             .put("eventId", UUID.randomUUID().toString())
@@ -22,23 +27,37 @@ object StockSync {
             .put("timestamp", System.currentTimeMillis())
             .put("revision", EventStore.nextRevision(c))
             .put("stock", StockEngine.toJson(stock))
+        if (targetTopic.isNotBlank()) payload.put("targetTopic", targetTopic)
         AlertOutbox.enqueueLatest(
             c.applicationContext,
-            targetTopic,
+            destinationTopic,
             "Dosefolk sync",
             payload.toString(),
-            stableId = outboxId(c, targetTopic, stock)
+            stableId = outboxId(c, targetTopic.ifBlank { destinationTopic }, stock)
         )
+    }
+
+    /** Legacy/direct destination helper retained for existing callers. */
+    fun publish(c: Context, targetTopic: String, stock: MedicationStock) {
+        enqueue(c, targetTopic, stock)
     }
 
     /** Normal Circle fan-out is pub/sub: publish once to this device's publisher topic. */
     fun publishToCircle(c: Context, stock: MedicationStock) {
-        publish(c, CircleTransport.publishTopic(c), stock)
+        enqueue(c, CircleTransport.publishTopic(c), stock)
     }
 
-    /** Direct bootstrap remains available for first pairing/re-pairing. */
+    /** Targeted bootstrap also uses the sender's publisher topic plus explicit routing. */
     fun publishAll(c: Context, targetTopic: String) {
-        StockEngine.all(c).forEach { publish(c, targetTopic, it) }
+        if (targetTopic.isBlank() || targetTopic == Store.topic(c)) return
+        StockEngine.all(c).forEach {
+            enqueue(
+                c = c,
+                destinationTopic = CircleTransport.publishTopic(c),
+                stock = it,
+                targetTopic = targetTopic
+            )
+        }
     }
 
     fun publishAllToCircle(c: Context) {
