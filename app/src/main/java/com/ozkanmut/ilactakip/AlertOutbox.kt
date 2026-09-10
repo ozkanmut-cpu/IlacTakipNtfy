@@ -227,7 +227,7 @@ object AlertOutbox {
     private fun probeDelivered(alert: PendingAlert): ProbeResult = try {
         val sinceSeconds = ((alert.createdAt - 5_000L).coerceAtLeast(0L) / 1000L).toString()
         val encodedSince = URLEncoder.encode(sinceSeconds, "UTF-8")
-        val connection = URL("https://ntfy.sh/${alert.topic}/json?poll=1&since=$encodedSince").openConnection() as HttpURLConnection
+        val connection = URL(NtfyEndpoint.pollUrl(listOf(alert.topic), sinceSeconds)).openConnection() as HttpURLConnection
         connection.requestMethod = "GET"
         connection.connectTimeout = 10_000
         connection.readTimeout = 10_000
@@ -252,7 +252,7 @@ object AlertOutbox {
     private fun post(c: Context, alert: PendingAlert): PostResult {
         if (NtfyRateGate.isBlocked(c)) return PostResult.RATE_LIMITED
         return try {
-            val connection = URL("https://ntfy.sh/${alert.topic}").openConnection() as HttpURLConnection
+            val connection = URL(NtfyEndpoint.topicUrl(alert.topic)).openConnection() as HttpURLConnection
             connection.requestMethod = "POST"
             connection.doOutput = true
             connection.connectTimeout = 10_000
