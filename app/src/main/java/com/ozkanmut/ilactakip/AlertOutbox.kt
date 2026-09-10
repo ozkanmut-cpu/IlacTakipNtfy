@@ -39,6 +39,8 @@ object AlertOutbox {
     private const val STALE_ESCALATION_AMBIGUITY_MS = 10L * 60L * 60L * 1000L
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
+    private enum class PostResult { DELIVERED, RATE_LIMITED, AMBIGUOUS_FAILURE }
+
     /**
      * Optional deterministic IDs let crash-retried escalation stages converge on
      * one durable queue row. kick=false is used when another durable state write
@@ -105,19 +107,23 @@ object AlertOutbox {
 
     /**
      * Crash-safe alert delivery:
-     * 1) mark a row in-flight durably before POST;
-     * 2) POST with a deterministic ntfy sequence ID;
-     * 3) remove the row immediately after a confirmed 2xx;
-     * 4) after an ambiguous crash/network failure, probe ntfy's cache for the
+     * 1) respect the same ntfy publish backoff used by Circle events;
+     * 2) mark a row in-flight durably before POST;
+     * 3) POST with a deterministic ntfy sequence ID;
+     * 4) remove the row immediately after a confirmed 2xx;
+     * 5) a definite 429 returns the row to pending without probing;
+     * 6) after an ambiguous crash/network failure, probe ntfy's cache for the
      *    sequence ID before deciding whether a resend is necessary.
      */
     @Synchronized
     fun flushBlocking(c: Context): Boolean {
         var all = load(c)
         if (all.isEmpty()) return true
+        if (NtfyRateGate.isBlocked(c)) return false
 
         val batchIds = batchForFlush(all).map { it.id }
         for (id in batchIds) {
+            if (NtfyRateGate.isBlocked(c)) return false
             var alert = all.firstOrNull { it.id == id } ?: continue
 
             val staleSession = staleEscalationSession(alert)
@@ -149,14 +155,23 @@ object AlertOutbox {
             all = all.map { if (it.id == alert.id) alert else it }
             save(c, all)
 
-            if (!post(alert)) {
-                // Keep inFlight=true. The next pass verifies server cache before
-                // any resend, because a lost HTTP response is delivery-ambiguous.
-                return false
+            when (post(c, alert)) {
+                PostResult.DELIVERED -> {
+                    all = all.filterNot { it.id == alert.id }
+                    save(c, all)
+                }
+                PostResult.RATE_LIMITED -> {
+                    alert = alert.copy(inFlight = false)
+                    all = all.map { if (it.id == alert.id) alert else it }
+                    save(c, all)
+                    return false
+                }
+                PostResult.AMBIGUOUS_FAILURE -> {
+                    // Keep inFlight=true. The next pass verifies server cache before
+                    // any resend, because a lost HTTP response is delivery-ambiguous.
+                    return false
+                }
             }
-
-            all = all.filterNot { it.id == alert.id }
-            save(c, all)
         }
         return all.isEmpty()
     }
@@ -199,22 +214,36 @@ object AlertOutbox {
         }
     } catch (_: Exception) { ProbeResult.UNKNOWN }
 
-    private fun post(alert: PendingAlert): Boolean = try {
-        val connection = URL("https://ntfy.sh/${alert.topic}").openConnection() as HttpURLConnection
-        connection.requestMethod = "POST"
-        connection.doOutput = true
-        connection.connectTimeout = 10_000
-        connection.readTimeout = 10_000
-        connection.setRequestProperty("Title", alert.title)
-        connection.setRequestProperty("Priority", "high")
-        connection.setRequestProperty("Content-Type", "text/plain; charset=utf-8")
-        connection.setRequestProperty("X-Sequence-ID", alert.id)
-        connection.outputStream.use { it.write(alert.message.toByteArray()) }
-        val ok = connection.responseCode in 200..299
-        if (ok) connection.inputStream.close() else connection.errorStream?.close()
-        connection.disconnect()
-        ok
-    } catch (_: Exception) { false }
+    private fun post(c: Context, alert: PendingAlert): PostResult {
+        if (NtfyRateGate.isBlocked(c)) return PostResult.RATE_LIMITED
+        return try {
+            val connection = URL("https://ntfy.sh/${alert.topic}").openConnection() as HttpURLConnection
+            connection.requestMethod = "POST"
+            connection.doOutput = true
+            connection.connectTimeout = 10_000
+            connection.readTimeout = 10_000
+            connection.setRequestProperty("Title", alert.title)
+            connection.setRequestProperty("Priority", "high")
+            connection.setRequestProperty("Content-Type", "text/plain; charset=utf-8")
+            connection.setRequestProperty("X-Sequence-ID", alert.id)
+            connection.outputStream.use { it.write(alert.message.toByteArray()) }
+            val code = connection.responseCode
+            val result = when {
+                code in 200..299 -> {
+                    NtfyRateGate.clearAfterSuccess(c)
+                    PostResult.DELIVERED
+                }
+                code == 429 -> {
+                    NtfyRateGate.record429(c, connection.getHeaderField("Retry-After"))
+                    PostResult.RATE_LIMITED
+                }
+                else -> PostResult.AMBIGUOUS_FAILURE
+            }
+            if (code in 200..299) connection.inputStream.close() else connection.errorStream?.close()
+            connection.disconnect()
+            result
+        } catch (_: Exception) { PostResult.AMBIGUOUS_FAILURE }
+    }
 
     private fun load(c: Context): List<PendingAlert> = runCatching {
         val a = JSONArray(prefs(c).getString(KEY, "[]") ?: "[]")
