@@ -3,22 +3,23 @@ package com.ozkanmut.ilactakip
 import android.content.Context
 import java.util.UUID
 
-/** Sends the current local medication state to one newly paired Circle peer. */
+/** Publishes the current local medication state after a new Circle pairing. */
 object CircleInitialSync {
     fun publishToPeer(c: Context, targetTopic: String) {
         val context = c.applicationContext
         if (targetTopic.isBlank() || targetTopic == Store.topic(context)) return
+        val publisherTopic = CircleTransport.publishTopic(context)
 
         Store.load(context).forEach { med ->
             val meta = MedicationMetaStore.get(context, med.id)?.let(::listOf).orEmpty()
             enqueueEvent(
                 context = context,
-                targetTopic = targetTopic,
+                publisherTopic = publisherTopic,
                 type = "program_added",
                 time = med.times.firstOrNull() ?: "program",
                 medications = listOf(med),
                 medicationMeta = meta,
-                stableId = bootstrapId(context, targetTopic, "program", med.id)
+                stableId = bootstrapId(context, "program", med.id)
             )
 
             val rule = ProgramRuleStore.get(context, med.id)
@@ -30,25 +31,25 @@ object CircleInitialSync {
             )
             enqueueEvent(
                 context = context,
-                targetTopic = targetTopic,
+                publisherTopic = publisherTopic,
                 type = "program_rule_updated",
                 time = "program",
                 medications = listOf(carrier),
                 medicationMeta = meta,
-                stableId = bootstrapId(context, targetTopic, "rule", med.id)
+                stableId = bootstrapId(context, "rule", med.id)
             )
         }
 
-        StockSync.publishAll(context, targetTopic)
+        StockSync.publishAllToCircle(context)
         DosefolkSyncScheduler.kick(context)
     }
 
-    private fun bootstrapId(context: Context, targetTopic: String, kind: String, medicationId: String): String =
-        "bootstrap|${Store.topic(context)}|$targetTopic|$kind|$medicationId"
+    private fun bootstrapId(context: Context, kind: String, medicationId: String): String =
+        "bootstrap|${Store.topic(context)}|$kind|$medicationId"
 
     private fun enqueueEvent(
         context: Context,
-        targetTopic: String,
+        publisherTopic: String,
         type: String,
         time: String,
         medications: List<Medication>,
@@ -70,7 +71,7 @@ object CircleInitialSync {
         )
         AlertOutbox.enqueueLatest(
             context,
-            targetTopic,
+            publisherTopic,
             "Dosefolk sync",
             EventStore.payload(event).toString(),
             stableId = stableId
