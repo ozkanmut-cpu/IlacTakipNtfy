@@ -52,7 +52,8 @@ object StockEngine {
         val storedRevision=p.getLong(remoteRevisionKey(ownerId,medId),0L)
         val storedActor=p.getString(remoteActorKey(ownerId,medId),"").orEmpty()
         val storedEvent=p.getString(remoteEventKey(ownerId,medId),"").orEmpty()
-        val current=loadRemote(c).firstOrNull{it.first==ownerId&&it.second.medicationId==medId}?.second
+        val rows=loadRemote(c).toMutableList()
+        val current=rows.firstOrNull{it.first==ownerId&&it.second.medicationId==medId}?.second
         val accept=if(revision>0L||storedRevision>0L){
             when{
                 revision!=storedRevision -> revision>storedRevision
@@ -62,8 +63,14 @@ object StockEngine {
             }
         } else current==null || stock.updatedAt>=current.updatedAt
         if(!accept)return
-        writeRemoteSnapshot(c,ownerId,stock)
-        p.edit().putLong(remoteRevisionKey(ownerId,medId),revision).putString(remoteActorKey(ownerId,medId),actorTopic).putString(remoteEventKey(ownerId,medId),eventId).commit()
+        val i=rows.indexOfFirst{it.first==ownerId&&it.second.medicationId==medId}
+        if(i>=0)rows[i]=ownerId to stock else rows.add(ownerId to stock)
+        p.edit()
+            .putString(KEY_REMOTE,remoteJson(rows).toString())
+            .putLong(remoteRevisionKey(ownerId,medId),revision)
+            .putString(remoteActorKey(ownerId,medId),actorTopic)
+            .putString(remoteEventKey(ownerId,medId),eventId)
+            .commit()
     }
     @Synchronized fun saveRemoteSnapshot(c:Context,ownerId:String,stock:MedicationStock){
         if(ownerId.isBlank())return
@@ -125,5 +132,6 @@ object StockEngine {
     private fun load(c:Context):List<MedicationStock>{val raw=prefs(c).getString(KEY_STOCK,"[]")?:"[]";return runCatching{val a=JSONArray(raw);(0 until a.length()).mapNotNull{fromJson(a.optJSONObject(it))}}.getOrDefault(emptyList())}
     private fun save(c:Context,v:List<MedicationStock>):Boolean = prefs(c).edit().putString(KEY_STOCK,stockJson(v).toString()).commit()
     private fun loadRemote(c:Context):List<Pair<String,MedicationStock>>{val raw=prefs(c).getString(KEY_REMOTE,"[]")?:"[]";return runCatching{val a=JSONArray(raw);(0 until a.length()).mapNotNull{i->val o=a.optJSONObject(i)?:return@mapNotNull null;val owner=o.optString("ownerId");val s=fromJson(o.optJSONObject("stock"));if(owner.isBlank()||s==null)null else owner to s}}.getOrDefault(emptyList())}
-    private fun saveRemote(c:Context,v:List<Pair<String,MedicationStock>>){val a=JSONArray();v.forEach{(owner,s)->a.put(JSONObject().put("ownerId",owner).put("stock",toJson(s)))};prefs(c).edit().putString(KEY_REMOTE,a.toString()).commit()}
+    private fun remoteJson(v:List<Pair<String,MedicationStock>>):JSONArray{val a=JSONArray();v.forEach{(owner,s)->a.put(JSONObject().put("ownerId",owner).put("stock",toJson(s)))};return a}
+    private fun saveRemote(c:Context,v:List<Pair<String,MedicationStock>>){prefs(c).edit().putString(KEY_REMOTE,remoteJson(v).toString()).commit()}
 }
