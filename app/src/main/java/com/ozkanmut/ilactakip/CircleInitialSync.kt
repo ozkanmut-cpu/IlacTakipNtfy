@@ -15,11 +15,12 @@ object CircleInitialSync {
             enqueueEvent(
                 context = context,
                 publisherTopic = publisherTopic,
+                targetTopic = targetTopic,
                 type = "program_added",
                 time = med.times.firstOrNull() ?: "program",
                 medications = listOf(med),
                 medicationMeta = meta,
-                stableId = bootstrapId(context, "program", med.id)
+                stableId = bootstrapId(context, targetTopic, "program", med.id)
             )
 
             val rule = ProgramRuleStore.get(context, med.id)
@@ -32,11 +33,12 @@ object CircleInitialSync {
             enqueueEvent(
                 context = context,
                 publisherTopic = publisherTopic,
+                targetTopic = targetTopic,
                 type = "program_rule_updated",
                 time = "program",
                 medications = listOf(carrier),
                 medicationMeta = meta,
-                stableId = bootstrapId(context, "rule", med.id)
+                stableId = bootstrapId(context, targetTopic, "rule", med.id)
             )
         }
 
@@ -44,12 +46,13 @@ object CircleInitialSync {
         DosefolkSyncScheduler.kick(context)
     }
 
-    private fun bootstrapId(context: Context, kind: String, medicationId: String): String =
-        "bootstrap|${Store.topic(context)}|$kind|$medicationId"
+    private fun bootstrapId(context: Context, targetTopic: String, kind: String, medicationId: String): String =
+        "bootstrap|${Store.topic(context)}|$targetTopic|$kind|$medicationId"
 
     private fun enqueueEvent(
         context: Context,
         publisherTopic: String,
+        targetTopic: String,
         type: String,
         time: String,
         medications: List<Medication>,
@@ -67,7 +70,8 @@ object CircleInitialSync {
             syncState = "synced",
             revision = EventStore.nextRevision(context),
             ownerId = Store.topic(context),
-            medicationMeta = medicationMeta
+            medicationMeta = medicationMeta,
+            targetTopic = targetTopic
         )
         AlertOutbox.enqueueLatest(
             context,
