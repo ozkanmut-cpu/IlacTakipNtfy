@@ -130,6 +130,15 @@ object AlertOutbox {
             .filterNot { NtfyTrafficBudget.shouldDefer(c, it.id) }
             .take(FLUSH_BATCH)
 
+    /**
+     * True when nothing remains that should be sent in the current budget window.
+     * Soft-deferred replaceable stock snapshots stay durable, but they do not force
+     * a WorkManager retry loop. The 15-minute periodic worker will revisit them and
+     * they become eligible automatically after the UTC traffic counter resets.
+     */
+    internal fun settledForCurrentBudget(c: Context, all: List<PendingAlert>): Boolean =
+        all.isEmpty() || eligibleBatchForFlush(c, all).isEmpty()
+
     internal fun staleEscalationSession(alert: PendingAlert, now: Long = System.currentTimeMillis()): EscalationSessionKey? {
         if (!alert.inFlight || now - alert.createdAt < STALE_ESCALATION_AMBIGUITY_MS) return null
         val parts = alert.id.split('|')
@@ -196,7 +205,7 @@ object AlertOutbox {
                 PostResult.AMBIGUOUS_FAILURE -> return false
             }
         }
-        return all.isEmpty()
+        return settledForCurrentBudget(c, all)
     }
 
     private fun recoverEscalationFromCurrentState(c: Context, session: EscalationSessionKey) {
