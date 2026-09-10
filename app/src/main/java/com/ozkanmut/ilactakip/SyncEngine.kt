@@ -48,6 +48,11 @@ internal object NtfyEnvelopeBinding {
     }
 }
 
+internal object NtfyTargetRouting {
+    fun accepts(localTopic: String, event: DoseEvent): Boolean =
+        event.targetTopic.isBlank() || event.targetTopic == localTopic
+}
+
 object CircleTransport {
     fun publishTopic(c: Context): String = Store.topic(c)
 
@@ -124,6 +129,7 @@ object SyncEngine {
                         if (StockSync.applyIncoming(context, payload)) return@forEach
                         if (!IncomingEventGuard.supportedDosePayload(payload)) return@forEach
                         val incoming = parseDoseEvent(payload) ?: return@forEach
+                        if (!NtfyTargetRouting.accepts(Store.topic(context), incoming)) return@forEach
                         if (!IncomingEventGuard.shouldProcess(context, incoming)) return@forEach
 
                         val event = persistCanonicalIncoming(context, incoming)
@@ -181,9 +187,20 @@ object SyncEngine {
         val timestamp = o.optLong("timestamp")
         val fallbackDate = if (timestamp > 0L) Instant.ofEpochMilli(timestamp).atZone(ZoneId.systemDefault()).toLocalDate().toString() else ""
         return DoseEvent(
-            eventId, type, time, o.optString("actor"), o.optString("actorTopic"), timestamp, meds,
-            "synced", o.optLong("revision", 0L), o.optString("scheduledDate", fallbackDate).ifBlank { fallbackDate },
-            o.optLong("snoozeUntil", 0L), o.optString("ownerId"), meta
+            eventId = eventId,
+            type = type,
+            time = time,
+            actor = o.optString("actor"),
+            actorTopic = o.optString("actorTopic"),
+            timestamp = timestamp,
+            medications = meds,
+            syncState = "synced",
+            revision = o.optLong("revision", 0L),
+            scheduledDate = o.optString("scheduledDate", fallbackDate).ifBlank { fallbackDate },
+            snoozeUntil = o.optLong("snoozeUntil", 0L),
+            ownerId = o.optString("ownerId"),
+            medicationMeta = meta,
+            targetTopic = o.optString("targetTopic")
         )
     }
 
