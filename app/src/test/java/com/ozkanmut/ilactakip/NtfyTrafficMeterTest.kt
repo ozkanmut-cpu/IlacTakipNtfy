@@ -5,6 +5,8 @@ import androidx.test.core.app.ApplicationProvider
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -75,5 +77,33 @@ class NtfyTrafficMeterTest {
             .filter { it.startsWith("bootstrap|") }
         assertEquals(2, bootstrapRows.size)
         assertEquals(2, bootstrapRows.distinct().size)
+    }
+
+    private fun fillSoftBudget() {
+        repeat(NtfyTrafficBudget.NONCRITICAL_SOFT_LIMIT) {
+            NtfyTrafficMeter.recordSuccessfulPost(c)
+        }
+    }
+
+    @Test
+    fun onlySoftDeferredStock_isSettledForCurrentBudget() {
+        fillSoftBudget()
+        val rows = listOf(
+            PendingAlert("stock|me|med-1|peer", "me", "sync", "{}", 1L)
+        )
+
+        assertTrue(AlertOutbox.settledForCurrentBudget(c, rows))
+    }
+
+    @Test
+    fun criticalBehindDeferredStock_isNotSettledForCurrentBudget() {
+        fillSoftBudget()
+        val rows = listOf(
+            PendingAlert("critical-event", "me", "sync", "{}", 2L),
+            PendingAlert("stock|me|med-1|peer", "me", "sync", "{}", 1L)
+        )
+
+        assertFalse(AlertOutbox.settledForCurrentBudget(c, rows))
+        assertEquals(listOf("critical-event"), AlertOutbox.eligibleBatchForFlush(c, rows).map { it.id })
     }
 }
