@@ -8,7 +8,7 @@ object StockSync {
     const val EVENT_TYPE = "stock_updated"
 
     fun publish(c: Context, targetTopic: String, stock: MedicationStock) {
-        if (targetTopic.isBlank() || targetTopic == Store.topic(c)) return
+        if (targetTopic.isBlank()) return
         val payload = JSONObject()
             .put("protocolVersion", 2)
             .put("eventId", UUID.randomUUID().toString())
@@ -22,10 +22,12 @@ object StockSync {
         AlertOutbox.enqueue(c.applicationContext, targetTopic, "Dosefolk sync", payload.toString())
     }
 
+    /** Normal Circle fan-out is pub/sub: publish once to this device's publisher topic. */
     fun publishToCircle(c: Context, stock: MedicationStock) {
-        Store.people(c).map { it.topic }.filter { it.isNotBlank() }.distinct().forEach { publish(c, it, stock) }
+        publish(c, CircleTransport.publishTopic(c), stock)
     }
 
+    /** Direct bootstrap remains available for first pairing/re-pairing. */
     fun publishAll(c: Context, targetTopic: String) {
         StockEngine.all(c).forEach { publish(c, targetTopic, it) }
     }
