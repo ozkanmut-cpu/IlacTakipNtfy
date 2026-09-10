@@ -225,10 +225,20 @@ class BootReceiver : BroadcastReceiver() {
 }
 
 object Ntfy {
+    private const val RATE_PREFS = "dosefolk_ntfy_rate"
+    private const val KEY_BLOCK_UNTIL = "block_until_ms"
     private val terminalTypes = setOf("taken", "missed", "conflict_resolved_taken", "conflict_resolved_missed")
     private val directActionTypes = setOf("taken", "missed", "snoozed")
     private val eventLocks = ConcurrentHashMap<String, Any>()
     private val actionLocks = ConcurrentHashMap<String, Any>()
+
+    internal fun retryAfterMillis(header: String?, now: Long = System.currentTimeMillis()): Long {
+        val seconds = header?.trim()?.toLongOrNull()?.coerceIn(30L, 6L * 60L * 60L) ?: 60L
+        return now + seconds * 1_000L
+    }
+
+    internal fun rateBlockedUntil(c: Context): Long =
+        c.getSharedPreferences(RATE_PREFS, Context.MODE_PRIVATE).getLong(KEY_BLOCK_UNTIL, 0L)
 
     fun sendEvent(
         c: Context,
@@ -285,7 +295,7 @@ object Ntfy {
             var allDelivered = true
             topics.forEach { topic ->
                 if (DeliveryLedger.delivered(c, event.eventId, topic)) return@forEach
-                val ok = post(topic, "Dosefolk sync", payload, "min")
+                val ok = post(c, topic, "Dosefolk sync", payload, "min")
                 if (ok) DeliveryLedger.markDelivered(c, event.eventId, topic) else allDelivered = false
             }
             if (allDelivered && topics.all { DeliveryLedger.delivered(c, event.eventId, it) }) { EventStore.markSynced(c, event.eventId); DeliveryLedger.clearEvent(c, event.eventId); eventLocks.remove(event.eventId, lock); true } else false
@@ -293,10 +303,36 @@ object Ntfy {
     }
 
     fun sendTo(c: Context, topic: String, title: String, message: String) { AlertOutbox.enqueue(c.applicationContext, topic, title, message) }
-    private fun post(topic: String, title: String, message: String, priority: String): Boolean = try {
-        val connection = URL("https://ntfy.sh/$topic").openConnection() as HttpURLConnection
-        connection.requestMethod="POST";connection.doOutput=true;connection.connectTimeout=10_000;connection.readTimeout=10_000
-        connection.setRequestProperty("Title",title);connection.setRequestProperty("Priority",priority);connection.setRequestProperty("Content-Type","text/plain; charset=utf-8")
-        connection.outputStream.use{it.write(message.toByteArray())};val ok=connection.responseCode in 200..299;if(ok)connection.inputStream.close() else connection.errorStream?.close();connection.disconnect();ok
-    } catch (_: Exception) { false }
+
+    private fun post(c: Context, topic: String, title: String, message: String, priority: String): Boolean {
+        val context = c.applicationContext
+        val now = System.currentTimeMillis()
+        if (rateBlockedUntil(context) > now) return false
+        return try {
+            val connection = URL("https://ntfy.sh/$topic").openConnection() as HttpURLConnection
+            connection.requestMethod = "POST"
+            connection.doOutput = true
+            connection.connectTimeout = 10_000
+            connection.readTimeout = 10_000
+            connection.setRequestProperty("Title", title)
+            connection.setRequestProperty("Priority", priority)
+            connection.setRequestProperty("Content-Type", "text/plain; charset=utf-8")
+            connection.outputStream.use { it.write(message.toByteArray()) }
+            val code = connection.responseCode
+            val ok = code in 200..299
+            if (code == 429) {
+                val blockUntil = retryAfterMillis(connection.getHeaderField("Retry-After"), now)
+                context.getSharedPreferences(RATE_PREFS, Context.MODE_PRIVATE)
+                    .edit().putLong(KEY_BLOCK_UNTIL, blockUntil).commit()
+            } else if (ok && rateBlockedUntil(context) != 0L) {
+                context.getSharedPreferences(RATE_PREFS, Context.MODE_PRIVATE)
+                    .edit().remove(KEY_BLOCK_UNTIL).commit()
+            }
+            if (ok) connection.inputStream.close() else connection.errorStream?.close()
+            connection.disconnect()
+            ok
+        } catch (_: Exception) {
+            false
+        }
+    }
 }
