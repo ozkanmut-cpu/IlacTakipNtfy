@@ -27,8 +27,21 @@ object CapabilitySync {
     fun publish(c: Context, targetTopic: String, permission: CirclePermission, allowed: Boolean) {
         if (targetTopic.isBlank() || targetTopic == Store.topic(c)) return
         val type = when(permission) { CirclePermission.EDIT_PROGRAM -> "capability_edit_program_${if(allowed)"granted" else "revoked"}"; CirclePermission.EDIT_STOCK -> "capability_edit_stock_${if(allowed)"granted" else "revoked"}"; else -> return }
-        val event = DoseEvent(UUID.randomUUID().toString(), type, permission.name, Store.myName(c), Store.topic(c), System.currentTimeMillis(), emptyList(), "synced", EventStore.nextRevision(c), ownerId=Store.topic(c))
-        EventStore.append(c,event); AlertOutbox.enqueue(c.applicationContext,targetTopic,"Dosefolk sync",EventStore.payload(event).toString())
+        val event = DoseEvent(
+            eventId = UUID.randomUUID().toString(),
+            type = type,
+            time = permission.name,
+            actor = Store.myName(c),
+            actorTopic = Store.topic(c),
+            timestamp = System.currentTimeMillis(),
+            medications = emptyList(),
+            syncState = "synced",
+            revision = EventStore.nextRevision(c),
+            ownerId = Store.topic(c),
+            targetTopic = targetTopic
+        )
+        EventStore.append(c,event)
+        AlertOutbox.enqueue(c.applicationContext,CircleTransport.publishTopic(c),"Dosefolk sync",EventStore.payload(event).toString())
     }
 }
 
@@ -40,19 +53,19 @@ object ScopedNtfy {
             eventId=UUID.randomUUID().toString(), type=type, time=medication.times.firstOrNull()?:"program",
             actor=Store.myName(c), actorTopic=Store.topic(c), timestamp=System.currentTimeMillis(), medications=listOf(medication),
             syncState="synced", revision=EventStore.nextRevision(c), ownerId=ownerTopic,
-            medicationMeta=if(type=="program_deleted") emptyList() else listOfNotNull(meta)
+            medicationMeta=if(type=="program_deleted") emptyList() else listOfNotNull(meta), targetTopic=ownerTopic
         )
         EventStore.append(c,event); OwnerScopeStore.remember(c,event); OwnerScopeStore.applyRemoteProgram(c,ownerTopic,type,medication)
-        AlertOutbox.enqueue(c.applicationContext,ownerTopic,"Dosefolk sync",EventStore.payload(event).toString())
+        AlertOutbox.enqueue(c.applicationContext,CircleTransport.publishTopic(c),"Dosefolk sync",EventStore.payload(event).toString())
     }
     fun sendRuleChange(c: Context, ownerTopic: String, medication: Medication, rule: ProgramRule) {
         if(ownerTopic.isBlank()||medication.id.isBlank()) return
         val normalized=ProgramRuleStore.normalizeForSync(rule.copy(medicationId=medication.id))
         val carrier=Medication(medication.id,medication.name,ProgramRuleStore.encode(normalized).toString(),emptyList())
         val now=System.currentTimeMillis(); val meta=MedicationMetaStore.remote(c,ownerTopic,medication.id)
-        val event=DoseEvent(UUID.randomUUID().toString(),"program_rule_updated","program",Store.myName(c),Store.topic(c),now,listOf(carrier),"synced",EventStore.nextRevision(c),ownerId=ownerTopic,medicationMeta=listOfNotNull(meta))
+        val event=DoseEvent(UUID.randomUUID().toString(),"program_rule_updated","program",Store.myName(c),Store.topic(c),now,listOf(carrier),"synced",EventStore.nextRevision(c),ownerId=ownerTopic,medicationMeta=listOfNotNull(meta),targetTopic=ownerTopic)
         EventStore.append(c,event); OwnerScopeStore.remember(c,event); OwnerScopeStore.applyRemoteRule(c,ownerTopic,normalized,now)
-        AlertOutbox.enqueue(c.applicationContext,ownerTopic,"Dosefolk sync",EventStore.payload(event).toString())
+        AlertOutbox.enqueue(c.applicationContext,CircleTransport.publishTopic(c),"Dosefolk sync",EventStore.payload(event).toString())
     }
 }
 
@@ -102,7 +115,7 @@ object ScopedNtfy {
 
 @Composable private fun RemoteMedicationDialog(c: Context, initial: Medication, onDismiss:()->Unit, onSave:(Medication)->Unit){
     var name by remember(initial.id){mutableStateOf(initial.name)};var dose by remember(initial.id){mutableStateOf(initial.dose)};var times by remember(initial.id){mutableStateOf(initial.times)}
-    AlertDialog(onDismissRequest=onDismiss,title={Text(if(I18n.language()=="tr")"İlaç programı" else "Medication program")},text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)){OutlinedTextField(name,{name=it},label={Text(if(I18n.language()=="tr")"İlaç" else "Medication")});OutlinedTextField(dose,{dose=it},label={Text(if(I18n.language()=="tr")"Doz notu" else "Dose note")});times.forEach{time->Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){Text(time);TextButton(onClick={times=times.filterNot{it==time}}){Text("×")}}};OutlinedButton(onClick={val now=LocalTime.now();TimePickerDialog(c,{_,h,m->times=(times+String.format("%02d:%02d",h,m)).distinct().sorted()},now.hour,now.minute,true).show()}){Text(if(I18n.language()=="tr")"Saat ekle" else "Add time")}}},confirmButton={Button(enabled=name.isNotBlank(),onClick={onSave(initial.copy(name=name.trim(),dose=dose.trim(),times=times))}){Text(if(I18n.language()=="tr")"Kaydet" else "Save")}},dismissButton={TextButton(onClick=onDismiss){Text(if(I18n.language()=="tr")"İptal" else "Cancel")}})
+    AlertDialog(onDismissRequest=onDismiss,title={Text(if(I18n.language()=="tr")"İlaç programı" else "Medication program")},text={Column(verticalArrangement=Arrangement.spacedBy(8.dp)){OutlinedTextField(name,{name=it},label={Text(if(I18n.language()=="tr")"İlaç" else "Medication")});OutlinedTextField(dose,{dose=it},label={Text(if(I18n.language()=="tr")"Doz notu" else "Dose note")});times.forEach{time->Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.SpaceBetween){Text(time);TextButton(onClick={times=times.filterNot{it==time}}){Text("×")}}};OutlinedButton(onClick={val now=LocalTime.now();TimePickerDialog(c,{_,h,m->times=(times+String.format("%02d:%02d",h,m)).distinct().sorted()},now.hour,n.minute,true).show()}){Text(if(I18n.language()=="tr")"Saat ekle" else "Add time")}}},confirmButton={Button(enabled=name.isNotBlank(),onClick={onSave(initial.copy(name=name.trim(),dose=dose.trim(),times=times))}){Text(if(I18n.language()=="tr")"Kaydet" else "Save")}},dismissButton={TextButton(onClick=onDismiss){Text(if(I18n.language()=="tr")"İptal" else "Cancel")}})
 }
 
 @Composable private fun RemoteRuleDialog(initial:ProgramRule,onDismiss:()->Unit,onSave:(ProgramRule)->Unit){
