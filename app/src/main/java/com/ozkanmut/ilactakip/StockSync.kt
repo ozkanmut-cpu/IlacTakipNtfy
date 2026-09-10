@@ -6,6 +6,7 @@ import java.util.UUID
 
 object StockSync {
     const val EVENT_TYPE = "stock_updated"
+    internal const val MAX_PROTOCOL_VERSION = 2
 
     private fun outboxId(c: Context, targetTopic: String, stock: MedicationStock): String =
         "stock|${Store.topic(c)}|${stock.medicationId}|$targetTopic"
@@ -18,7 +19,7 @@ object StockSync {
     ) {
         if (destinationTopic.isBlank()) return
         val payload = JSONObject()
-            .put("protocolVersion", 2)
+            .put("protocolVersion", MAX_PROTOCOL_VERSION)
             .put("eventId", UUID.randomUUID().toString())
             .put("type", EVENT_TYPE)
             .put("ownerId", Store.topic(c))
@@ -61,6 +62,15 @@ object StockSync {
 
     fun applyIncoming(c: Context, payload: JSONObject): Boolean {
         if (payload.optString("type") != EVENT_TYPE) return false
+
+        val protocolVersion = if (payload.has("protocolVersion")) payload.optInt("protocolVersion", -1) else 1
+        if (protocolVersion !in 1..MAX_PROTOCOL_VERSION) {
+            if (protocolVersion > MAX_PROTOCOL_VERSION) {
+                InboundProtocolHealth.recordUnsupportedStock(c, protocolVersion)
+            }
+            return true
+        }
+
         val eventId = payload.optString("eventId")
         val ownerId = payload.optString("ownerId").ifBlank { payload.optString("actorTopic") }
         val actorTopic = payload.optString("actorTopic")
