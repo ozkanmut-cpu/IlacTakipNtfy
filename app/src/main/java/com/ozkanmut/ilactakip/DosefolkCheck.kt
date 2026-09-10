@@ -12,10 +12,6 @@ import android.os.PowerManager
 import android.provider.Settings
 import java.time.LocalDate
 
-/**
- * Silent reliability check. The normal state is no UI at all; only actionable
- * problems are surfaced to the user.
- */
 data class DosefolkIssue(
     val id: String,
     val title: String,
@@ -87,8 +83,6 @@ object DosefolkCheck {
             }
         }
 
-        // Do not nag users who only use local reminders. Battery/background limits mainly
-        // threaten ntfy/WorkManager catch-up, so surface them only when Circle is in use.
         if (Store.people(context).isNotEmpty()) {
             if (Build.VERSION.SDK_INT >= 28) {
                 val activityManager = context.getSystemService(ActivityManager::class.java)
@@ -150,14 +144,20 @@ object DosefolkCheck {
             ) { c -> DosefolkSyncScheduler.kick(c) }
         }
 
-        val unsupportedVersion = InboundProtocolHealth.unsupportedVersion(context)
-        if (unsupportedVersion > IncomingEventGuard.MAX_PROTOCOL_VERSION) {
+        if (InboundProtocolHealth.hasUnsupportedProtocol(context)) {
+            val doseVersion = InboundProtocolHealth.unsupportedVersion(context)
+            val stockVersion = InboundProtocolHealth.unsupportedStockVersion(context)
+            val format = when {
+                doseVersion > IncomingEventGuard.MAX_PROTOCOL_VERSION && stockVersion > StockSync.MAX_PROTOCOL_VERSION -> "v$doseVersion / stock v$stockVersion"
+                doseVersion > IncomingEventGuard.MAX_PROTOCOL_VERSION -> "v$doseVersion"
+                else -> "stock v$stockVersion"
+            }
             result += DosefolkIssue(
                 id = "protocol_update_required",
                 title = tr("Dosefolk güncellenmeli", "Dosefolk needs an update"),
                 detail = tr(
-                    "Circle'dan bu sürümün anlayamadığı daha yeni bir veri biçimi (v$unsupportedVersion) geldi. Yerel alarmlar çalışmaya devam eder; Circle güncellemelerini eksiksiz almak için uygulamayı güncelle.",
-                    "Circle received a newer data format (v$unsupportedVersion) that this version cannot understand. Local alarms continue to work; update Dosefolk to receive all Circle changes."
+                    "Circle'dan bu sürümün anlayamadığı daha yeni bir veri biçimi ($format) geldi. Yerel alarmlar çalışmaya devam eder; Circle güncellemelerini eksiksiz almak için uygulamayı güncelle.",
+                    "Circle received a newer data format ($format) that this version cannot understand. Local alarms continue to work; update Dosefolk to receive all Circle changes."
                 )
             ) { c -> openStoreListing(c) }
         }
