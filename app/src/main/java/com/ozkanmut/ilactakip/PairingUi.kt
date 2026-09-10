@@ -96,7 +96,7 @@ fun PairingCard(c: Context, people: List<Person>, save: (List<Person>) -> Unit) 
         CircleInitialSync.publishToPeer(c, targetTopic)
         name = ""
         topic = ""
-        scanMessage = if (I18n.language() == "tr") "Circle'a eklendi; ilaç programı, kurallar, ayrıntılar ve stok senkron sırasına alındı." else "Added to Circle; medication program, rules, details, and stock were queued for sync."
+        scanMessage = if (I18n.language() == "tr") "Circle'a eklendi. Şimdi diğer telefonda bu telefonun QR'ını tara." else "Added to Circle. Now scan this phone's QR on the other phone."
     }
 
     val scannerOptions = remember { GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).enableAutoZoom().build() }
@@ -113,15 +113,32 @@ fun PairingCard(c: Context, people: List<Person>, save: (List<Person>) -> Unit) 
                         val parsed = barcode.rawValue?.let(::parsePairPayload)
                         if (parsed == null) scanMessage = if (I18n.language() == "tr") "Bu Dosefolk eşleştirme QR’ı değil." else "This is not a Dosefolk pairing QR."
                         else if (parsed.topic == ownTopic) scanMessage = if (I18n.language() == "tr") "Bu QR bu telefona ait." else "This QR belongs to this phone."
-                        else { topic = parsed.topic; if (parsed.name.isNotBlank()) name = parsed.name; scanMessage = if (I18n.language() == "tr") "QR okundu. İsmi kontrol edip ekle." else "QR scanned. Check the name and add." }
-                    }.addOnFailureListener { scanMessage = if (I18n.language() == "tr") "QR tarayıcı açılamadı. Aşağıdaki manuel kod seçeneğini kullanabilirsin." else "QR scanner could not open. You can use the manual code option below." }
+                        else {
+                            topic = parsed.topic
+                            name = parsed.name
+                            scanMessage = if (I18n.language() == "tr") "QR okundu. Kişiyi kontrol edip Circle'a ekle." else "QR scanned. Check the person and add them to Circle."
+                        }
+                    }.addOnFailureListener { scanMessage = if (I18n.language() == "tr") "QR tarayıcı açılamadı. Manuel kod seçeneğini kullanabilirsin." else "QR scanner could not open. You can use the manual code option."
                 }, modifier = Modifier.weight(1f)) { Text(if (I18n.language() == "tr") "QR tara" else "Scan QR") }
             }
             if (showQr) Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                 Image(qr.asImageBitmap(), contentDescription = "Dosefolk pairing QR", modifier = Modifier.size(240.dp))
                 Text(if (I18n.language() == "tr") "Diğer telefondan bu QR'ı okut." else "Scan this QR from the other phone.", style = MaterialTheme.typography.bodySmall)
             }
-            TextButton(onClick = { showManual = !showManual }) {
+
+            if (topic.isNotBlank() && !showManual) {
+                Card(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(if (I18n.language() == "tr") "QR okundu" else "QR scanned", fontWeight = FontWeight.Bold)
+                        OutlinedTextField(name, { name = it }, label = { Text(if (I18n.language() == "tr") "Kişinin adı" else "Person name") }, modifier = Modifier.fillMaxWidth())
+                    }
+                }
+            }
+
+            TextButton(onClick = {
+                showManual = !showManual
+                if (!showManual && topic.isNotBlank() && name.isBlank()) topic = ""
+            }) {
                 Text(if (I18n.language() == "tr") if (showManual) "Manuel kodu gizle" else "QR çalışmıyor mu?" else if (showManual) "Hide manual code" else "QR not working?")
             }
 
@@ -133,12 +150,12 @@ fun PairingCard(c: Context, people: List<Person>, save: (List<Person>) -> Unit) 
                     clipboard.setPrimaryClip(ClipData.newPlainText("Dosefolk topic", ownTopic))
                     scanMessage = if (I18n.language() == "tr") "Kod kopyalandı." else "Code copied."
                 }) { Text(if (I18n.language() == "tr") "Kodu kopyala" else "Copy code") }
+                OutlinedTextField(name, { name = it }, label = { Text(if (I18n.language() == "tr") "Kişinin adı" else "Person name") }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(topic, { topic = it.trim() }, label = { Text(if (I18n.language() == "tr") "Circle kodu" else "Circle code") }, modifier = Modifier.fillMaxWidth())
             }
 
-            OutlinedTextField(name, { name = it }, label = { Text(if (I18n.language() == "tr") "Kişinin adı" else "Person name") }, modifier = Modifier.fillMaxWidth())
-            if (showManual) OutlinedTextField(topic, { topic = it.trim() }, label = { Text(if (I18n.language() == "tr") "Circle kodu" else "Circle code") }, modifier = Modifier.fillMaxWidth())
-            Button(
-                enabled = !rePairing && name.isNotBlank() && topic.isNotBlank() && topic != ownTopic && people.none { it.topic == topic },
+            if (topic.isNotBlank()) Button(
+                enabled = !rePairing && name.isNotBlank() && topic != ownTopic && people.none { it.topic == topic },
                 onClick = {
                     val targetTopic = topic.trim()
                     if (!RevokedPeerFence.isRevoked(c, targetTopic)) {
