@@ -52,6 +52,13 @@ class DosefolkQaLogTest {
     }
 
     @Test
+    fun exportFile_isRestrictedToQaDirectory() {
+        val file = DosefolkQaLog.exportFile(c)
+        assertEquals("qa", file.parentFile?.name)
+        assertEquals("dosefolk-qa.jsonl", file.name)
+    }
+
+    @Test
     fun record_includesStableSessionAndBuildDeviceMetadata() {
         DosefolkQaLog.record(c, DosefolkQaLog.Category.APP, "first")
         DosefolkQaLog.record(c, DosefolkQaLog.Category.APP, "second")
