@@ -18,14 +18,24 @@ object StockEngine {
     fun remoteAll(c:Context,ownerId:String):List<MedicationStock> = loadRemote(c).filter{it.first==ownerId}.map{it.second}
     fun remoteForMedication(c:Context,ownerId:String,medicationId:String)=remoteAll(c,ownerId).firstOrNull{it.medicationId==medicationId}
 
-    @Synchronized fun configure(c:Context,medication:Medication,packSize:Int,currentDoses:Int=packSize,lowThreshold:Int=5){if(packSize<=0)return;val s=MedicationStock(medication.id,medication.name,currentDoses.coerceAtLeast(0),packSize,lowThreshold.coerceAtLeast(0));save(c,listOf(s)+load(c).filterNot{it.medicationId==medication.id});LowStockNotifier.evaluate(c,s);StockSync.publishToCircle(c,s)}
-    @Synchronized fun openNewBox(c:Context,medicationId:String):MedicationStock?{val x=forMedication(c,medicationId)?:return null;val u=x.copy(remainingDoses=x.remainingDoses+x.packSize,updatedAt=System.currentTimeMillis());save(c,listOf(u)+load(c).filterNot{it.medicationId==medicationId});LowStockNotifier.evaluate(c,u);StockSync.publishToCircle(c,u);return u}
+    @Synchronized fun configure(c:Context,medication:Medication,packSize:Int,currentDoses:Int=packSize,lowThreshold:Int=5){
+        if(packSize<=0)return
+        val s=MedicationStock(medication.id,medication.name,currentDoses.coerceAtLeast(0),packSize,lowThreshold.coerceAtLeast(0))
+        if(!save(c,listOf(s)+load(c).filterNot{it.medicationId==medication.id}))return
+        LowStockNotifier.evaluate(c,s);StockSync.publishToCircle(c,s)
+    }
+    @Synchronized fun openNewBox(c:Context,medicationId:String):MedicationStock?{
+        val x=forMedication(c,medicationId)?:return null
+        val u=x.copy(remainingDoses=x.remainingDoses+x.packSize,updatedAt=System.currentTimeMillis())
+        if(!save(c,listOf(u)+load(c).filterNot{it.medicationId==medicationId}))return null
+        LowStockNotifier.evaluate(c,u);StockSync.publishToCircle(c,u);return u
+    }
     @Synchronized fun addSupply(c:Context,medication:Medication,units:Int,lowThreshold:Int=5):MedicationStock?{
         if(units<=0)return null
         val current=forMedication(c,medication.id)
         val updated=if(current==null) MedicationStock(medication.id,medication.name,units,units,lowThreshold.coerceAtLeast(0))
         else current.copy(remainingDoses=current.remainingDoses+units,updatedAt=System.currentTimeMillis())
-        save(c,listOf(updated)+load(c).filterNot{it.medicationId==medication.id})
+        if(!save(c,listOf(updated)+load(c).filterNot{it.medicationId==medication.id}))return null
         LowStockNotifier.evaluate(c,updated)
         StockSync.publishToCircle(c,updated)
         return updated
@@ -113,7 +123,7 @@ object StockEngine {
     private fun restored(c:Context):Set<String>{val raw=prefs(c).getString(KEY_RESTORED,"[]")?:"[]";return runCatching{val a=JSONArray(raw);(0 until a.length()).map{a.optString(it)}.filter{it.isNotBlank()}.toSet()}.getOrDefault(emptySet())}
     private fun stockJson(v:List<MedicationStock>):JSONArray{val a=JSONArray();v.forEach{a.put(toJson(it))};return a}
     private fun load(c:Context):List<MedicationStock>{val raw=prefs(c).getString(KEY_STOCK,"[]")?:"[]";return runCatching{val a=JSONArray(raw);(0 until a.length()).mapNotNull{fromJson(a.optJSONObject(it))}}.getOrDefault(emptyList())}
-    private fun save(c:Context,v:List<MedicationStock>){prefs(c).edit().putString(KEY_STOCK,stockJson(v).toString()).apply()}
+    private fun save(c:Context,v:List<MedicationStock>):Boolean = prefs(c).edit().putString(KEY_STOCK,stockJson(v).toString()).commit()
     private fun loadRemote(c:Context):List<Pair<String,MedicationStock>>{val raw=prefs(c).getString(KEY_REMOTE,"[]")?:"[]";return runCatching{val a=JSONArray(raw);(0 until a.length()).mapNotNull{i->val o=a.optJSONObject(i)?:return@mapNotNull null;val owner=o.optString("ownerId");val s=fromJson(o.optJSONObject("stock"));if(owner.isBlank()||s==null)null else owner to s}}.getOrDefault(emptyList())}
     private fun saveRemote(c:Context,v:List<Pair<String,MedicationStock>>){val a=JSONArray();v.forEach{(owner,s)->a.put(JSONObject().put("ownerId",owner).put("stock",toJson(s)))};prefs(c).edit().putString(KEY_REMOTE,a.toString()).commit()}
 }
