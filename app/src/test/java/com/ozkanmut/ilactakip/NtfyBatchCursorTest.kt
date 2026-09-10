@@ -109,6 +109,20 @@ class NtfyBatchCursorTest {
     }
 
     @Test
+    fun targetRouting_payloadIsCheckedBeforeTypeSpecificHandlers() {
+        val wrongTarget = JSONObject()
+            .put("actorTopic", "peer-a")
+            .put("targetTopic", "phone-a")
+            .put("type", StockSync.EVENT_TYPE)
+        val broadcast = JSONObject()
+            .put("actorTopic", "peer-a")
+            .put("type", StockSync.EVENT_TYPE)
+
+        assertFalse(NtfyTargetRouting.accepts("phone-b", wrongTarget))
+        assertTrue(NtfyTargetRouting.accepts("phone-b", broadcast))
+    }
+
+    @Test
     fun payload_preservesExplicitTargetTopic() {
         assertEquals("phone-a", EventStore.payload(event("phone-a")).optString("targetTopic"))
     }
