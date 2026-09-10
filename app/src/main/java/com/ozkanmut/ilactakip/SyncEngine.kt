@@ -134,7 +134,10 @@ object SyncEngine {
                         if (!NtfyEnvelopeBinding.matches(envelope, payload)) return@forEach
                         if (!NtfyTargetRouting.accepts(Store.topic(context), payload)) return@forEach
                         if (StockSync.applyIncoming(context, payload)) return@forEach
-                        if (!IncomingEventGuard.supportedDosePayload(payload)) return@forEach
+                        if (!IncomingEventGuard.supportedDosePayload(payload)) {
+                            InboundProtocolHealth.recordUnsupported(context, IncomingEventGuard.protocolVersion(payload))
+                            return@forEach
+                        }
                         val incoming = parseDoseEvent(payload) ?: return@forEach
                         if (!IncomingEventGuard.shouldProcess(context, incoming)) return@forEach
 
