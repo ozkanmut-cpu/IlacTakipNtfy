@@ -3,8 +3,14 @@ package com.ozkanmut.ilactakip
 import android.content.Context
 
 /**
- * Keeps retry delivery idempotent per event/topic. If one Circle member received
- * an event and another delivery failed, retries only target the missing topics.
+ * Keeps retry delivery idempotent per event/topic.
+ *
+ * Normal Dosefolk sync now uses a publisher-channel model: an event is POSTed
+ * exactly once to its actor device's own topic, while Circle members subscribe
+ * to publisher topics. The legacy N x N delivery loop still asks about peer
+ * topics; those are virtual-delivered here so old pending events migrate without
+ * duplicate network POSTs. Direct bootstrap/revocation AlertOutbox traffic is
+ * intentionally unaffected.
  */
 object DeliveryLedger {
     private const val PREFS = "dosefolk_delivery_ledger"
@@ -13,8 +19,11 @@ object DeliveryLedger {
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private fun key(eventId: String, topic: String) = "$eventId|$topic"
 
-    fun delivered(c: Context, eventId: String, topic: String): Boolean =
-        prefs(c).getBoolean(key(eventId, topic), false)
+    fun delivered(c: Context, eventId: String, topic: String): Boolean {
+        val publisherTopic = CircleTransport.publishTopic(c)
+        if (topic != publisherTopic && EventStore.contains(c, eventId)) return true
+        return prefs(c).getBoolean(key(eventId, topic), false)
+    }
 
     private fun belongsToEvent(ledgerKey: String, eventId: String): Boolean =
         ledgerKey.startsWith("$eventId|")
@@ -30,8 +39,6 @@ object DeliveryLedger {
 
         val existingKeys = p.all.keys.toList()
         val pendingIds = EventStore.pending(c).mapTo(mutableSetOf()) { it.eventId }
-        // eventId may itself contain '|', e.g. deterministic alarm delivery IDs.
-        // Never parse with substringBefore('|'); match the full pending eventId prefix.
         val protectedKeys = existingKeys.filter { belongsToAnyEvent(it, pendingIds) }.toSet()
         val removable = existingKeys.filterNot { it in protectedKeys }
         val projectedSize = existingKeys.size + 1
@@ -42,11 +49,6 @@ object DeliveryLedger {
         editor.commit()
     }
 
-    /**
-     * Self-heals the crash window between EventStore.markSynced() and clearEvent().
-     * Receipts for still-pending events are preserved; receipts whose event is no
-     * longer pending are residue only and can be removed without causing a resend.
-     */
     @Synchronized
     fun pruneCompleted(c: Context) {
         val p = prefs(c)
