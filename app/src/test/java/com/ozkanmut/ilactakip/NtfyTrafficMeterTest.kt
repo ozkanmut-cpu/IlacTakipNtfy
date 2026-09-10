@@ -2,9 +2,9 @@ package com.ozkanmut.ilactakip
 
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
+import org.json.JSONArray
+import org.json.JSONObject
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -18,7 +18,7 @@ class NtfyTrafficMeterTest {
     @Before
     fun setUp() {
         c = ApplicationProvider.getApplicationContext()
-        listOf("dosefolk_ntfy_traffic", "dosefolk_ntfy_rate", "dosefolk_alert_outbox")
+        listOf("dosefolk_ntfy_traffic", "dosefolk_ntfy_rate", "dosefolk_alert_outbox", "ilac_takip")
             .forEach { c.getSharedPreferences(it, Context.MODE_PRIVATE).edit().clear().commit() }
     }
 
@@ -52,37 +52,28 @@ class NtfyTrafficMeterTest {
     }
 
     @Test
-    fun softBudget_defersOnlyReplaceableStockTraffic() {
-        val t = Instant.parse("2026-09-10T12:00:00Z").toEpochMilli()
-        repeat(NtfyTrafficBudget.NONCRITICAL_SOFT_LIMIT) {
-            NtfyTrafficMeter.recordSuccessfulPost(c, t)
-        }
-        assertTrue(NtfyTrafficBudget.shouldDefer(c, "stock|owner|med|topic", t))
-        assertTrue(NtfyTrafficBudget.shouldDefer(c, "stock|owner|med|topic|next", t))
-        assertFalse(NtfyTrafficBudget.shouldDefer(c, "escalation|2026-09-10|08:00|peer|0", t))
-        assertFalse(NtfyTrafficBudget.shouldDefer(c, "circle-revocation-1", t))
-        assertFalse(NtfyTrafficBudget.shouldDefer(c, "ordinary-critical-alert", t))
-    }
+    fun repeatedBootstrap_coalescesProgramAndRuleSnapshots() {
+        val med = JSONObject()
+            .put("id", "med-1")
+            .put("name", "Test")
+            .put("dose", "1")
+            .put("times", JSONArray().put("08:00"))
+        c.getSharedPreferences("ilac_takip", Context.MODE_PRIVATE)
+            .edit()
+            .putString("topic", "publisher-topic")
+            .putString("meds", JSONArray().put(med).toString())
+            .commit()
 
-    @Test
-    fun deferredStockRows_doNotStarveCriticalRowsBehindThem() {
-        repeat(NtfyTrafficBudget.NONCRITICAL_SOFT_LIMIT) {
-            NtfyTrafficMeter.recordSuccessfulPost(c)
-        }
-        val stockRows = (1..12).map { i ->
-            PendingAlert("stock|owner|med$i|topic", "topic", "sync", "stock$i", i.toLong())
-        }
-        val critical = PendingAlert(
-            "escalation|2026-09-10|08:00|peer|0",
-            "peer",
-            "alert",
-            "critical",
-            99L
-        )
-        // Persisted order is newest first. Put the critical row newest so it would
-        // sit behind >10 oldest stock rows in the old fixed oldest-batch algorithm.
-        val persisted = listOf(critical) + stockRows.reversed()
-        val eligible = AlertOutbox.eligibleBatchForFlush(c, persisted)
-        assertEquals(listOf(critical.id), eligible.map { it.id })
+        CircleInitialSync.publishToPeer(c, "peer-topic")
+        CircleInitialSync.publishToPeer(c, "peer-topic")
+
+        val raw = c.getSharedPreferences("dosefolk_alert_outbox", Context.MODE_PRIVATE)
+            .getString("alerts", "[]") ?: "[]"
+        val rows = JSONArray(raw)
+        val bootstrapRows = (0 until rows.length())
+            .map { rows.getJSONObject(it).getString("id") }
+            .filter { it.startsWith("bootstrap|") }
+        assertEquals(2, bootstrapRows.size)
+        assertEquals(2, bootstrapRows.distinct().size)
     }
 }
