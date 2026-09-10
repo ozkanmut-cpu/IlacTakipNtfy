@@ -42,6 +42,7 @@ class NtfyRateGateTest {
             .atZone(ZoneOffset.UTC)
             .format(DateTimeFormatter.RFC_1123_DATE_TIME)
         assertEquals(now + 120_000L, NtfyRateGate.retryAfterMillis(target, now))
+        assertEquals(now + 120_000L, Ntfy.retryAfterMillis(target, now))
     }
 
     @Test
