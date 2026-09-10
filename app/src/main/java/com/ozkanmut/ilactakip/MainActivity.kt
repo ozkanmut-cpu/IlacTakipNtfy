@@ -9,6 +9,7 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -34,7 +35,7 @@ import java.util.UUID
 
 class MainActivity : ComponentActivity() {
  private val notificationPermission=registerForActivityResult(ActivityResultContracts.RequestPermission()){}
- override fun onCreate(savedInstanceState:Bundle?){super.onCreate(savedInstanceState);if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS);Ntfy.retryPending(this);SyncEngine.pullOnce(this);setContent{MaterialTheme(colorScheme=lightColorScheme()){MedicationApp(this)}}}
+ override fun onCreate(savedInstanceState:Bundle?){super.onCreate(savedInstanceState);if(Build.VERSION.SDK_INT>=33&&checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)!=PackageManager.PERMISSION_GRANTED)notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS);Ntfy.retryPending(this);SyncEngine.pullOnce(this);setContent{val dark=isSystemInDarkTheme();MaterialTheme(colorScheme=if(dark)darkColorScheme() else lightColorScheme()){MedicationApp(this)}}}
 }
 data class Medication(val id:String,val name:String,val dose:String="",val times:List<String>)
 data class Person(val id:String,val name:String,val topic:String,val canEdit:Boolean=false)
