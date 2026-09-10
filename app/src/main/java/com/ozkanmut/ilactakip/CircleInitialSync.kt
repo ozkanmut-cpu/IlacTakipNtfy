@@ -42,7 +42,7 @@ object CircleInitialSync {
             )
         }
 
-        StockSync.publishAllToCircle(context)
+        StockSync.publishAll(context, targetTopic)
         DosefolkSyncScheduler.kick(context)
     }
 
