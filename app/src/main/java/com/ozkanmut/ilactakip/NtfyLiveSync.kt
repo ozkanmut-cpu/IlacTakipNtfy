@@ -21,6 +21,7 @@ object NtfyLiveSync {
         if (started) return
         started = true
         val context = c.applicationContext
+        DosefolkQaLog.record(context, DosefolkQaLog.Category.SYNC, "live_stream_start")
         thread(name = "dosefolk-ntfy-live", isDaemon = true) {
             var retryMs = 1_000L
             while (started) {
@@ -30,28 +31,60 @@ object NtfyLiveSync {
                     continue
                 }
                 try {
+                    DosefolkQaLog.record(
+                        context,
+                        DosefolkQaLog.Category.SYNC,
+                        "live_connect_attempt",
+                        mapOf("topicCount" to topics.size, "topics" to topics.joinToString(","))
+                    )
                     val connection = URL(NtfyEndpoint.streamUrl(topics, "10s"))
                         .openConnection() as HttpURLConnection
                     activeConnection = connection
                     connection.requestMethod = "GET"
                     connection.connectTimeout = 10_000
                     connection.readTimeout = 15_000
-                    if (connection.responseCode !in 200..299) {
+                    val status = connection.responseCode
+                    if (status !in 200..299) {
                         connection.errorStream?.close()
-                        throw IllegalStateException("ntfy stream HTTP ${connection.responseCode}")
+                        DosefolkQaLog.record(
+                            context,
+                            DosefolkQaLog.Category.ERROR,
+                            "live_http_error",
+                            mapOf("status" to status)
+                        )
+                        throw IllegalStateException("ntfy stream HTTP $status")
                     }
+                    DosefolkQaLog.record(context, DosefolkQaLog.Category.SYNC, "live_connected")
                     retryMs = 1_000L
                     connection.inputStream.bufferedReader().useLines { lines ->
                         for (line in lines) {
                             if (!started) break
                             val envelope = runCatching { JSONObject(line) }.getOrNull()
                             if (envelope?.optString("event") == "message") {
+                                DosefolkQaLog.record(
+                                    context,
+                                    DosefolkQaLog.Category.NTFY_RX,
+                                    "live_message_signal",
+                                    mapOf(
+                                        "ntfyId" to envelope.optString("id"),
+                                        "topic" to envelope.optString("topic")
+                                    )
+                                )
                                 SyncEngine.pullBlocking(context)
                             }
-                            if (CircleTransport.subscriptionTopics(context) != topics) break
+                            if (CircleTransport.subscriptionTopics(context) != topics) {
+                                DosefolkQaLog.record(context, DosefolkQaLog.Category.SYNC, "live_topics_changed")
+                                break
+                            }
                         }
                     }
-                } catch (_: Exception) {
+                } catch (e: Exception) {
+                    DosefolkQaLog.record(
+                        context,
+                        DosefolkQaLog.Category.ERROR,
+                        "live_stream_exception",
+                        mapOf("type" to e.javaClass.simpleName, "message" to e.message)
+                    )
                     if (CircleTransport.subscriptionTopics(context) == topics) {
                         sleep(retryMs)
                         retryMs = (retryMs * 2).coerceAtMost(30_000L)
@@ -61,6 +94,7 @@ object NtfyLiveSync {
                 } finally {
                     activeConnection?.disconnect()
                     activeConnection = null
+                    DosefolkQaLog.record(context, DosefolkQaLog.Category.SYNC, "live_disconnected")
                 }
             }
         }
@@ -68,6 +102,7 @@ object NtfyLiveSync {
 
     @Synchronized
     fun restart(c: Context) {
+        DosefolkQaLog.record(c, DosefolkQaLog.Category.SYNC, "live_restart_requested")
         activeConnection?.disconnect()
         ensure(c.applicationContext)
     }
