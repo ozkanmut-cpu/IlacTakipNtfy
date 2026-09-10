@@ -4,7 +4,6 @@ import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
-import java.net.URLEncoder
 import java.net.URL
 import java.time.Instant
 import java.time.ZoneId
@@ -106,9 +105,7 @@ object SyncEngine {
     private fun pullTopicsBlocking(c: Context, topics: List<String>, since: String, commitCheckpoint: Boolean): Boolean {
         val context = c.applicationContext
         if (topics.isEmpty()) return false
-        val topicPath = topics.joinToString(",") { URLEncoder.encode(it, "UTF-8") }
-        val encodedSince = URLEncoder.encode(since, "UTF-8")
-        val url = URL("https://ntfy.sh/$topicPath/json?poll=1&since=$encodedSince")
+        val url = URL(NtfyEndpoint.pollUrl(topics, since))
         return try {
             val connection = url.openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
