@@ -109,6 +109,10 @@ object AlertOutbox {
     fun pendingCount(c: Context): Int = load(c).size
 
     @Synchronized
+    fun actionablePendingCount(c: Context): Int =
+        load(c).count { !NtfyTrafficBudget.shouldDefer(c, it.id) }
+
+    @Synchronized
     fun dropTopic(c: Context, topic: String) {
         if (topic.isBlank()) return
         save(c, load(c).filterNot { it.topic == topic })
