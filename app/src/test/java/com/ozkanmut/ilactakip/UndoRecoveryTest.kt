@@ -6,6 +6,7 @@ import android.content.Intent
 import androidx.test.core.app.ApplicationProvider
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -41,21 +42,48 @@ class UndoRecoveryTest {
     )
 
     @Test
-    fun undoToday_rearmsOnlyOnce() {
+    fun undoToday_rearmsOnlyOnceAsRegularPendingAlarm() {
         val today = LocalDate.now()
         EventStore.append(c, event("taken", "taken", today))
         val undo = event("undo", "undo_taken", today)
         EventStore.append(c, undo)
 
         assertTrue(UndoRecovery.recoverEvent(c, undo))
-        val pi = PendingIntent.getBroadcast(
+        val regularPi = PendingIntent.getBroadcast(
+            c,
+            AlarmScheduler.pendingRearmKey("08:00", today.toString()).hashCode(),
+            Intent(c, AlarmReceiver::class.java),
+            PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
+        )
+        val snoozePi = PendingIntent.getBroadcast(
             c,
             AlarmScheduler.snoozeKey("08:00", today.toString()).hashCode(),
             Intent(c, AlarmReceiver::class.java),
             PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
         )
-        assertNotNull(pi)
+        assertNotNull(regularPi)
+        assertNull(snoozePi)
+        assertTrue(AlarmDeliveryGuard.shouldDeliver(c, "08:00", today.toString(), listOf(med.id), false))
         assertFalse(UndoRecovery.recoverEvent(c, undo))
+    }
+
+    @Test
+    fun terminalResolution_cancelsPendingRearm() {
+        val today = LocalDate.now()
+        EventStore.append(c, event("taken", "taken", today))
+        val undo = event("undo", "undo_taken", today)
+        EventStore.append(c, undo)
+        assertTrue(UndoRecovery.recoverEvent(c, undo))
+
+        assertTrue(Ntfy.sendEvent(c, "taken", "08:00", listOf(med), today.toString(), eventId = "taken-after-undo"))
+        val regularPi = PendingIntent.getBroadcast(
+            c,
+            AlarmScheduler.pendingRearmKey("08:00", today.toString()).hashCode(),
+            Intent(c, AlarmReceiver::class.java),
+            PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
+        )
+        assertNull(regularPi)
+        assertFalse(AlarmDeliveryGuard.shouldDeliver(c, "08:00", today.toString(), listOf(med.id), false))
     }
 
     @Test
