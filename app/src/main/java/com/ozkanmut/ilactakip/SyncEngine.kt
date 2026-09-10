@@ -79,6 +79,7 @@ object SyncEngine {
         SgkStockAutoImporter.start(context)
         SgkStockAutoImporter.reconcile(context)
         PrescriptionNotifier.evaluate(context)
+        NtfyLiveSync.ensure(context)
         thread { DosefolkSyncScheduler.ensure(context); pullBlocking(context) }
     }
 
