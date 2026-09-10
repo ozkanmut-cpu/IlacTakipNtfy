@@ -67,6 +67,49 @@ object AlertOutbox {
         return true
     }
 
+    /**
+     * Latest-wins coalescing for replaceable snapshots such as stock state.
+     * Only a not-yet-sent row is replaced. An in-flight row is delivery-ambiguous
+     * and therefore must remain immutable until probe/ack resolution.
+     */
+    @Synchronized
+    fun enqueueLatest(
+        c: Context,
+        topic: String,
+        title: String,
+        message: String,
+        stableId: String,
+        kick: Boolean = true
+    ): Boolean {
+        if (topic.isBlank() || stableId.isBlank()) return false
+        val current = load(c).toMutableList()
+        val index = current.indexOfFirst { it.id == stableId }
+        val now = System.currentTimeMillis()
+        when {
+            index < 0 -> current.add(0, PendingAlert(stableId, topic, title, message, now))
+            !current[index].inFlight -> current[index] = current[index].copy(
+                topic = topic,
+                title = title,
+                message = message,
+                createdAt = now
+            )
+            else -> {
+                val followupId = "$stableId|next"
+                val followup = current.indexOfFirst { it.id == followupId }
+                if (followup < 0) current.add(0, PendingAlert(followupId, topic, title, message, now))
+                else if (!current[followup].inFlight) current[followup] = current[followup].copy(
+                    topic = topic,
+                    title = title,
+                    message = message,
+                    createdAt = now
+                )
+            }
+        }
+        save(c, current)
+        if (kick) DosefolkSyncScheduler.kick(c)
+        return true
+    }
+
     @Synchronized
     fun pendingCount(c: Context): Int = load(c).size
 
@@ -87,12 +130,6 @@ object AlertOutbox {
     internal fun batchForFlush(all: List<PendingAlert>): List<PendingAlert> =
         all.takeLast(FLUSH_BATCH).asReversed()
 
-    /**
-     * A very old in-flight escalation is delivery-ambiguous: the original POST may
-     * have succeeded but the ntfy cache may no longer be able to prove it. Re-sending
-     * that old stage can create a duplicate hours later. Instead, discard the stale
-     * stage and rebuild escalation from the dose's current state.
-     */
     internal fun staleEscalationSession(alert: PendingAlert, now: Long = System.currentTimeMillis()): EscalationSessionKey? {
         if (!alert.inFlight || now - alert.createdAt < STALE_ESCALATION_AMBIGUITY_MS) return null
         val parts = alert.id.split('|')
@@ -105,16 +142,6 @@ object AlertOutbox {
         return EscalationSessionKey(scheduledDate, time)
     }
 
-    /**
-     * Crash-safe alert delivery:
-     * 1) respect the same ntfy publish backoff used by Circle events;
-     * 2) mark a row in-flight durably before POST;
-     * 3) POST with a deterministic ntfy sequence ID;
-     * 4) remove the row immediately after a confirmed 2xx;
-     * 5) a definite 429 returns the row to pending without probing;
-     * 6) after an ambiguous crash/network failure, probe ntfy's cache for the
-     *    sequence ID before deciding whether a resend is necessary.
-     */
     @Synchronized
     fun flushBlocking(c: Context): Boolean {
         var all = load(c)
@@ -166,11 +193,7 @@ object AlertOutbox {
                     save(c, all)
                     return false
                 }
-                PostResult.AMBIGUOUS_FAILURE -> {
-                    // Keep inFlight=true. The next pass verifies server cache before
-                    // any resend, because a lost HTTP response is delivery-ambiguous.
-                    return false
-                }
+                PostResult.AMBIGUOUS_FAILURE -> return false
             }
         }
         return all.isEmpty()
@@ -189,7 +212,6 @@ object AlertOutbox {
     private enum class ProbeResult { DELIVERED, NOT_FOUND, UNKNOWN }
 
     private fun probeDelivered(alert: PendingAlert): ProbeResult = try {
-        // Include a small buffer for clock rounding and server timestamp granularity.
         val sinceSeconds = ((alert.createdAt - 5_000L).coerceAtLeast(0L) / 1000L).toString()
         val encodedSince = URLEncoder.encode(sinceSeconds, "UTF-8")
         val connection = URL("https://ntfy.sh/${alert.topic}/json?poll=1&since=$encodedSince").openConnection() as HttpURLConnection
