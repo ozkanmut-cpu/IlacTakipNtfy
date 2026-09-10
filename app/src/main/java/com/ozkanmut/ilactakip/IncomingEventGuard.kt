@@ -38,6 +38,8 @@ object InboundProtocolHealth {
     private const val PREFS = "dosefolk_inbound_protocol_health"
     private const val KEY_VERSION = "unsupported_version"
     private const val KEY_SEEN_AT = "unsupported_seen_at"
+    private const val KEY_STOCK_VERSION = "unsupported_stock_version"
+    private const val KEY_STOCK_SEEN_AT = "unsupported_stock_seen_at"
 
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
@@ -52,8 +54,22 @@ object InboundProtocolHealth {
             .commit()
     }
 
+    @Synchronized
+    fun recordUnsupportedStock(c: Context, version: Int, seenAt: Long = System.currentTimeMillis()) {
+        if (version <= StockSync.MAX_PROTOCOL_VERSION) return
+        val p = prefs(c)
+        val current = p.getInt(KEY_STOCK_VERSION, 0)
+        p.edit()
+            .putInt(KEY_STOCK_VERSION, maxOf(current, version))
+            .putLong(KEY_STOCK_SEEN_AT, seenAt)
+            .commit()
+    }
+
     fun unsupportedVersion(c: Context): Int = prefs(c).getInt(KEY_VERSION, 0)
     fun lastSeenAt(c: Context): Long = prefs(c).getLong(KEY_SEEN_AT, 0L)
+    fun unsupportedStockVersion(c: Context): Int = prefs(c).getInt(KEY_STOCK_VERSION, 0)
+    fun lastStockSeenAt(c: Context): Long = prefs(c).getLong(KEY_STOCK_SEEN_AT, 0L)
+    fun hasUnsupportedProtocol(c: Context): Boolean = unsupportedVersion(c) > 0 || unsupportedStockVersion(c) > 0
 
     @Synchronized
     fun clear(c: Context) {
