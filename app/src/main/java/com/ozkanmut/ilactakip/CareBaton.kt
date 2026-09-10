@@ -27,35 +27,54 @@ object CareBatonStore {
         return load(c).firstOrNull { it.doseKey == doseKey(time, scheduledDate) }
     }
 
-    @Synchronized fun claim(c: Context, time: String, minutes: Long = DEFAULT_MINUTES, scheduledDate: String = LocalDate.now().toString()): CareBatonClaim {
-        cleanup(c)
+    fun claim(c: Context, time: String, minutes: Long = DEFAULT_MINUTES, scheduledDate: String = LocalDate.now().toString()): CareBatonClaim {
         val now = System.currentTimeMillis()
-        val claim = CareBatonClaim(
-            doseKey(time, scheduledDate), time, Store.myName(c), Store.topic(c),
-            now, now + minutes.coerceAtLeast(5) * 60_000L, scheduledDate
-        )
-        save(c, listOf(claim) + load(c).filterNot { it.doseKey == claim.doseKey })
-        SmartEscalation.deferUntil(c, time, claim.expiresAt, scheduledDate)
-        Ntfy.sendEvent(c, "care_claimed", time, emptyList(), scheduledDate)
-        return claim
+        val expiresAt = now + minutes.coerceAtLeast(5) * 60_000L
+        val actor = Store.myName(c)
+        val actorTopic = Store.topic(c)
+        val fallback = CareBatonClaim(doseKey(time, scheduledDate), time, actor, actorTopic, now, expiresAt, scheduledDate)
+        if (!Ntfy.sendEvent(c, "care_claimed", time, emptyList(), scheduledDate, snoozeUntil = expiresAt)) return fallback
+        return active(c, time, scheduledDate) ?: fallback
     }
 
-    @Synchronized fun applyRemoteClaim(c: Context, event: DoseEvent) {
-        cleanup(c)
+    @Synchronized fun applyLocalClaim(c: Context, event: DoseEvent) {
         val scheduledDate = event.scheduledDate.ifBlank { LocalDate.now().toString() }
+        val expiresAt = event.snoozeUntil.takeIf { it > event.timestamp }
+            ?: (event.timestamp + DEFAULT_MINUTES * 60_000L)
         val claim = CareBatonClaim(
             doseKey(event.time, scheduledDate), event.time, event.actor, event.actorTopic,
-            event.timestamp, event.timestamp + DEFAULT_MINUTES * 60_000L, scheduledDate
+            event.timestamp, expiresAt, scheduledDate
         )
         if (claim.expiresAt <= System.currentTimeMillis()) return
         save(c, listOf(claim) + load(c).filterNot { it.doseKey == claim.doseKey })
         SmartEscalation.deferUntil(c, event.time, claim.expiresAt, scheduledDate)
     }
 
-    @Synchronized fun release(c: Context, time: String, scheduledDate: String = LocalDate.now().toString()) {
-        save(c, load(c).filterNot { it.doseKey == doseKey(time, scheduledDate) })
+    @Synchronized fun applyRemoteClaim(c: Context, event: DoseEvent) {
+        cleanup(c)
+        val scheduledDate = event.scheduledDate.ifBlank { LocalDate.now().toString() }
+        val expiresAt = event.snoozeUntil.takeIf { it > event.timestamp }
+            ?: (event.timestamp + DEFAULT_MINUTES * 60_000L)
+        val claim = CareBatonClaim(
+            doseKey(event.time, scheduledDate), event.time, event.actor, event.actorTopic,
+            event.timestamp, expiresAt, scheduledDate
+        )
+        if (claim.expiresAt <= System.currentTimeMillis()) return
+        save(c, listOf(claim) + load(c).filterNot { it.doseKey == claim.doseKey })
+        SmartEscalation.deferUntil(c, event.time, claim.expiresAt, scheduledDate)
+    }
+
+    fun release(c: Context, time: String, scheduledDate: String = LocalDate.now().toString()) {
         Ntfy.sendEvent(c, "care_released", time, emptyList(), scheduledDate)
-        resumeIfUnresolved(c, time, scheduledDate)
+    }
+
+    @Synchronized fun applyLocalRelease(c: Context, event: DoseEvent) {
+        val scheduledDate = event.scheduledDate.ifBlank { LocalDate.now().toString() }
+        val key = doseKey(event.time, scheduledDate)
+        val current = load(c)
+        if (current.none { it.doseKey == key }) return
+        resumeIfUnresolved(c, event.time, scheduledDate)
+        save(c, current.filterNot { it.doseKey == key })
     }
 
     /**
@@ -86,7 +105,6 @@ object CareBatonStore {
         val current = load(c)
         val removed = current.filter { it.actorTopic == topic }
         if (removed.isEmpty()) return
-        // Restore escalation before durable removal so a crash replays safely.
         removed.forEach { resumeIfUnresolved(c, it.time, it.scheduledDate) }
         save(c, current.filterNot { it.actorTopic == topic })
     }
@@ -137,7 +155,6 @@ object CareBatonStore {
                     .put("scheduledDate", it.scheduledDate)
             )
         }
-        // Synchronous durability matters for replay ordering around remote release.
         prefs(c).edit().putString(KEY, a.toString()).commit()
     }
 }
