@@ -3,6 +3,7 @@ package com.ozkanmut.ilactakip
 import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.testing.WorkManagerTestInitHelper
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -26,7 +27,8 @@ class PairingPermissionTest {
             "dosefolk_owner_scope",
             "dosefolk_remote_event_receipts",
             "dosefolk_events",
-            "dosefolk_alert_outbox"
+            "dosefolk_alert_outbox",
+            "dosefolk_revoked_peers"
         ).forEach { c.getSharedPreferences(it, Context.MODE_PRIVATE).edit().clear().commit() }
         Store.savePeople(c, listOf(peer))
     }
@@ -72,6 +74,15 @@ class PairingPermissionTest {
             assertFalse(PermissionPolicy.allowed(c, peer.topic, permission))
         }
         assertFalse(IncomingEventGuard.shouldProcess(c, remoteEvent("taken-after-revoke", "taken")))
+    }
+
+    @Test
+    fun revokedPeer_isExcludedFromNormalSyncButSelectedForExplicitRePairDrain() {
+        PairingLifecycle.revoke(c, peer)
+
+        assertFalse(CircleTransport.subscriptionTopics(c).contains(peer.topic))
+        assertEquals(listOf(peer.topic), CircleTransport.revokedDrainTopics(peer.topic))
+        assertTrue(RevokedPeerFence.isRevoked(c, peer.topic))
     }
 
     @Test
