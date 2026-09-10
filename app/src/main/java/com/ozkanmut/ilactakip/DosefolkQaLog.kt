@@ -10,6 +10,7 @@ import java.util.UUID
 
 /** Lightweight local QA trace. Never sends logs off-device automatically. */
 object DosefolkQaLog {
+    private const val DIR_NAME = "qa"
     private const val FILE_NAME = "dosefolk-qa.jsonl"
     private const val MAX_BYTES = 2L * 1024L * 1024L
     private const val KEEP_BYTES = 1L * 1024L * 1024L
@@ -19,7 +20,10 @@ object DosefolkQaLog {
         APP, SYNC, NTFY_RX, NTFY_TX, PAIR, REVOKE, ALARM, ACTION, WORKER, ERROR, SECURITY_REJECT
     }
 
-    private fun file(c: Context) = File(c.applicationContext.filesDir, FILE_NAME)
+    private fun file(c: Context): File {
+        val dir = File(c.applicationContext.filesDir, DIR_NAME).apply { mkdirs() }
+        return File(dir, FILE_NAME)
+    }
 
     @Synchronized
     fun record(
