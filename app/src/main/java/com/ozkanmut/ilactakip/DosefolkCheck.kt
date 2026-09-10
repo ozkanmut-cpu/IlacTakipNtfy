@@ -150,6 +150,18 @@ object DosefolkCheck {
             ) { c -> DosefolkSyncScheduler.kick(c) }
         }
 
+        val unsupportedVersion = InboundProtocolHealth.unsupportedVersion(context)
+        if (unsupportedVersion > IncomingEventGuard.MAX_PROTOCOL_VERSION) {
+            result += DosefolkIssue(
+                id = "protocol_update_required",
+                title = tr("Dosefolk güncellenmeli", "Dosefolk needs an update"),
+                detail = tr(
+                    "Circle'dan bu sürümün anlayamadığı daha yeni bir veri biçimi (v$unsupportedVersion) geldi. Yerel alarmlar çalışmaya devam eder; Circle güncellemelerini eksiksiz almak için uygulamayı güncelle.",
+                    "Circle received a newer data format (v$unsupportedVersion) that this version cannot understand. Local alarms continue to work; update Dosefolk to receive all Circle changes."
+                )
+            ) { c -> openStoreListing(c) }
+        }
+
         if (Store.people(context).isNotEmpty()) {
             val last = SyncEngine.lastSuccess(context)
             if (last == 0L || System.currentTimeMillis() - last > SYNC_STALE_MS) {
@@ -190,6 +202,12 @@ object DosefolkCheck {
         }
 
         return result
+    }
+
+    private fun openStoreListing(c: Context) {
+        val market = Intent(Intent.ACTION_VIEW, Uri.parse("market://details?id=${c.packageName}"))
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        runCatching { c.startActivity(market) }.onFailure { openAppDetails(c) }
     }
 
     private fun openAppDetails(c: Context) {
