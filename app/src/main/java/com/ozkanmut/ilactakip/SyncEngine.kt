@@ -59,16 +59,36 @@ object SyncEngine {
     }
 
     @Synchronized
-    fun pullBlocking(c: Context): Boolean {
+    fun pullBlocking(c: Context): Boolean = pullTopicsBlocking(
+        c = c.applicationContext,
+        topics = CircleTransport.subscriptionTopics(c.applicationContext),
+        since = SyncCheckpointStore.since(c.applicationContext),
+        commitCheckpoint = true
+    )
+
+    /**
+     * Re-pair safety drain. A revoked peer is intentionally absent from Store.people,
+     * so the normal Circle subscription cannot see its old publisher backlog. Poll the
+     * revoked topic explicitly while the tombstone is still active. Do not move the
+     * normal multi-topic checkpoint: this is an isolated authorization cleanup pass.
+     */
+    @Synchronized
+    fun drainRevokedPeerBlocking(c: Context, topic: String): Boolean {
+        val normalized = CircleTransport.normalizeTopics(listOf(topic))
+        if (normalized.isEmpty()) return false
+        return pullTopicsBlocking(
+            c = c.applicationContext,
+            topics = normalized,
+            since = "24h",
+            commitCheckpoint = false
+        )
+    }
+
+    private fun pullTopicsBlocking(c: Context, topics: List<String>, since: String, commitCheckpoint: Boolean): Boolean {
         val context = c.applicationContext
-        // Publisher-channel model: every device publishes normal sync exactly once
-        // to its own topic. Followers subscribe to all Circle publisher topics in
-        // one ntfy request, which avoids N x N fan-out while preserving per-peer
-        // revocation and identity.
-        val topics = CircleTransport.subscriptionTopics(context)
         if (topics.isEmpty()) return false
         val topicPath = topics.joinToString(",") { URLEncoder.encode(it, "UTF-8") }
-        val encodedSince = URLEncoder.encode(SyncCheckpointStore.since(context), "UTF-8")
+        val encodedSince = URLEncoder.encode(since, "UTF-8")
         val url = URL("https://ntfy.sh/$topicPath/json?poll=1&since=$encodedSince")
         return try {
             val connection = url.openConnection() as HttpURLConnection
@@ -110,8 +130,10 @@ object SyncEngine {
 
                 SnoozeRecovery.reconcileToday(context)
                 UndoRecovery.recoverCurrent(context)
-                SyncCheckpointStore.commitSuccessfulBatch(context, newestId)
-                RemoteEventReceiptStore.commitSuccessfulBatch(context)
+                if (commitCheckpoint) {
+                    SyncCheckpointStore.commitSuccessfulBatch(context, newestId)
+                    RemoteEventReceiptStore.commitSuccessfulBatch(context)
+                }
                 connection.disconnect()
                 true
             }
