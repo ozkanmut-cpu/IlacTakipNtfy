@@ -43,6 +43,8 @@ object CircleTransport {
         listOf(Store.topic(c)) + Store.people(c).map { it.topic }
     )
 
+    internal fun revokedDrainTopics(topic: String): List<String> = normalizeTopics(listOf(topic))
+
     internal fun normalizeTopics(topics: List<String>): List<String> =
         topics.map { it.trim() }.filter { it.isNotBlank() }.distinct()
 }
@@ -74,7 +76,7 @@ object SyncEngine {
      */
     @Synchronized
     fun drainRevokedPeerBlocking(c: Context, topic: String): Boolean {
-        val normalized = CircleTransport.normalizeTopics(listOf(topic))
+        val normalized = CircleTransport.revokedDrainTopics(topic)
         if (normalized.isEmpty()) return false
         return pullTopicsBlocking(
             c = c.applicationContext,
