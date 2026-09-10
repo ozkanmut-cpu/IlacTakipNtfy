@@ -36,6 +36,17 @@ object NtfyBatchCursor {
     }
 }
 
+object CircleTransport {
+    fun publishTopic(c: Context): String = Store.topic(c)
+
+    fun subscriptionTopics(c: Context): List<String> = normalizeTopics(
+        listOf(Store.topic(c)) + Store.people(c).map { it.topic }
+    )
+
+    internal fun normalizeTopics(topics: List<String>): List<String> =
+        topics.map { it.trim() }.filter { it.isNotBlank() }.distinct()
+}
+
 object SyncEngine {
     fun lastSuccess(c: Context): Long = SyncCheckpointStore.lastSuccess(c)
 
@@ -50,9 +61,15 @@ object SyncEngine {
     @Synchronized
     fun pullBlocking(c: Context): Boolean {
         val context = c.applicationContext
-        val topic = Store.topic(context)
+        // Publisher-channel model: every device publishes normal sync exactly once
+        // to its own topic. Followers subscribe to all Circle publisher topics in
+        // one ntfy request, which avoids N x N fan-out while preserving per-peer
+        // revocation and identity.
+        val topics = CircleTransport.subscriptionTopics(context)
+        if (topics.isEmpty()) return false
+        val topicPath = topics.joinToString(",") { URLEncoder.encode(it, "UTF-8") }
         val encodedSince = URLEncoder.encode(SyncCheckpointStore.since(context), "UTF-8")
-        val url = URL("https://ntfy.sh/$topic/json?poll=1&since=$encodedSince")
+        val url = URL("https://ntfy.sh/$topicPath/json?poll=1&since=$encodedSince")
         return try {
             val connection = url.openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
@@ -103,13 +120,6 @@ object SyncEngine {
         }
     }
 
-    /**
-     * The first durable payload for an eventId is canonical. If a crash happened
-     * after EventStore persistence but before derived side effects/receipt, replay
-     * is allowed to finish those idempotent side effects using the stored event.
-     * A later replay with the same id but altered payload/revision must not mutate
-     * state or advance the local Lamport clock.
-     */
     internal fun persistCanonicalIncoming(c: Context, incoming: DoseEvent): DoseEvent {
         val stored = incoming.copy(syncState = "synced")
         if (EventStore.appendIfAbsent(c, stored)) return stored
