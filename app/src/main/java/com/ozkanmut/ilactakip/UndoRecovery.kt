@@ -22,8 +22,9 @@ object UndoRecovery {
         val meds = event.medications.ifEmpty { state.medications }
         if (meds.isEmpty()) return false
 
-        AlarmScheduler.cancelSnooze(c, event.time)
-        AlarmScheduler.scheduleSnoozeUntil(c, event.time, meds, System.currentTimeMillis() + 1_000L, event.scheduledDate)
+        AlarmScheduler.cancelSnooze(c, event.time, event.scheduledDate)
+        AlarmScheduler.cancelPendingRearm(c, event.time, event.scheduledDate)
+        if (!AlarmScheduler.schedulePendingRearmIfActive(c, event.time, meds, System.currentTimeMillis() + 1_000L, event.scheduledDate)) return false
         SmartEscalation.schedule(c, event.time, event.scheduledDate)
         markRearmed(c, event.eventId)
         return true
