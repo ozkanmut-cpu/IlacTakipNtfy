@@ -38,3 +38,22 @@ object NtfyTrafficMeter {
         return next
     }
 }
+
+/**
+ * Conservative local soft budget. ntfy.sh limits are visitor/IP scoped, so this
+ * cannot guarantee the service-wide quota when multiple devices share a NAT.
+ * It only protects a reserve by deferring replaceable, noncritical snapshots.
+ * Critical dose/caregiver/control traffic is never blocked by this local budget.
+ */
+object NtfyTrafficBudget {
+    internal const val NONCRITICAL_SOFT_LIMIT = 180
+
+    fun shouldDeferNoncritical(c: Context, nowMs: Long = System.currentTimeMillis()): Boolean =
+        NtfyTrafficMeter.successfulPostsToday(c, nowMs) >= NONCRITICAL_SOFT_LIMIT
+
+    internal fun isReplaceableNoncritical(alertId: String): Boolean =
+        alertId.startsWith("stock|")
+
+    fun shouldDefer(c: Context, alertId: String, nowMs: Long = System.currentTimeMillis()): Boolean =
+        isReplaceableNoncritical(alertId) && shouldDeferNoncritical(c, nowMs)
+}
