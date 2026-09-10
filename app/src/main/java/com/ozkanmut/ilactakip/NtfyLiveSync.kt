@@ -29,14 +29,13 @@ object NtfyLiveSync {
                     sleep(5_000L)
                     continue
                 }
-                val connectedAt = System.currentTimeMillis()
                 try {
                     val connection = URL(NtfyEndpoint.streamUrl(topics, "10s"))
                         .openConnection() as HttpURLConnection
                     activeConnection = connection
                     connection.requestMethod = "GET"
                     connection.connectTimeout = 10_000
-                    connection.readTimeout = 70_000
+                    connection.readTimeout = 15_000
                     if (connection.responseCode !in 200..299) {
                         connection.errorStream?.close()
                         throw IllegalStateException("ntfy stream HTTP ${connection.responseCode}")
@@ -49,13 +48,16 @@ object NtfyLiveSync {
                             if (envelope?.optString("event") == "message") {
                                 SyncEngine.pullBlocking(context)
                             }
-                            // Refresh the subscribed topic set after pairing changes.
-                            if (System.currentTimeMillis() - connectedAt >= 60_000L) break
+                            if (CircleTransport.subscriptionTopics(context) != topics) break
                         }
                     }
                 } catch (_: Exception) {
-                    sleep(retryMs)
-                    retryMs = (retryMs * 2).coerceAtMost(30_000L)
+                    if (CircleTransport.subscriptionTopics(context) == topics) {
+                        sleep(retryMs)
+                        retryMs = (retryMs * 2).coerceAtMost(30_000L)
+                    } else {
+                        retryMs = 1_000L
+                    }
                 } finally {
                     activeConnection?.disconnect()
                     activeConnection = null
