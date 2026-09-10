@@ -40,6 +40,14 @@ internal object NtfyReplayGuard {
     fun isTruncated(header: String?): Boolean = header?.trim() == "1"
 }
 
+internal object NtfyEnvelopeBinding {
+    fun matches(envelope: JSONObject, payload: JSONObject): Boolean {
+        val envelopeTopic = envelope.optString("topic").trim()
+        val actorTopic = payload.optString("actorTopic").trim()
+        return envelopeTopic.isNotBlank() && actorTopic.isNotBlank() && envelopeTopic == actorTopic
+    }
+}
+
 object CircleTransport {
     fun publishTopic(c: Context): String = Store.topic(c)
 
@@ -72,12 +80,6 @@ object SyncEngine {
         commitCheckpoint = true
     )
 
-    /**
-     * Re-pair safety drain. A revoked peer is intentionally absent from Store.people,
-     * so the normal Circle subscription cannot see its old publisher backlog. Poll the
-     * revoked topic explicitly while the tombstone is still active. Do not move the
-     * normal multi-topic checkpoint: this is an isolated authorization cleanup pass.
-     */
     @Synchronized
     fun drainRevokedPeerBlocking(c: Context, topic: String): Boolean {
         val normalized = CircleTransport.revokedDrainTopics(topic)
@@ -106,9 +108,6 @@ object SyncEngine {
                 connection.disconnect()
                 false
             } else if (NtfyReplayGuard.isTruncated(connection.getHeaderField("X-Messages-Truncated"))) {
-                // Never advance state from an incomplete replay. Treat it as a failed
-                // sync so DosefolkCheck/worker retry surfaces the transport problem
-                // instead of silently accepting a gap in medication history.
                 connection.inputStream.close()
                 connection.disconnect()
                 false
@@ -121,6 +120,7 @@ object SyncEngine {
                         if (envelope.optString("event") != "message") return@forEach
 
                         val payload = runCatching { JSONObject(envelope.optString("message")) }.getOrNull() ?: return@forEach
+                        if (!NtfyEnvelopeBinding.matches(envelope, payload)) return@forEach
                         if (StockSync.applyIncoming(context, payload)) return@forEach
                         if (!IncomingEventGuard.supportedDosePayload(payload)) return@forEach
                         val incoming = parseDoseEvent(payload) ?: return@forEach
