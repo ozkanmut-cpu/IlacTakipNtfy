@@ -306,7 +306,7 @@ object Ntfy {
         val now = System.currentTimeMillis()
         if (NtfyRateGate.isBlocked(context, now)) return false
         return try {
-            val connection = URL("https://ntfy.sh/$topic").openConnection() as HttpURLConnection
+            val connection = URL(NtfyEndpoint.topicUrl(topic)).openConnection() as HttpURLConnection
             connection.requestMethod = "POST"
             connection.doOutput = true
             connection.connectTimeout = 10_000
