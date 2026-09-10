@@ -52,6 +52,7 @@ fun AddMedicationDialogEnhanced(c: Context, close: () -> Unit, add: (Medication)
     var formMenu by remember { mutableStateOf(false) }
     var suggestionText by remember { mutableStateOf<String?>(null) }
     var source by remember { mutableStateOf("manual") }
+    var showDetails by remember { mutableStateOf(false) }
 
     fun applySuggestion(ocr: String = "") {
         val s = MedicationSuggestionEngine.suggest(name, ocr)
@@ -83,31 +84,34 @@ fun AddMedicationDialogEnhanced(c: Context, close: () -> Unit, add: (Medication)
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedTextField(name, { name = it; if (it.length >= 3) applySuggestion() }, label = { Text(I18n.t("med_name")) }, modifier = Modifier.fillMaxWidth())
-                OutlinedButton(onClick = { photoPicker.launch("image/*") }, modifier = Modifier.fillMaxWidth()) {
-                    Text(if (I18n.language() == "tr") "Kutu fotoğrafından öner" else "Suggest from box photo")
-                }
-                suggestionText?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-
-                ExposedDropdownMenuBox(expanded = formMenu, onExpandedChange = { formMenu = !formMenu }) {
-                    OutlinedTextField(
-                        value = formLabel(form), onValueChange = {}, readOnly = true,
-                        label = { Text(if (I18n.language() == "tr") "Uygulama biçimi" else "Form") },
-                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(formMenu) },
-                        modifier = Modifier.menuAnchor().fillMaxWidth()
-                    )
-                    ExposedDropdownMenu(expanded = formMenu, onDismissRequest = { formMenu = false }) {
-                        MedicationForm.entries.forEach { f -> DropdownMenuItem(text = { Text(formLabel(f)) }, onClick = { form = f; formMenu = false }) }
-                    }
-                }
-                OutlinedTextField(quantity, { quantity = it.filter { ch -> ch.isDigit() || ch == ',' || ch == '.' } }, label = { Text(if (I18n.language() == "tr") "Kullanım miktarı ($unit)" else "Amount ($unit)") }, modifier = Modifier.fillMaxWidth())
-                if (form == MedicationForm.DROP || form == MedicationForm.CREAM || form == MedicationForm.INJECTION) {
-                    OutlinedTextField(site, { site = it }, label = { Text(if (I18n.language() == "tr") "Uygulama yeri (opsiyonel)" else "Administration site (optional)") }, modifier = Modifier.fillMaxWidth())
-                }
                 OutlinedTextField(doseNote, { doseNote = it }, label = { Text(I18n.t("dose_note")) }, modifier = Modifier.fillMaxWidth())
-
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(packCount, { packCount = it.filter(Char::isDigit) }, label = { Text(if (I18n.language() == "tr") "Kutudaki adet" else "Pack count") }, modifier = Modifier.weight(1f))
-                    OutlinedTextField(packUnit, { packUnit = it }, label = { Text(if (I18n.language() == "tr") "Birim" else "Unit") }, modifier = Modifier.weight(1f))
+                TextButton(onClick = { showDetails = !showDetails }) {
+                    Text(if (I18n.language() == "tr") if (showDetails) "Ayrıntıları gizle" else "İsteğe bağlı ayrıntılar" else if (showDetails) "Hide details" else "Optional details")
+                }
+                if (showDetails) {
+                    OutlinedButton(onClick = { photoPicker.launch("image/*") }, modifier = Modifier.fillMaxWidth()) {
+                        Text(if (I18n.language() == "tr") "Kutu fotoğrafından öner" else "Suggest from box photo")
+                    }
+                    suggestionText?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+                    ExposedDropdownMenuBox(expanded = formMenu, onExpandedChange = { formMenu = !formMenu }) {
+                        OutlinedTextField(
+                            value = formLabel(form), onValueChange = {}, readOnly = true,
+                            label = { Text(if (I18n.language() == "tr") "Uygulama biçimi" else "Form") },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(formMenu) },
+                            modifier = Modifier.menuAnchor().fillMaxWidth()
+                        )
+                        ExposedDropdownMenu(expanded = formMenu, onDismissRequest = { formMenu = false }) {
+                            MedicationForm.entries.forEach { f -> DropdownMenuItem(text = { Text(formLabel(f)) }, onClick = { form = f; formMenu = false }) }
+                        }
+                    }
+                    OutlinedTextField(quantity, { quantity = it.filter { ch -> ch.isDigit() || ch == ',' || ch == '.' } }, label = { Text(if (I18n.language() == "tr") "Kullanım miktarı ($unit)" else "Amount ($unit)") }, modifier = Modifier.fillMaxWidth())
+                    if (form == MedicationForm.DROP || form == MedicationForm.CREAM || form == MedicationForm.INJECTION) {
+                        OutlinedTextField(site, { site = it }, label = { Text(if (I18n.language() == "tr") "Uygulama yeri (opsiyonel)" else "Administration site (optional)") }, modifier = Modifier.fillMaxWidth())
+                    }
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedTextField(packCount, { packCount = it.filter(Char::isDigit) }, label = { Text(if (I18n.language() == "tr") "Kutudaki adet" else "Pack count") }, modifier = Modifier.weight(1f))
+                        OutlinedTextField(packUnit, { packUnit = it }, label = { Text(if (I18n.language() == "tr") "Birim" else "Unit") }, modifier = Modifier.weight(1f))
+                    }
                 }
 
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
@@ -115,20 +119,24 @@ fun AddMedicationDialogEnhanced(c: Context, close: () -> Unit, add: (Medication)
                     Switch(checked = prnOnly, onCheckedChange = { prnOnly = it; if (it) times = emptyList() })
                 }
                 if (prnOnly) {
-                    OutlinedTextField(minInterval, { minInterval = it.filter(Char::isDigit) }, label = { Text(if (I18n.language() == "tr") "Minimum aralık, dk (opsiyonel)" else "Minimum interval, min (optional)") }, modifier = Modifier.fillMaxWidth())
-                    OutlinedTextField(maxPerDay, { maxPerDay = it.filter(Char::isDigit) }, label = { Text(if (I18n.language() == "tr") "Günlük maksimum (opsiyonel)" else "Daily maximum (optional)") }, modifier = Modifier.fillMaxWidth())
+                    if (showDetails) {
+                        OutlinedTextField(minInterval, { minInterval = it.filter(Char::isDigit) }, label = { Text(if (I18n.language() == "tr") "Minimum aralık, dk (opsiyonel)" else "Minimum interval, min (optional)") }, modifier = Modifier.fillMaxWidth())
+                        OutlinedTextField(maxPerDay, { maxPerDay = it.filter(Char::isDigit) }, label = { Text(if (I18n.language() == "tr") "Günlük maksimum (opsiyonel)" else "Daily maximum (optional)") }, modifier = Modifier.fillMaxWidth())
+                    }
                 } else {
                     times.forEach { Text(it) }
                     OutlinedButton(onClick = { val now = LocalTime.now(); TimePickerDialog(c, { _, h, m -> times = (times + String.format("%02d:%02d", h, m)).distinct().sorted() }, now.hour, now.minute, true).show() }) { Text(I18n.t("add_time")) }
                 }
 
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text(if (I18n.language() == "tr") "Kısa süreli kullanım" else "Short-term course")
-                    Switch(checked = shortCourse, onCheckedChange = { shortCourse = it })
-                }
-                if (shortCourse) {
-                    OutlinedTextField(durationDays, { durationDays = it.filter(Char::isDigit) }, label = { Text(if (I18n.language() == "tr") "Kaç gün kullanılacak?" else "How many days?") }, modifier = Modifier.fillMaxWidth())
-                    duration?.let { val start = LocalDate.now(); val end = start.plusDays((it - 1).toLong()); Text(if (I18n.language() == "tr") "$start – $end arasında aktif" else "Active from $start to $end") }
+                if (showDetails) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text(if (I18n.language() == "tr") "Kısa süreli kullanım" else "Short-term course")
+                        Switch(checked = shortCourse, onCheckedChange = { shortCourse = it })
+                    }
+                    if (shortCourse) {
+                        OutlinedTextField(durationDays, { durationDays = it.filter(Char::isDigit) }, label = { Text(if (I18n.language() == "tr") "Kaç gün kullanılacak?" else "How many days?") }, modifier = Modifier.fillMaxWidth())
+                        duration?.let { val start = LocalDate.now(); val end = start.plusDays((it - 1).toLong()); Text(if (I18n.language() == "tr") "$start – $end arasında aktif" else "Active from $start to $end") }
+                    }
                 }
             }
         },
