@@ -236,20 +236,15 @@ class BootReceiver : BroadcastReceiver() {
 }
 
 object Ntfy {
-    private const val RATE_PREFS = "dosefolk_ntfy_rate"
-    private const val KEY_BLOCK_UNTIL = "block_until_ms"
     private val terminalTypes = setOf("taken", "missed", "conflict_resolved_taken", "conflict_resolved_missed")
     private val directActionTypes = setOf("taken", "missed", "snoozed")
     private val eventLocks = ConcurrentHashMap<String, Any>()
     private val actionLocks = ConcurrentHashMap<String, Any>()
 
-    internal fun retryAfterMillis(header: String?, now: Long = System.currentTimeMillis()): Long {
-        val seconds = header?.trim()?.toLongOrNull()?.coerceIn(30L, 6L * 60L * 60L) ?: 60L
-        return now + seconds * 1_000L
-    }
+    internal fun retryAfterMillis(header: String?, now: Long = System.currentTimeMillis()): Long =
+        NtfyRateGate.retryAfterMillis(header, now)
 
-    internal fun rateBlockedUntil(c: Context): Long =
-        c.getSharedPreferences(RATE_PREFS, Context.MODE_PRIVATE).getLong(KEY_BLOCK_UNTIL, 0L)
+    internal fun rateBlockedUntil(c: Context): Long = NtfyRateGate.blockedUntil(c)
 
     fun sendEvent(c: Context, type: String, time: String, meds: List<Medication>, scheduledDate: String = LocalDate.now().toString(), snoozeUntil: Long = 0L, eventId: String? = null): Boolean {
         val actionLock = actionLocks.computeIfAbsent("$scheduledDate|$time") { Any() }
@@ -309,7 +304,7 @@ object Ntfy {
     private fun post(c: Context, topic: String, title: String, message: String, priority: String): Boolean {
         val context = c.applicationContext
         val now = System.currentTimeMillis()
-        if (rateBlockedUntil(context) > now) return false
+        if (NtfyRateGate.isBlocked(context, now)) return false
         return try {
             val connection = URL("https://ntfy.sh/$topic").openConnection() as HttpURLConnection
             connection.requestMethod = "POST"
@@ -323,10 +318,9 @@ object Ntfy {
             val code = connection.responseCode
             val ok = code in 200..299
             if (code == 429) {
-                val blockUntil = retryAfterMillis(connection.getHeaderField("Retry-After"), now)
-                context.getSharedPreferences(RATE_PREFS, Context.MODE_PRIVATE).edit().putLong(KEY_BLOCK_UNTIL, blockUntil).commit()
-            } else if (ok && rateBlockedUntil(context) != 0L) {
-                context.getSharedPreferences(RATE_PREFS, Context.MODE_PRIVATE).edit().remove(KEY_BLOCK_UNTIL).commit()
+                NtfyRateGate.record429(context, connection.getHeaderField("Retry-After"), now)
+            } else if (ok) {
+                NtfyRateGate.clearAfterSuccess(context)
             }
             if (ok) connection.inputStream.close() else connection.errorStream?.close()
             connection.disconnect()
