@@ -28,6 +28,7 @@ fun VoiceAssistantScreen(context: Context) {
     var showImport by remember { mutableStateOf(false) }
     var showProgram by remember { mutableStateOf(false) }
     var showPrescription by remember { mutableStateOf(false) }
+    var showTools by remember { mutableStateOf(false) }
 
     fun submit(text: String) {
         val query = text.trim()
@@ -48,13 +49,18 @@ fun VoiceAssistantScreen(context: Context) {
         Text(I18n.t("ai_title"), style = MaterialTheme.typography.headlineSmall, fontWeight = FontWeight.Bold)
         Text(I18n.t("ai_help"))
 
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { showImport = true }, modifier = Modifier.weight(1f)) { Text(if (I18n.language() == "tr") "İçe aktar" else "Import") }
-            OutlinedButton(onClick = { showProgram = true }, modifier = Modifier.weight(1f)) { Text(if (I18n.language() == "tr") "Program" else "Schedule") }
+        TextButton(onClick = { showTools = !showTools }) {
+            Text(if (I18n.language() == "tr") if (showTools) "Araçları gizle" else "Diğer araçlar" else if (showTools) "Hide tools" else "More tools")
         }
-        OutlinedButton(onClick = { showPrescription = true }, modifier = Modifier.fillMaxWidth()) {
-            val dueCount = PrescriptionRecordStore.due(context).size
-            Text(if (I18n.language() == "tr") "Reçete / SGK${if (dueCount > 0) " ($dueCount)" else ""}" else "Prescription / SGK${if (dueCount > 0) " ($dueCount)" else ""}")
+        if (showTools) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { showImport = true }, modifier = Modifier.weight(1f)) { Text(if (I18n.language() == "tr") "İçe aktar" else "Import") }
+                OutlinedButton(onClick = { showProgram = true }, modifier = Modifier.weight(1f)) { Text(if (I18n.language() == "tr") "Program" else "Schedule") }
+            }
+            OutlinedButton(onClick = { showPrescription = true }, modifier = Modifier.fillMaxWidth()) {
+                val dueCount = PrescriptionRecordStore.due(context).size
+                Text(if (I18n.language() == "tr") "Reçete / SGK${if (dueCount > 0) " ($dueCount)" else ""}" else "Prescription / SGK${if (dueCount > 0) " ($dueCount)" else ""}")
+            }
         }
 
         LazyColumn(Modifier.weight(1f).fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
