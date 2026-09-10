@@ -38,6 +38,12 @@ object PairingLifecycle {
         val context = c.applicationContext
         if (person.topic.isBlank() || person.topic == Store.topic(context)) return
 
+        DosefolkQaLog.record(
+            context,
+            DosefolkQaLog.Category.REVOKE,
+            "revoke_local_start",
+            mapOf("peerTopic" to person.topic, "peerName" to person.name)
+        )
         AlertOutbox.dropTopic(context, person.topic)
 
         val event = DoseEvent(
@@ -62,6 +68,7 @@ object PairingLifecycle {
         )
 
         cleanupPeer(context, person.topic, dropOutbox = false)
+        DosefolkQaLog.record(context, DosefolkQaLog.Category.REVOKE, "revoke_local_complete", mapOf("peerTopic" to person.topic))
     }
 
     fun applyRemoteRevoke(c: Context, event: DoseEvent) {
@@ -69,17 +76,22 @@ object PairingLifecycle {
         if (event.targetTopic != Store.topic(c)) return
         val peerTopic = event.actorTopic
         if (peerTopic.isBlank() || peerTopic == Store.topic(c)) return
+        DosefolkQaLog.record(c, DosefolkQaLog.Category.REVOKE, "revoke_remote_apply", mapOf("peerTopic" to peerTopic))
         cleanupPeer(c.applicationContext, peerTopic, dropOutbox = true)
     }
 
     fun prepareRePair(c: Context, topic: String): Boolean {
         val context = c.applicationContext
         if (!RevokedPeerFence.isRevoked(context, topic)) return true
-        return SyncEngine.drainRevokedPeerBlocking(context, topic)
+        DosefolkQaLog.record(context, DosefolkQaLog.Category.PAIR, "repair_drain_start", mapOf("peerTopic" to topic))
+        val ok = SyncEngine.drainRevokedPeerBlocking(context, topic)
+        DosefolkQaLog.record(context, DosefolkQaLog.Category.PAIR, if (ok) "repair_drain_success" else "repair_drain_failed", mapOf("peerTopic" to topic))
+        return ok
     }
 
     fun completeRePair(c: Context, topic: String) {
         RevokedPeerFence.clear(c.applicationContext, topic)
+        DosefolkQaLog.record(c, DosefolkQaLog.Category.PAIR, "repair_complete", mapOf("peerTopic" to topic))
     }
 
     private fun cleanupPeer(c: Context, topic: String, dropOutbox: Boolean) {
