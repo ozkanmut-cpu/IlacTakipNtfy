@@ -5,12 +5,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 object IncomingEventGuard {
-    private const val MAX_PROTOCOL_VERSION = 9
+    internal const val MAX_PROTOCOL_VERSION = 9
 
-    fun supportedDosePayload(payload: JSONObject): Boolean {
-        val version = if (payload.has("v")) payload.optInt("v", -1) else 1
-        return version in 1..MAX_PROTOCOL_VERSION
-    }
+    fun protocolVersion(payload: JSONObject): Int =
+        if (payload.has("v")) payload.optInt("v", -1) else 1
+
+    fun supportedDosePayload(payload: JSONObject): Boolean =
+        protocolVersion(payload) in 1..MAX_PROTOCOL_VERSION
 
     fun shouldProcess(c: Context, event: DoseEvent): Boolean {
         if (event.eventId.isBlank() || event.actorTopic.isBlank()) return false
@@ -30,6 +31,33 @@ object IncomingEventGuard {
         }
 
         return PermissionPolicy.acceptRemote(c, event)
+    }
+}
+
+object InboundProtocolHealth {
+    private const val PREFS = "dosefolk_inbound_protocol_health"
+    private const val KEY_VERSION = "unsupported_version"
+    private const val KEY_SEEN_AT = "unsupported_seen_at"
+
+    private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    @Synchronized
+    fun recordUnsupported(c: Context, version: Int, seenAt: Long = System.currentTimeMillis()) {
+        if (version <= IncomingEventGuard.MAX_PROTOCOL_VERSION) return
+        val p = prefs(c)
+        val current = p.getInt(KEY_VERSION, 0)
+        p.edit()
+            .putInt(KEY_VERSION, maxOf(current, version))
+            .putLong(KEY_SEEN_AT, seenAt)
+            .commit()
+    }
+
+    fun unsupportedVersion(c: Context): Int = prefs(c).getInt(KEY_VERSION, 0)
+    fun lastSeenAt(c: Context): Long = prefs(c).getLong(KEY_SEEN_AT, 0L)
+
+    @Synchronized
+    fun clear(c: Context) {
+        prefs(c).edit().clear().commit()
     }
 }
 
