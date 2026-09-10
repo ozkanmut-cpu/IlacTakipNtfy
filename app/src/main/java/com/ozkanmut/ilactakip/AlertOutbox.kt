@@ -41,11 +41,6 @@ object AlertOutbox {
 
     private enum class PostResult { DELIVERED, RATE_LIMITED, AMBIGUOUS_FAILURE }
 
-    /**
-     * Optional deterministic IDs let crash-retried escalation stages converge on
-     * one durable queue row. kick=false is used when another durable state write
-     * must happen before WorkManager is allowed to drain the row.
-     */
     @Synchronized
     fun enqueue(
         c: Context,
@@ -119,7 +114,6 @@ object AlertOutbox {
         save(c, load(c).filterNot { it.topic == topic })
     }
 
-    /** Remove only caregiver escalation rows for one resolved dose session. */
     @Synchronized
     fun dropEscalationSession(c: Context, time: String, scheduledDate: String) {
         if (time.isBlank() || scheduledDate.isBlank()) return
@@ -129,6 +123,12 @@ object AlertOutbox {
 
     internal fun batchForFlush(all: List<PendingAlert>): List<PendingAlert> =
         all.takeLast(FLUSH_BATCH).asReversed()
+
+    /** Oldest eligible rows first; soft-deferred snapshots never block critical rows behind them. */
+    internal fun eligibleBatchForFlush(c: Context, all: List<PendingAlert>): List<PendingAlert> =
+        all.asReversed()
+            .filterNot { NtfyTrafficBudget.shouldDefer(c, it.id) }
+            .take(FLUSH_BATCH)
 
     internal fun staleEscalationSession(alert: PendingAlert, now: Long = System.currentTimeMillis()): EscalationSessionKey? {
         if (!alert.inFlight || now - alert.createdAt < STALE_ESCALATION_AMBIGUITY_MS) return null
@@ -148,7 +148,7 @@ object AlertOutbox {
         if (all.isEmpty()) return true
         if (NtfyRateGate.isBlocked(c)) return false
 
-        val batchIds = batchForFlush(all).map { it.id }
+        val batchIds = eligibleBatchForFlush(c, all).map { it.id }
         for (id in batchIds) {
             if (NtfyRateGate.isBlocked(c)) return false
             var alert = all.firstOrNull { it.id == id } ?: continue
