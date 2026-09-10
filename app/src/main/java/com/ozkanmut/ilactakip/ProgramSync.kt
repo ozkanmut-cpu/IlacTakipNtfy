@@ -121,9 +121,9 @@ object ProgramSync {
     }.getOrNull()
 
     /**
-     * Applies an authorized remote program event without touching the local medication list.
-     * Revision is the primary order. Equal concurrent revisions converge by actorTopic/eventId.
-     * Legacy revision=0 events retain timestamp ordering for backwards compatibility.
+     * Applies an authorized remote program event. Events targeting this device's
+     * owner update the real local medication program; events for another owner
+     * update only that owner's read-only Circle cache. Revision is authoritative.
      */
     @Synchronized
     fun applyRemote(c: Context, event: DoseEvent) {
@@ -131,7 +131,8 @@ object ProgramSync {
         val med = event.medications.firstOrNull() ?: return
         if (med.id.isBlank()) return
         val ownerId = event.ownerId.ifBlank { event.actorTopic }
-        if (ownerId.isBlank() || ownerId == OwnerScopeStore.localOwnerId(c)) return
+        if (ownerId.isBlank()) return
+        val localOwner = OwnerScopeStore.localOwnerId(c)
         val p = prefs(c)
 
         val storedRevision = p.getLong(revisionKey(ownerId, med.id), 0L)
@@ -150,13 +151,49 @@ object ProgramSync {
         }
         if (!accept) return
 
-        OwnerScopeStore.applyRemoteProgram(c, ownerId, event.type, med)
-        p.edit()
+        val localProgram = if (ownerId == localOwner) {
+            applyLocalOwnerProgramDurably(c, event.type, med) ?: return
+        } else {
+            OwnerScopeStore.applyRemoteProgram(c, ownerId, event.type, med)
+            null
+        }
+
+        val edit = p.edit()
             .putLong(stampKey(ownerId, med.id), event.timestamp)
             .putLong(revisionKey(ownerId, med.id), event.revision)
             .putString(actorKey(ownerId, med.id), event.actorTopic)
             .putString(eventKey(ownerId, med.id), event.eventId)
+        if (localProgram != null) {
+            edit.putString(KEY_BASELINE, encodeMedications(localProgram))
+                .putBoolean(KEY_INITIALIZED, true)
+        }
+        edit.commit()
+
+        if (localProgram != null) {
+            AlarmScheduler.scheduleAll(c, localProgram, observeProgramChanges = false)
+        }
+    }
+
+    /**
+     * Persist the real local program before the ordering checkpoint. A crash after
+     * this commit but before the checkpoint is safe: replay applies the same state
+     * again. The opposite ordering could permanently lose the requested change.
+     */
+    private fun applyLocalOwnerProgramDurably(c: Context, type: String, med: Medication): List<Medication>? {
+        val current = Store.load(c).toMutableList()
+        when (type) {
+            "program_deleted" -> current.removeAll { it.id == med.id }
+            "program_added", "program_updated" -> {
+                val index = current.indexOfFirst { it.id == med.id }
+                if (index >= 0) current[index] = med else current += med
+            }
+            else -> return null
+        }
+        val committed = c.getSharedPreferences("ilac_takip", Context.MODE_PRIVATE)
+            .edit()
+            .putString("meds", encodeMedications(current))
             .commit()
+        return current.takeIf { committed }
     }
 
     private fun localProgramEvent(c: Context, med: Medication, ownerId: String) = DoseEvent(
@@ -184,9 +221,21 @@ object ProgramSync {
         }.getOrDefault(emptyList())
     }
 
-    private fun saveBaseline(c: Context, meds: List<Medication>) {
+    private fun encodeMedications(meds: List<Medication>): String {
         val a = JSONArray()
-        meds.forEach { m -> a.put(JSONObject().put("id", m.id).put("name", m.name).put("dose", m.dose).put("times", JSONArray(m.times))) }
-        prefs(c).edit().putString(KEY_BASELINE, a.toString()).commit()
+        meds.forEach { m ->
+            a.put(
+                JSONObject()
+                    .put("id", m.id)
+                    .put("name", m.name)
+                    .put("dose", m.dose)
+                    .put("times", JSONArray(m.times))
+            )
+        }
+        return a.toString()
+    }
+
+    private fun saveBaseline(c: Context, meds: List<Medication>) {
+        prefs(c).edit().putString(KEY_BASELINE, encodeMedications(meds)).commit()
     }
 }
