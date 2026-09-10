@@ -53,4 +53,14 @@ class DeliveryLedgerCrashRecoveryTest {
         assertFalse(DeliveryLedger.delivered(c, id, "care-a"))
         assertTrue(EventStore.pending(c).none { it.eventId == id })
     }
+
+    @Test
+    fun publisherTopicMigration_virtualDeliveryOnlyAppliesToActiveCirclePeers() {
+        val id = "legacy-pending-event"
+        EventStore.append(c, event(id, "pending"))
+        Store.savePeople(c, listOf(Person("peer-1", "Care A", "care-a")))
+
+        assertTrue(DeliveryLedger.delivered(c, id, "care-a"))
+        assertFalse(DeliveryLedger.delivered(c, id, "removed-peer"))
+    }
 }
