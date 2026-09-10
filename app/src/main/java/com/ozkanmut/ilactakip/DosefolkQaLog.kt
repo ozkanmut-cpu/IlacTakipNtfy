@@ -29,13 +29,15 @@ object DosefolkQaLog {
         details: Map<String, Any?> = emptyMap()
     ) {
         runCatching {
-            val f = file(c)
+            val context = c.applicationContext
+            val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+            val f = file(context)
             rotateIfNeeded(f)
             val safe = JSONObject()
                 .put("ts", Instant.now().toString())
                 .put("session", sessionId)
-                .put("appVersion", BuildConfig.VERSION_NAME)
-                .put("appCode", BuildConfig.VERSION_CODE)
+                .put("appVersion", packageInfo.versionName.orEmpty())
+                .put("appCode", if (Build.VERSION.SDK_INT >= 28) packageInfo.longVersionCode else @Suppress("DEPRECATION") packageInfo.versionCode.toLong())
                 .put("android", Build.VERSION.RELEASE ?: "")
                 .put("sdk", Build.VERSION.SDK_INT)
                 .put("manufacturer", Build.MANUFACTURER ?: "")
