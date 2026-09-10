@@ -71,15 +71,14 @@ object PairingLifecycle {
     }
 
     /**
-     * Before trusting a previously revoked topic again, drain the current ntfy
-     * catch-up while that topic is still unauthorized. Rejected old messages are
-     * receipted by IncomingEventGuard. The tombstone intentionally remains until
-     * completeRePair() runs after the peer record has been written.
+     * Before trusting a previously revoked topic again, drain that exact ntfy
+     * publisher topic while the tombstone is still active. The normal Circle
+     * subscription cannot do this because revoked peers are absent from Store.people.
      */
     fun prepareRePair(c: Context, topic: String): Boolean {
         val context = c.applicationContext
         if (!RevokedPeerFence.isRevoked(context, topic)) return true
-        return SyncEngine.pullBlocking(context)
+        return SyncEngine.drainRevokedPeerBlocking(context, topic)
     }
 
     fun completeRePair(c: Context, topic: String) {
