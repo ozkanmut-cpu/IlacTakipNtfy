@@ -41,7 +41,9 @@ object NtfyRateGate {
         return until
     }
 
+    /** Called only after a confirmed successful ntfy POST. */
     fun clearAfterSuccess(c: Context) {
+        NtfyTrafficMeter.recordSuccessfulPost(c)
         val prefs = c.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         if (prefs.getLong(KEY_BLOCK_UNTIL, 0L) != 0L) {
             prefs.edit().remove(KEY_BLOCK_UNTIL).commit()
