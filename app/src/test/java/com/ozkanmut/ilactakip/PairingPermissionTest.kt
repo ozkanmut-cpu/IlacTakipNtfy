@@ -80,11 +80,21 @@ class PairingPermissionTest {
 
     @Test
     fun remoteRevoke_cleansRelationshipAndBlocksPeer() {
-        PairingLifecycle.applyRemoteRevoke(c, remoteEvent("revoke-1", "circle_revoked"))
+        val targeted = remoteEvent("revoke-1", "circle_revoked").copy(targetTopic = Store.topic(c))
+        PairingLifecycle.applyRemoteRevoke(c, targeted)
 
         assertTrue(Store.people(c).none { it.topic == peer.topic })
         assertFalse(PermissionPolicy.allowed(c, peer.topic, CirclePermission.VIEW))
         assertFalse(IncomingEventGuard.shouldProcess(c, remoteEvent("late-event", "taken")))
+    }
+
+    @Test
+    fun remoteRevoke_forAnotherTargetCannotRemovePeer() {
+        val notForMe = remoteEvent("revoke-other", "circle_revoked").copy(targetTopic = "another-device")
+        PairingLifecycle.applyRemoteRevoke(c, notForMe)
+
+        assertTrue(Store.people(c).any { it.topic == peer.topic })
+        assertTrue(PermissionPolicy.allowed(c, peer.topic, CirclePermission.VIEW))
     }
 
     @Test
