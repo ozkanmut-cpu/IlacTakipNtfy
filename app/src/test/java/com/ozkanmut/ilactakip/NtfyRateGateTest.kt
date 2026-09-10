@@ -56,6 +56,13 @@ class NtfyRateGateTest {
     }
 
     @Test
+    fun alertBackoff_isVisibleToPublisherPath() {
+        val now = System.currentTimeMillis()
+        val until = NtfyRateGate.record429(c, "120", now)
+        assertEquals(until, Ntfy.rateBlockedUntil(c))
+    }
+
+    @Test
     fun blockedAlertOutbox_keepsRowPendingWithoutMarkingInFlight() {
         AlertOutbox.enqueue(c, "care-topic", "Alert", "Message", id = "alert-1", kick = false)
         NtfyRateGate.record429(c, "120")
