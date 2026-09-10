@@ -36,6 +36,10 @@ object NtfyBatchCursor {
     }
 }
 
+internal object NtfyReplayGuard {
+    fun isTruncated(header: String?): Boolean = header?.trim() == "1"
+}
+
 object CircleTransport {
     fun publishTopic(c: Context): String = Store.topic(c)
 
@@ -99,6 +103,13 @@ object SyncEngine {
             connection.readTimeout = 15_000
             if (connection.responseCode !in 200..299) {
                 connection.errorStream?.close()
+                connection.disconnect()
+                false
+            } else if (NtfyReplayGuard.isTruncated(connection.getHeaderField("X-Messages-Truncated"))) {
+                // Never advance state from an incomplete replay. Treat it as a failed
+                // sync so DosefolkCheck/worker retry surfaces the transport problem
+                // instead of silently accepting a gap in medication history.
+                connection.inputStream.close()
                 connection.disconnect()
                 false
             } else {
