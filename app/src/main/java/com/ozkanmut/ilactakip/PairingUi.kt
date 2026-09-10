@@ -165,7 +165,17 @@ fun PairingCard(c: Context, people: List<Person>, save: (List<Person>) -> Unit) 
                 Text(if (I18n.language() == "tr") "Eşleşmeleri yönet" else "Manage pairings", fontWeight = FontWeight.Bold)
                 people.forEach { person -> Card(Modifier.fillMaxWidth()) {
                     Row(Modifier.fillMaxWidth().padding(12.dp), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Column(Modifier.weight(1f)) { Text(person.name, fontWeight = FontWeight.Bold); SelectionContainer { Text(person.topic, style = MaterialTheme.typography.bodySmall) } }
+                        Column(Modifier.weight(1f)) {
+                            Text(person.name, fontWeight = FontWeight.Bold)
+                            Text(
+                                if (CirclePresence.confirmed(c, person.topic)) {
+                                    if (I18n.language() == "tr") "Bağlı" else "Connected"
+                                } else {
+                                    if (I18n.language() == "tr") "Karşı telefonda eşleştirme bekleniyor" else "Waiting for pairing on the other phone"
+                                },
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                        }
                         TextButton(onClick = { pendingRevoke = person }) { Text(if (I18n.language() == "tr") "Çıkar" else "Remove") }
                     }
                 } }
