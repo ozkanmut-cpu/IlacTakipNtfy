@@ -2,7 +2,9 @@ package com.ozkanmut.ilactakip
 
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -49,5 +51,14 @@ class NtfyBatchCursorTest {
         if (second != null) cursor = NtfyBatchCursor.advance(cursor, second)
 
         assertEquals("next-id", cursor)
+    }
+
+    @Test
+    fun replayTruncation_headerIsRejected() {
+        assertTrue(NtfyReplayGuard.isTruncated("1"))
+        assertTrue(NtfyReplayGuard.isTruncated(" 1 "))
+        assertFalse(NtfyReplayGuard.isTruncated(null))
+        assertFalse(NtfyReplayGuard.isTruncated("0"))
+        assertFalse(NtfyReplayGuard.isTruncated("true"))
     }
 }
