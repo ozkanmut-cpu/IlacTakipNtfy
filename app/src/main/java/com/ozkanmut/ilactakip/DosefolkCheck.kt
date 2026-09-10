@@ -138,7 +138,7 @@ object DosefolkCheck {
             ) { c -> DosefolkSyncScheduler.kick(c) }
         }
 
-        val pendingAlerts = AlertOutbox.pendingCount(context)
+        val pendingAlerts = AlertOutbox.actionablePendingCount(context)
         if (pendingAlerts > 0) {
             result += DosefolkIssue(
                 id = "pending_alerts",
