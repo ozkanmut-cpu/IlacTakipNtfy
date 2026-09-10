@@ -97,13 +97,10 @@ object AlarmScheduler {
         return true
     }
 
-    /** Pure timestamp helper. It deliberately does not schedule an alarm. */
     fun snoozeGroup(c: Context, time: String, meds: List<Medication>, minutes: Int, scheduledDate: String = LocalDate.now().toString()): Long =
         System.currentTimeMillis() + minutes.coerceAtLeast(1) * 60_000L
 
-    fun restoreActiveSnoozes(c: Context) {
-        SnoozeRecovery.reconcileToday(c)
-    }
+    fun restoreActiveSnoozes(c: Context) { SnoozeRecovery.reconcileToday(c) }
 }
 
 object AlarmDeliveryGuard {
@@ -132,8 +129,7 @@ object ActionDeliveryGuard {
 
 object DoseNotificationLifecycle {
     fun cancel(c: Context, time: String, scheduledDate: String) {
-        c.getSystemService(NotificationManager::class.java)
-            .cancel(("group-$scheduledDate-$time").hashCode())
+        c.getSystemService(NotificationManager::class.java).cancel(("group-$scheduledDate-$time").hashCode())
     }
 }
 
@@ -240,41 +236,30 @@ object Ntfy {
     internal fun rateBlockedUntil(c: Context): Long =
         c.getSharedPreferences(RATE_PREFS, Context.MODE_PRIVATE).getLong(KEY_BLOCK_UNTIL, 0L)
 
-    fun sendEvent(
-        c: Context,
-        type: String,
-        time: String,
-        meds: List<Medication>,
-        scheduledDate: String = LocalDate.now().toString(),
-        snoozeUntil: Long = 0L,
-        eventId: String? = null
-    ): Boolean {
+    fun sendEvent(c: Context, type: String, time: String, meds: List<Medication>, scheduledDate: String = LocalDate.now().toString(), snoozeUntil: Long = 0L, eventId: String? = null): Boolean {
         val actionLock = actionLocks.computeIfAbsent("$scheduledDate|$time") { Any() }
         return synchronized(actionLock) {
             if (type in directActionTypes) {
                 val action = if (type == "snoozed") "snooze" else type
                 if (!ActionDeliveryGuard.shouldApply(c, action, time, scheduledDate)) return@synchronized false
             }
-
             val ownerId = OwnerScopeStore.ownerFor(c, meds)
             val meta = meds.mapNotNull { med -> if (ownerId == OwnerScopeStore.localOwnerId(c)) MedicationMetaStore.get(c, med.id) else MedicationMetaStore.remote(c, ownerId, med.id) }
-            val event = DoseEvent(eventId ?: UUID.randomUUID().toString(), type, time, Store.myName(c), Store.topic(c),System.currentTimeMillis(), meds, "pending", EventStore.nextRevision(c), scheduledDate, snoozeUntil, ownerId, meta)
+            val localOnly = type == "alarm"
+            val event = DoseEvent(eventId ?: UUID.randomUUID().toString(), type, time, Store.myName(c), Store.topic(c), System.currentTimeMillis(), meds, if (localOnly) "synced" else "pending", EventStore.nextRevision(c), scheduledDate, snoozeUntil, ownerId, meta)
             if (!EventStore.appendIfAbsent(c, event)) return@synchronized false
-
             when {
                 type in terminalTypes -> { AlarmScheduler.cancelSnooze(c, time, scheduledDate); SmartEscalation.cancel(c, time, scheduledDate); CareBatonStore.resolve(c, time, scheduledDate); DoseNotificationLifecycle.cancel(c, time, scheduledDate) }
-                type == "snoozed" -> {
-                    AlarmScheduler.scheduleSnoozeIfActive(c, time, meds, event.snoozeUntil, scheduledDate)
-                    SmartEscalation.cancel(c, time, scheduledDate)
-                    DoseNotificationLifecycle.cancel(c, time, scheduledDate)
-                }
+                type == "snoozed" -> { AlarmScheduler.scheduleSnoozeIfActive(c, time, meds, event.snoozeUntil, scheduledDate); SmartEscalation.cancel(c, time, scheduledDate); DoseNotificationLifecycle.cancel(c, time, scheduledDate) }
             }
             OwnerScopeStore.remember(c, event)
             PrnUsageLedger.observe(c, event)
             StockEngine.applyEvent(c, event)
             UndoRecovery.recoverEvent(c, event)
-            thread { deliverEventBlocking(c.applicationContext, event) }
-            DosefolkSyncScheduler.kick(c)
+            if (!localOnly) {
+                thread { deliverEventBlocking(c.applicationContext, event) }
+                DosefolkSyncScheduler.kick(c)
+            }
             true
         }
     }
@@ -291,14 +276,16 @@ object Ntfy {
         return synchronized(lock) {
             if (EventStore.load(c).firstOrNull { it.eventId == event.eventId }?.syncState == "synced") return@synchronized true
             val payload = EventStore.payload(event).toString()
-            val topics = (listOf(Store.topic(c)) + Store.people(c).map { it.topic }).filter { it.isNotBlank() }.distinct()
-            var allDelivered = true
-            topics.forEach { topic ->
-                if (DeliveryLedger.delivered(c, event.eventId, topic)) return@forEach
-                val ok = post(c, topic, "Dosefolk sync", payload, "min")
-                if (ok) DeliveryLedger.markDelivered(c, event.eventId, topic) else allDelivered = false
+            val topic = Store.topic(c).trim()
+            if (topic.isBlank()) return@synchronized false
+            if (!DeliveryLedger.delivered(c, event.eventId, topic)) {
+                if (!post(c, topic, "Dosefolk sync", payload, "min")) return@synchronized false
+                DeliveryLedger.markDelivered(c, event.eventId, topic)
             }
-            if (allDelivered && topics.all { DeliveryLedger.delivered(c, event.eventId, it) }) { EventStore.markSynced(c, event.eventId); DeliveryLedger.clearEvent(c, event.eventId); eventLocks.remove(event.eventId, lock); true } else false
+            EventStore.markSynced(c, event.eventId)
+            DeliveryLedger.clearEvent(c, event.eventId)
+            eventLocks.remove(event.eventId, lock)
+            true
         }
     }
 
@@ -322,17 +309,13 @@ object Ntfy {
             val ok = code in 200..299
             if (code == 429) {
                 val blockUntil = retryAfterMillis(connection.getHeaderField("Retry-After"), now)
-                context.getSharedPreferences(RATE_PREFS, Context.MODE_PRIVATE)
-                    .edit().putLong(KEY_BLOCK_UNTIL, blockUntil).commit()
+                context.getSharedPreferences(RATE_PREFS, Context.MODE_PRIVATE).edit().putLong(KEY_BLOCK_UNTIL, blockUntil).commit()
             } else if (ok && rateBlockedUntil(context) != 0L) {
-                context.getSharedPreferences(RATE_PREFS, Context.MODE_PRIVATE)
-                    .edit().remove(KEY_BLOCK_UNTIL).commit()
+                context.getSharedPreferences(RATE_PREFS, Context.MODE_PRIVATE).edit().remove(KEY_BLOCK_UNTIL).commit()
             }
             if (ok) connection.inputStream.close() else connection.errorStream?.close()
             connection.disconnect()
             ok
-        } catch (_: Exception) {
-            false
-        }
+        } catch (_: Exception) { false }
     }
 }
