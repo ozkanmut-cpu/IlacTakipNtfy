@@ -106,38 +106,79 @@ object SyncEngine {
     private fun pullTopicsBlocking(c: Context, topics: List<String>, since: String, commitCheckpoint: Boolean): Boolean {
         val context = c.applicationContext
         if (topics.isEmpty()) return false
+        DosefolkQaLog.record(context, DosefolkQaLog.Category.SYNC, "pull_start", mapOf("topicCount" to topics.size, "since" to since, "checkpoint" to commitCheckpoint))
         val url = URL(NtfyEndpoint.pollUrl(topics, since))
         return try {
             val connection = url.openConnection() as HttpURLConnection
             connection.requestMethod = "GET"
             connection.connectTimeout = 10_000
             connection.readTimeout = 15_000
-            if (connection.responseCode !in 200..299) {
+            val status = connection.responseCode
+            if (status !in 200..299) {
+                DosefolkQaLog.record(context, DosefolkQaLog.Category.ERROR, "pull_http_error", mapOf("status" to status))
                 connection.errorStream?.close()
                 connection.disconnect()
                 false
             } else if (NtfyReplayGuard.isTruncated(connection.getHeaderField("X-Messages-Truncated"))) {
+                DosefolkQaLog.record(context, DosefolkQaLog.Category.SECURITY_REJECT, "replay_truncated")
                 connection.inputStream.close()
                 connection.disconnect()
                 false
             } else {
                 var newestId: String? = null
+                var accepted = 0
+                var rejected = 0
                 connection.inputStream.bufferedReader().useLines { lines ->
                     lines.forEach { line ->
-                        val envelope = NtfyBatchCursor.envelopeOrNull(line) ?: return@forEach
+                        val envelope = NtfyBatchCursor.envelopeOrNull(line)
+                        if (envelope == null) {
+                            rejected++
+                            DosefolkQaLog.record(context, DosefolkQaLog.Category.SECURITY_REJECT, "invalid_envelope")
+                            return@forEach
+                        }
                         newestId = NtfyBatchCursor.advance(newestId, envelope)
                         if (envelope.optString("event") != "message") return@forEach
 
-                        val payload = runCatching { JSONObject(envelope.optString("message")) }.getOrNull() ?: return@forEach
-                        if (!NtfyEnvelopeBinding.matches(envelope, payload)) return@forEach
-                        if (!NtfyTargetRouting.accepts(Store.topic(context), payload)) return@forEach
-                        if (StockSync.applyIncoming(context, payload)) return@forEach
-                        if (!IncomingEventGuard.supportedDosePayload(payload)) {
-                            InboundProtocolHealth.recordUnsupported(context, IncomingEventGuard.protocolVersion(payload))
+                        val envelopeTopic = envelope.optString("topic")
+                        val payload = runCatching { JSONObject(envelope.optString("message")) }.getOrNull()
+                        if (payload == null) {
+                            rejected++
+                            DosefolkQaLog.record(context, DosefolkQaLog.Category.SECURITY_REJECT, "invalid_payload", mapOf("topic" to envelopeTopic))
                             return@forEach
                         }
-                        val incoming = parseDoseEvent(payload) ?: return@forEach
-                        if (!IncomingEventGuard.shouldProcess(context, incoming)) return@forEach
+                        if (!NtfyEnvelopeBinding.matches(envelope, payload)) {
+                            rejected++
+                            DosefolkQaLog.record(context, DosefolkQaLog.Category.SECURITY_REJECT, "publisher_topic_mismatch", mapOf("topic" to envelopeTopic, "actorTopic" to payload.optString("actorTopic")))
+                            return@forEach
+                        }
+                        if (!NtfyTargetRouting.accepts(Store.topic(context), payload)) {
+                            rejected++
+                            DosefolkQaLog.record(context, DosefolkQaLog.Category.SECURITY_REJECT, "wrong_target", mapOf("topic" to envelopeTopic, "targetTopic" to payload.optString("targetTopic"), "type" to payload.optString("type")))
+                            return@forEach
+                        }
+                        if (StockSync.applyIncoming(context, payload)) {
+                            accepted++
+                            DosefolkQaLog.record(context, DosefolkQaLog.Category.NTFY_RX, "stock_applied", mapOf("topic" to envelopeTopic))
+                            return@forEach
+                        }
+                        if (!IncomingEventGuard.supportedDosePayload(payload)) {
+                            rejected++
+                            val version = IncomingEventGuard.protocolVersion(payload)
+                            InboundProtocolHealth.recordUnsupported(context, version)
+                            DosefolkQaLog.record(context, DosefolkQaLog.Category.SECURITY_REJECT, "unsupported_protocol", mapOf("topic" to envelopeTopic, "version" to version, "type" to payload.optString("type")))
+                            return@forEach
+                        }
+                        val incoming = parseDoseEvent(payload)
+                        if (incoming == null) {
+                            rejected++
+                            DosefolkQaLog.record(context, DosefolkQaLog.Category.SECURITY_REJECT, "invalid_dose_event", mapOf("topic" to envelopeTopic, "type" to payload.optString("type")))
+                            return@forEach
+                        }
+                        if (!IncomingEventGuard.shouldProcess(context, incoming)) {
+                            rejected++
+                            DosefolkQaLog.record(context, DosefolkQaLog.Category.SECURITY_REJECT, "incoming_guard_reject", mapOf("topic" to envelopeTopic, "eventId" to incoming.eventId, "type" to incoming.type))
+                            return@forEach
+                        }
 
                         val event = persistCanonicalIncoming(context, incoming)
                         OwnerScopeStore.remember(context, event)
@@ -151,6 +192,8 @@ object SyncEngine {
                         }
                         applyRemoteState(context, event)
                         RemoteEventReceiptStore.markProcessed(context, event.eventId)
+                        accepted++
+                        DosefolkQaLog.record(context, DosefolkQaLog.Category.NTFY_RX, "event_applied", mapOf("topic" to envelopeTopic, "eventId" to event.eventId, "type" to event.type))
                     }
                 }
 
@@ -160,10 +203,12 @@ object SyncEngine {
                     SyncCheckpointStore.commitSuccessfulBatch(context, newestId)
                     RemoteEventReceiptStore.commitSuccessfulBatch(context)
                 }
+                DosefolkQaLog.record(context, DosefolkQaLog.Category.SYNC, "pull_success", mapOf("accepted" to accepted, "rejected" to rejected, "newestId" to newestId.orEmpty()))
                 connection.disconnect()
                 true
             }
-        } catch (_: Exception) {
+        } catch (e: Exception) {
+            DosefolkQaLog.record(context, DosefolkQaLog.Category.ERROR, "pull_exception", mapOf("error" to e.javaClass.simpleName, "message" to e.message.orEmpty()))
             false
         }
     }
