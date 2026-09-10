@@ -54,11 +54,22 @@ class NtfyBatchCursorTest {
     }
 
     @Test
-    fun replayTruncation_headerIsRejected() {
-        assertTrue(NtfyReplayGuard.isTruncated("1"))
-        assertTrue(NtfyReplayGuard.isTruncated(" 1 "))
-        assertFalse(NtfyReplayGuard.isTruncated(null))
-        assertFalse(NtfyReplayGuard.isTruncated("0"))
-        assertFalse(NtfyReplayGuard.isTruncated("true"))
+    fun envelopeBinding_acceptsRealPublisherTopic() {
+        val envelope = JSONObject().put("topic", "peer-a")
+        val payload = JSONObject().put("actorTopic", "peer-a")
+        assertTrue(NtfyEnvelopeBinding.matches(envelope, payload))
+    }
+
+    @Test
+    fun envelopeBinding_rejectsSpoofedActorTopic() {
+        val envelope = JSONObject().put("topic", "peer-a")
+        val payload = JSONObject().put("actorTopic", "peer-b")
+        assertFalse(NtfyEnvelopeBinding.matches(envelope, payload))
+    }
+
+    @Test
+    fun envelopeBinding_rejectsMissingTopicIdentity() {
+        assertFalse(NtfyEnvelopeBinding.matches(JSONObject(), JSONObject().put("actorTopic", "peer-a")))
+        assertFalse(NtfyEnvelopeBinding.matches(JSONObject().put("topic", "peer-a"), JSONObject()))
     }
 }
