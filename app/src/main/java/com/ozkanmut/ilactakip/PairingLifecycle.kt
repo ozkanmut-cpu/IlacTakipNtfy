@@ -33,11 +33,6 @@ object RevokedPeerFence {
     }
 }
 
-/**
- * Pairing lifecycle for removing a Circle peer. The receiving device remains authoritative:
- * once a peer is removed from Store.people, future events from that topic are rejected by
- * PermissionPolicy even if the old device still knows this device's ntfy topic.
- */
 object PairingLifecycle {
     fun revoke(c: Context, person: Person) {
         val context = c.applicationContext
@@ -55,26 +50,27 @@ object PairingLifecycle {
             medications = emptyList(),
             syncState = "synced",
             revision = EventStore.nextRevision(context),
-            ownerId = Store.topic(context)
+            ownerId = person.topic
         )
         EventStore.append(context, event)
-        AlertOutbox.enqueue(context, person.topic, "Dosefolk sync", EventStore.payload(event).toString())
+        AlertOutbox.enqueue(
+            context,
+            CircleTransport.publishTopic(context),
+            "Dosefolk sync",
+            EventStore.payload(event).toString()
+        )
 
         cleanupPeer(context, person.topic, dropOutbox = false)
     }
 
     fun applyRemoteRevoke(c: Context, event: DoseEvent) {
         if (event.type != "circle_revoked") return
+        if (event.ownerId != Store.topic(c)) return
         val peerTopic = event.actorTopic
         if (peerTopic.isBlank() || peerTopic == Store.topic(c)) return
         cleanupPeer(c.applicationContext, peerTopic, dropOutbox = true)
     }
 
-    /**
-     * Before trusting a previously revoked topic again, drain that exact ntfy
-     * publisher topic while the tombstone is still active. The normal Circle
-     * subscription cannot do this because revoked peers are absent from Store.people.
-     */
     fun prepareRePair(c: Context, topic: String): Boolean {
         val context = c.applicationContext
         if (!RevokedPeerFence.isRevoked(context, topic)) return true
