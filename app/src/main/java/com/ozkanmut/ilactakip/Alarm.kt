@@ -38,7 +38,9 @@ object AlarmScheduler {
 
     private fun cancelGroup(c: Context, time: String) = cancelByKey(c, "group-$time")
     fun cancelSnooze(c: Context, time: String, scheduledDate: String = LocalDate.now().toString()) = cancelByKey(c, snoozeKey(time, scheduledDate))
+    fun cancelPendingRearm(c: Context, time: String, scheduledDate: String = LocalDate.now().toString()) = cancelByKey(c, pendingRearmKey(time, scheduledDate))
     internal fun snoozeKey(time: String, scheduledDate: String) = "snooze-$scheduledDate-$time"
+    internal fun pendingRearmKey(time: String, scheduledDate: String) = "rearm-$scheduledDate-$time"
 
     private fun cancelByKey(c: Context, key: String) {
         val alarmManager = c.getSystemService(AlarmManager::class.java)
@@ -92,6 +94,19 @@ object AlarmScheduler {
         scheduleSnoozeUntil(c, time, meds, triggerAtMillis, scheduledDate)
         if (DoseStateEngine.stateForTime(c, time, date).status != DoseSessionStatus.SNOOZED) {
             cancelSnooze(c, time, scheduledDate)
+            return false
+        }
+        return true
+    }
+
+    fun schedulePendingRearmIfActive(c: Context, time: String, meds: List<Medication>, triggerAtMillis: Long, scheduledDate: String): Boolean {
+        if (meds.isEmpty()) return false
+        val date = runCatching { LocalDate.parse(scheduledDate) }.getOrNull() ?: return false
+        if (DoseStateEngine.stateForTime(c, time, date).status != DoseSessionStatus.PENDING) return false
+        val safeTrigger = maxOf(System.currentTimeMillis() + 1_000L, triggerAtMillis)
+        scheduleAt(c, time, meds, safeTrigger, pendingRearmKey(time, scheduledDate), false, scheduledDate)
+        if (DoseStateEngine.stateForTime(c, time, date).status != DoseSessionStatus.PENDING) {
+            cancelPendingRearm(c, time, scheduledDate)
             return false
         }
         return true
@@ -249,8 +264,8 @@ object Ntfy {
             val event = DoseEvent(eventId ?: UUID.randomUUID().toString(), type, time, Store.myName(c), Store.topic(c), System.currentTimeMillis(), meds, if (localOnly) "synced" else "pending", EventStore.nextRevision(c), scheduledDate, snoozeUntil, ownerId, meta)
             if (!EventStore.appendIfAbsent(c, event)) return@synchronized false
             when {
-                type in terminalTypes -> { AlarmScheduler.cancelSnooze(c, time, scheduledDate); SmartEscalation.cancel(c, time, scheduledDate); CareBatonStore.resolve(c, time, scheduledDate); DoseNotificationLifecycle.cancel(c, time, scheduledDate) }
-                type == "snoozed" -> { AlarmScheduler.scheduleSnoozeIfActive(c, time, meds, event.snoozeUntil, scheduledDate); SmartEscalation.cancel(c, time, scheduledDate); DoseNotificationLifecycle.cancel(c, time, scheduledDate) }
+                type in terminalTypes -> { AlarmScheduler.cancelSnooze(c, time, scheduledDate); AlarmScheduler.cancelPendingRearm(c, time, scheduledDate); SmartEscalation.cancel(c, time, scheduledDate); CareBatonStore.resolve(c, time, scheduledDate); DoseNotificationLifecycle.cancel(c, time, scheduledDate) }
+                type == "snoozed" -> { AlarmScheduler.cancelPendingRearm(c, time, scheduledDate); AlarmScheduler.scheduleSnoozeIfActive(c, time, meds, event.snoozeUntil, scheduledDate); SmartEscalation.cancel(c, time, scheduledDate); DoseNotificationLifecycle.cancel(c, time, scheduledDate) }
             }
             OwnerScopeStore.remember(c, event)
             PrnUsageLedger.observe(c, event)
