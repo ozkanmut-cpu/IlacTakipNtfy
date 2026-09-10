@@ -106,4 +106,14 @@ class NtfyTrafficMeterTest {
         assertFalse(AlertOutbox.settledForCurrentBudget(c, rows))
         assertEquals(listOf("critical-event"), AlertOutbox.eligibleBatchForFlush(c, rows).map { it.id })
     }
+
+    @Test
+    fun actionablePendingCount_hidesOnlySoftDeferredStock() {
+        fillSoftBudget()
+        AlertOutbox.enqueueLatest(c, "me", "sync", "{}", "stock|me|med-1|peer", kick = false)
+        AlertOutbox.enqueue(c, "me", "urgent", "dose", id = "critical-event", kick = false)
+
+        assertEquals(2, AlertOutbox.pendingCount(c))
+        assertEquals(1, AlertOutbox.actionablePendingCount(c))
+    }
 }
