@@ -4,7 +4,10 @@ import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
+@RunWith(RobolectricTestRunner::class)
 class CrossPlatformProtocolFixtureTest {
     @Test
     fun sharedV9Fixture_decodesThroughAndroidDoseParser() {
