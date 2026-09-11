@@ -8,6 +8,7 @@ final class DosefolkRuntime {
     let coordinator: CircleSyncCoordinator
     let pairingService: CirclePairingService
     let doseActionService: DoseActionService
+    let doseCorrectionService: DoseCorrectionService
     let notificationRouter: DoseNotificationRouter
     let notificationScheduler: DoseNotificationScheduler
 
@@ -38,6 +39,7 @@ final class DosefolkRuntime {
         let publisher = ProtocolEventPublisher(settings: settings, store: resolvedStore)
         let doseActionService = DoseActionService(store: resolvedStore, publisher: publisher)
         self.doseActionService = doseActionService
+        self.doseCorrectionService = DoseCorrectionService(store: resolvedStore, publisher: publisher)
         self.notificationRouter = DoseNotificationRouter(store: resolvedStore, service: doseActionService)
 
         let lifecycle = CirclePairingLifecycle(localTopic: localTopic, store: resolvedStore)
