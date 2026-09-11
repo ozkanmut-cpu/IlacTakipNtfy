@@ -8,6 +8,7 @@ final class DosefolkRuntime {
     let coordinator: CircleSyncCoordinator
     let pairingService: CirclePairingService
     let localStockEngine: LocalStockEngine
+    let medicationProgramService: MedicationProgramService
     let doseActionService: DoseActionService
     let doseCorrectionService: DoseCorrectionService
     let notificationRouter: DoseNotificationRouter
@@ -55,6 +56,11 @@ final class DosefolkRuntime {
         )
 
         let publisher = ProtocolEventPublisher(settings: settings, store: resolvedStore)
+        self.medicationProgramService = MedicationProgramService(
+            store: resolvedStore,
+            publisher: publisher,
+            onProgramChanged: { try await scheduler.reconcile() }
+        )
         let doseActionService = DoseActionService(
             store: resolvedStore,
             publisher: publisher,
