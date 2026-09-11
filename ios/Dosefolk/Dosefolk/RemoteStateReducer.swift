@@ -164,7 +164,8 @@ final class RemoteStateReducer {
     }
 
     private func applyPresence(_ event: DoseEvent) throws {
-        guard !event.actorTopic.isEmpty else { return }
+        guard event.targetTopic == localOwnerId else { return }
+        guard !event.actorTopic.isEmpty, event.actorTopic != localOwnerId else { return }
         var presence = try store.load([String: CirclePresenceEntry].self, from: .circlePresence, default: [:])
         presence[event.actorTopic] = CirclePresenceEntry(
             actorTopic: event.actorTopic,
