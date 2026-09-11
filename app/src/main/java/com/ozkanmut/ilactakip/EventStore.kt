@@ -57,6 +57,7 @@ object EventStore {
         observeRevision(c, event.revision)
         current.add(0, event)
         save(c, compact(current))
+        OrkoTakipBridge.observePersistedEvent(c.applicationContext, event)
         return true
     }
 
