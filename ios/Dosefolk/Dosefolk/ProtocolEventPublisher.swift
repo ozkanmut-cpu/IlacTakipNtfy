@@ -45,7 +45,24 @@ actor ProtocolEventPublisher {
             throw EncodingError.invalidValue(event, .init(codingPath: [], debugDescription: "Unable to encode event as UTF-8"))
         }
         _ = try DoseEventStore(store: store).appendIfAbsent(event)
-        try await client.publish(topic: topic, body: body)
+        do {
+            try await client.publish(topic: topic, body: body)
+            await DosefolkQaLog.shared.record(category: .NTFY_TX, event: "protocol_event", details: [
+                "eventId": event.eventId,
+                "eventType": event.type,
+                "topic": topic,
+                "targetTopic": targetTopic,
+                "revision": event.revision
+            ])
+        } catch {
+            await DosefolkQaLog.shared.record(category: .ERROR, event: "ntfy_publish_failed", details: [
+                "eventId": event.eventId,
+                "eventType": event.type,
+                "topic": topic,
+                "errorType": String(describing: type(of: error))
+            ])
+            throw error
+        }
         return event
     }
 
