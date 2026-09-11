@@ -8,6 +8,8 @@ struct LocalStore {
         case circlePeers
         case stock
         case programRules
+        case remoteEventReceipts
+        case revokedPeers
     }
 
     private let directory: URL
