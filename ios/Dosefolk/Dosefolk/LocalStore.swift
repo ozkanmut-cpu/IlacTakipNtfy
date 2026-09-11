@@ -10,6 +10,10 @@ struct LocalStore {
         case programRules
         case remoteEventReceipts
         case revokedPeers
+        case doseRuntime
+        case programOrdering
+        case circlePresence
+        case remoteCapabilities
     }
 
     private let directory: URL
