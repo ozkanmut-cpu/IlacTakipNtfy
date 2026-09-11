@@ -29,4 +29,11 @@ final class CircleSyncCoordinatorTests: XCTestCase {
         XCTAssertEqual(try coordinator.process(envelope), .rejected(.duplicateEvent))
         XCTAssertEqual(applied, ["evt-coordinator"])
     }
+
+    func testOnlyRevokeRequiresImmediateSubscriptionRefresh() {
+        let revoke = DoseEvent(eventId: "r", type: "circle_revoked", time: "circle")
+        let taken = DoseEvent(eventId: "t", type: "taken", time: "08:00")
+        XCTAssertTrue(CircleSyncCoordinator.requiresSubscriptionRefresh(revoke))
+        XCTAssertFalse(CircleSyncCoordinator.requiresSubscriptionRefresh(taken))
+    }
 }
