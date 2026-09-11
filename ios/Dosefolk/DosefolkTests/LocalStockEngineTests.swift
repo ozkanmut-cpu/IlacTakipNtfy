@@ -38,7 +38,8 @@ final class LocalStockEngineTests: XCTestCase {
         _ = try await engine.apply(first)
         _ = try await engine.apply(event(id: "taken-2", type: "taken", medication: medication))
 
-        XCTAssertEqual(try await engine.all().first?.remainingDoses, 9)
+        let remaining = try await engine.all().first?.remainingDoses
+        XCTAssertEqual(remaining, 9)
     }
 
     func testUndoTakenRestoresOnlyOnce() async throws {
@@ -57,7 +58,8 @@ final class LocalStockEngineTests: XCTestCase {
         _ = try await engine.apply(event(id: "undo-1", type: "undo_taken", medication: medication))
         _ = try await engine.apply(event(id: "undo-2", type: "undo_taken", medication: medication))
 
-        XCTAssertEqual(try await engine.all().first?.remainingDoses, 10)
+        let remaining = try await engine.all().first?.remainingDoses
+        XCTAssertEqual(remaining, 10)
     }
 
     func testCountableMedicationUsesConfiguredQuantity() async throws {
@@ -77,6 +79,7 @@ final class LocalStockEngineTests: XCTestCase {
 
         _ = try await engine.apply(event(id: "taken-1", type: "taken", medication: medication))
 
-        XCTAssertEqual(try await engine.all().first?.remainingDoses, 8)
+        let remaining = try await engine.all().first?.remainingDoses
+        XCTAssertEqual(remaining, 8)
     }
 }
