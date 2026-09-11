@@ -31,7 +31,6 @@ targets:
     sources:
       - DosefolkTests
     resources:
-      - path: ../../protocol-fixtures/dose-event-v9.json
-      - path: ../../protocol-fixtures/ios-dose-event-v9.json
+      - path: DosefolkTests/Fixtures
     dependencies:
       - target: Dosefolk
