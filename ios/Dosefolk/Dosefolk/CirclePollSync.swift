@@ -27,8 +27,7 @@ struct CirclePollSync {
 
         var accepted = 0
         for envelope in batch.envelopes {
-            let result = try coordinator.process(envelope)
-            if case .accepted = result { accepted += 1 }
+            if try coordinator.processAny(envelope) { accepted += 1 }
         }
 
         if let newest = batch.newestMessageID, !newest.isEmpty {
