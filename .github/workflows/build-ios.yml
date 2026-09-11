@@ -47,10 +47,16 @@ jobs:
 
       - name: Run iOS unit tests
         run: |
-          set -o pipefail
+          set -euo pipefail
+          RUNTIME_ID=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; rs=[r for r in json.load(sys.stdin)["runtimes"] if r.get("isAvailable") and r["identifier"].startswith("com.apple.CoreSimulator.SimRuntime.iOS-")]; rs.sort(key=lambda r: tuple(int(x) for x in r.get("version","0").split("."))); print(rs[-1]["identifier"])')
+          DEVICE_TYPE=$(xcrun simctl list devicetypes -j | python3 -c 'import json,sys; ds=[d for d in json.load(sys.stdin)["devicetypes"] if d["name"].startswith("iPhone")]; preferred=[d for d in ds if d["name"]=="iPhone 16 Pro"]; print((preferred or ds)[-1]["identifier"])')
+          UDID=$(xcrun simctl create 'Dosefolk CI' "$DEVICE_TYPE" "$RUNTIME_ID")
+          trap 'xcrun simctl shutdown "$UDID" >/dev/null 2>&1 || true; xcrun simctl delete "$UDID" >/dev/null 2>&1 || true' EXIT
+          xcrun simctl boot "$UDID"
+          xcrun simctl bootstatus "$UDID" -b
           xcodebuild \
             -project Dosefolk.xcodeproj \
             -scheme Dosefolk \
-            -destination 'platform=iOS Simulator,name=iPhone 16 Pro,OS=latest' \
+            -destination "platform=iOS Simulator,id=$UDID" \
             CODE_SIGNING_ALLOWED=NO \
             test
