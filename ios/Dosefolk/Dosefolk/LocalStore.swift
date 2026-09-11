@@ -7,6 +7,7 @@ struct LocalStore {
         case doseEvents
         case circlePeers
         case stock
+        case stockRuntime
         case programRules
         case remoteMedications
         case remoteProgramRules
