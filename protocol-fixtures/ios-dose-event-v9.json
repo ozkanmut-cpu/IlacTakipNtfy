@@ -1,0 +1,35 @@
+{
+  "v": 9,
+  "eventId": "ios-fixture-v9-001",
+  "type": "snoozed",
+  "time": "20:00",
+  "scheduledDate": "2026-09-11",
+  "snoozeUntil": 1789158600000,
+  "ownerId": "ios-publisher-topic",
+  "targetTopic": "android-target-topic",
+  "actor": "iPhone User",
+  "actorTopic": "ios-publisher-topic",
+  "timestamp": 1789156800000,
+  "revision": 77,
+  "syncState": "synced",
+  "medications": [
+    {
+      "id": "ios-med-1",
+      "name": "Fixture Medication",
+      "dose": "1",
+      "times": ["08:00", "20:00"]
+    }
+  ],
+  "medicationMeta": [
+    {
+      "medicationId": "ios-med-1",
+      "form": "TABLET",
+      "quantity": 1,
+      "administrationSite": "",
+      "packageCount": 30,
+      "packageUnit": "tablet",
+      "source": "manual",
+      "doseUnitOverride": ""
+    }
+  ]
+}
