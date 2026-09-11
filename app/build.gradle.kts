@@ -25,6 +25,7 @@ android {
         jvmTarget = "17"
     }
 
+    sourceSets.getByName("test").resources.srcDir("../protocol-fixtures")
     testOptions { unitTests.isIncludeAndroidResources = true }
     buildFeatures { compose = true }
     packaging { resources.excludes += "/META-INF/{AL2.0,LGPL2.1}" }
