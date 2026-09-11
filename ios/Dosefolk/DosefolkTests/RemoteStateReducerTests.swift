@@ -2,30 +2,42 @@ import XCTest
 @testable import Dosefolk
 
 final class RemoteStateReducerTests: XCTestCase {
+    private final class Notifications: DoseNotificationManaging {
+        var resolved: [(String, String)] = []
+        var snoozed: [(String, String, Int64)] = []
+        func resolve(time: String, scheduledDate: String) { resolved.append((time, scheduledDate)) }
+        func snooze(time: String, scheduledDate: String, untilMillis: Int64) { snoozed.append((time, scheduledDate, untilMillis)) }
+    }
+
     private var directory: URL!
     private var store: LocalStore!
+    private var notifications: Notifications!
     private var reducer: RemoteStateReducer!
 
     override func setUpWithError() throws {
         directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         store = try LocalStore(directory: directory)
-        reducer = RemoteStateReducer(store: store, localOwnerId: "local-topic")
+        notifications = Notifications()
+        reducer = RemoteStateReducer(store: store, localOwnerId: "local-topic", notifications: notifications)
     }
 
     override func tearDownWithError() throws {
         try? FileManager.default.removeItem(at: directory)
     }
 
-    func testTakenAndSnoozedUpdateDoseRuntime() throws {
+    func testTakenAndSnoozedUpdateDoseRuntimeAndNotifications() throws {
         try reducer.apply(event(type: "snoozed", eventId: "e1", snoozeUntil: 1234))
         var runtime = try store.load([String: DoseRuntimeEntry].self, from: .doseRuntime, default: [:])
         XCTAssertEqual(runtime["local-topic|2026-09-11|08:00"]?.status, "snoozed")
         XCTAssertEqual(runtime["local-topic|2026-09-11|08:00"]?.snoozeUntil, 1234)
+        XCTAssertEqual(notifications.snoozed.count, 1)
+        XCTAssertEqual(notifications.snoozed.first?.2, 1234)
 
         try reducer.apply(event(type: "taken", eventId: "e2"))
         runtime = try store.load([String: DoseRuntimeEntry].self, from: .doseRuntime, default: [:])
         XCTAssertEqual(runtime["local-topic|2026-09-11|08:00"]?.status, "taken")
         XCTAssertEqual(runtime["local-topic|2026-09-11|08:00"]?.snoozeUntil, 0)
+        XCTAssertEqual(notifications.resolved.count, 1)
     }
 
     func testProgramRevisionRejectsOlderRemoteUpdate() throws {
