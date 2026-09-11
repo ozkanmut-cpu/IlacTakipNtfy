@@ -7,6 +7,7 @@ final class DosefolkRuntime {
     let transport: CircleTransport
     let coordinator: CircleSyncCoordinator
     let pairingService: CirclePairingService
+    let localStockEngine: LocalStockEngine
     let doseActionService: DoseActionService
     let doseCorrectionService: DoseCorrectionService
     let notificationRouter: DoseNotificationRouter
@@ -20,6 +21,8 @@ final class DosefolkRuntime {
 
         let scheduler = DoseNotificationScheduler(store: resolvedStore)
         self.notificationScheduler = scheduler
+        let stockEngine = LocalStockEngine(store: resolvedStore)
+        self.localStockEngine = stockEngine
 
         let transport = CircleTransport(settings: settings, store: resolvedStore)
         self.transport = transport
@@ -37,9 +40,17 @@ final class DosefolkRuntime {
         )
 
         let publisher = ProtocolEventPublisher(settings: settings, store: resolvedStore)
-        let doseActionService = DoseActionService(store: resolvedStore, publisher: publisher)
+        let doseActionService = DoseActionService(
+            store: resolvedStore,
+            publisher: publisher,
+            stockEngine: stockEngine
+        )
         self.doseActionService = doseActionService
-        self.doseCorrectionService = DoseCorrectionService(store: resolvedStore, publisher: publisher)
+        self.doseCorrectionService = DoseCorrectionService(
+            store: resolvedStore,
+            publisher: publisher,
+            stockEngine: stockEngine
+        )
         self.notificationRouter = DoseNotificationRouter(store: resolvedStore, service: doseActionService)
 
         let lifecycle = CirclePairingLifecycle(localTopic: localTopic, store: resolvedStore)
