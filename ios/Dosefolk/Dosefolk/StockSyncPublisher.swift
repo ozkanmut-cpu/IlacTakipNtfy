@@ -2,11 +2,13 @@ import Foundation
 
 actor StockSyncPublisher {
     private let localTopic: String
+    private let displayName: String
     private let store: LocalStore
     private let client: NtfyClient
 
-    init(localTopic: String, store: LocalStore, client: NtfyClient = NtfyClient()) {
+    init(localTopic: String, displayName: String = "", store: LocalStore, client: NtfyClient = NtfyClient()) {
         self.localTopic = localTopic
+        self.displayName = displayName
         self.store = store
         self.client = client
     }
@@ -18,7 +20,7 @@ actor StockSyncPublisher {
         for stock in stocks {
             let payload = StockSyncPayload(
                 ownerId: localTopic,
-                actor: "",
+                actor: displayName,
                 actorTopic: localTopic,
                 revision: try nextRevision(),
                 stock: stock,
