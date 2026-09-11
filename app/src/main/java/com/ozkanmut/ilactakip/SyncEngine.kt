@@ -219,7 +219,7 @@ object SyncEngine {
         return EventStore.load(c).firstOrNull { it.eventId == incoming.eventId } ?: stored
     }
 
-    private fun parseDoseEvent(o: JSONObject): DoseEvent? {
+    internal fun parseDoseEvent(o: JSONObject): DoseEvent? {
         val eventId = o.optString("eventId")
         val type = o.optString("type")
         val time = o.optString("time")
