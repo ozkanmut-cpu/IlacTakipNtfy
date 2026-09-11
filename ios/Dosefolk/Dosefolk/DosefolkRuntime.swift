@@ -99,11 +99,51 @@ final class DosefolkRuntime {
         Task { try? await notificationScheduler.reconcile() }
     }
 
+    func stockStates() async throws -> [StockState] {
+        try await localStockEngine.all()
+    }
+
+    func configureStock(for medication: Medication, packSize: Int, lowThreshold: Int = 5) async throws {
+        guard packSize > 0 else { return }
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        try await localStockEngine.configure(StockState(
+            medicationId: medication.id,
+            medicationName: medication.name,
+            remainingDoses: packSize,
+            packSize: packSize,
+            lowThreshold: max(0, lowThreshold),
+            updatedAt: now
+        ))
+        try await publishStockToCircle()
+    }
+
+    @discardableResult
+    func openNewBox(medicationID: String) async throws -> StockState? {
+        let updated = try await localStockEngine.openNewBox(medicationID: medicationID)
+        if updated != nil {
+            try await publishStockToCircle()
+        }
+        return updated
+    }
+
     @discardableResult
     func addPair(rawPayload: String, fallbackName: String) async throws -> CirclePeer {
         let peer = try await pairingService.add(rawPayload: rawPayload, fallbackName: fallbackName)
         coordinator.stop()
         coordinator.start()
         return peer
+    }
+
+    private func publishStockToCircle() async throws {
+        let peers = try store.load([CirclePeer].self, from: .circlePeers, default: [])
+        guard !peers.isEmpty else { return }
+        let publisher = StockSyncPublisher(
+            localTopic: settings.localTopic,
+            displayName: settings.displayName,
+            store: store
+        )
+        for peer in peers where !peer.topic.isEmpty && peer.topic != settings.localTopic {
+            try await publisher.publishAll(to: peer.topic)
+        }
     }
 }
