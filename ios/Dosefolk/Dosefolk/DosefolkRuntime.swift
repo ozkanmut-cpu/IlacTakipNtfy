@@ -29,11 +29,7 @@ final class DosefolkRuntime {
             topics: { (try? transport.subscriptionTopics()) ?? [localTopic] },
             remoteStateHandler: { event in
                 try reducer.apply(event)
-                let ownerId = event.ownerId.isEmpty ? event.actorTopic : event.ownerId
-                let affectsLocalProgram = ownerId == localTopic && [
-                    "program_added", "program_updated", "program_deleted", "program_rule_updated"
-                ].contains(event.type)
-                if affectsLocalProgram {
+                if DoseNotificationReschedule.shouldReconcile(event: event, localTopic: localTopic) {
                     Task { try? await scheduler.reconcile() }
                 }
             }
