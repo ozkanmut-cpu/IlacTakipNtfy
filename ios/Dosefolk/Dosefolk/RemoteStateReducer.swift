@@ -29,11 +29,17 @@ final class RemoteStateReducer {
     private let store: LocalStore
     private let localOwnerId: String
     private let securityState: CircleSecurityState
+    private let notifications: DoseNotificationManaging
 
-    init(store: LocalStore, localOwnerId: String) {
+    init(
+        store: LocalStore,
+        localOwnerId: String,
+        notifications: DoseNotificationManaging = DoseNotificationLifecycle()
+    ) {
         self.store = store
         self.localOwnerId = localOwnerId
         self.securityState = CircleSecurityState(store: store)
+        self.notifications = notifications
     }
 
     func apply(_ event: DoseEvent) throws {
@@ -65,12 +71,15 @@ final class RemoteStateReducer {
         case "snoozed":
             status = "snoozed"
             snoozeUntil = event.snoozeUntil
+            notifications.snooze(time: event.time, scheduledDate: event.scheduledDate, untilMillis: event.snoozeUntil)
         case "taken", "conflict_resolved_taken":
             status = "taken"
             snoozeUntil = 0
+            notifications.resolve(time: event.time, scheduledDate: event.scheduledDate)
         default:
             status = "missed"
             snoozeUntil = 0
+            notifications.resolve(time: event.time, scheduledDate: event.scheduledDate)
         }
         state[key] = DoseRuntimeEntry(
             status: status,
