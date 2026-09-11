@@ -26,6 +26,7 @@ struct CirclePeer: Codable, Equatable, Identifiable {
     var id: String
     var name: String
     var topic: String
+    var canEdit: Bool = false
 }
 
 struct DoseEvent: Codable, Equatable, Identifiable {
