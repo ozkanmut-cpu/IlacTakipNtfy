@@ -1,6 +1,7 @@
 package com.ozkanmut.ilactakip
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class OrkoTakipBridgeTest {
@@ -45,5 +46,22 @@ class OrkoTakipBridgeTest {
             OrkoTakipBridge.Anchor.UNKNOWN,
             OrkoTakipBridge.resolve(groups, "13:00")
         )
+    }
+
+    @Test fun takenAndTakenCorrectionSetAnchor() {
+        assertEquals(OrkoTakipBridge.OP_SET, OrkoTakipBridge.operationFor("taken"))
+        assertEquals(OrkoTakipBridge.OP_SET, OrkoTakipBridge.operationFor("conflict_resolved_taken"))
+    }
+
+    @Test fun undoAndMissedCorrectionsClearAnchor() {
+        assertEquals(OrkoTakipBridge.OP_CLEAR, OrkoTakipBridge.operationFor("undo_taken"))
+        assertEquals(OrkoTakipBridge.OP_CLEAR, OrkoTakipBridge.operationFor("missed"))
+        assertEquals(OrkoTakipBridge.OP_CLEAR, OrkoTakipBridge.operationFor("conflict_resolved_missed"))
+    }
+
+    @Test fun unrelatedDoseEventsDoNotTouchGlucosePlan() {
+        assertNull(OrkoTakipBridge.operationFor("snoozed"))
+        assertNull(OrkoTakipBridge.operationFor("alarm"))
+        assertNull(OrkoTakipBridge.operationFor("undo_missed"))
     }
 }
