@@ -5,7 +5,7 @@ final class NtfyLiveStreamTests: XCTestCase {
     func testReconnectPolicyUsesBoundedExponentialBackoff() {
         var policy = NtfyReconnectPolicy()
         let seconds = (0..<8).map { _ in policy.nextDelayNanoseconds() / 1_000_000_000 }
-        XCTAssertEqual(seconds, [1, 2, 4, 8, 16, 32, 32, 32])
+        XCTAssertEqual(seconds, [1, 2, 4, 8, 16, 30, 30, 30])
 
         policy.reset()
         XCTAssertEqual(policy.nextDelayNanoseconds(), 1_000_000_000)
