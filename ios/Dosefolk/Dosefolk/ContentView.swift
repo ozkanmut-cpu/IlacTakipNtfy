@@ -39,6 +39,11 @@ struct ContentView: View {
                 Section("Diğer") {
                     if let runtime {
                         NavigationLink {
+                            MedicationManagerView(runtime: runtime)
+                        } label: {
+                            Label("İlaçlar", systemImage: "pills")
+                        }
+                        NavigationLink {
                             StockView(runtime: runtime)
                         } label: {
                             Label("Stok", systemImage: "shippingbox")
