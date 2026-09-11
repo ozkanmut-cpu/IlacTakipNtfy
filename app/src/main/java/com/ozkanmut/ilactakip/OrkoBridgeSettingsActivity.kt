@@ -62,6 +62,7 @@ private fun OrkoBridgeSettingsScreen(context: android.content.Context) {
             val status = OrkoBridgeSelfTest.load(context)
             if (status.token == selfTestToken && status.acknowledged) return@LaunchedEffect
         }
+        selfTestRevision++
     }
 
     Scaffold(
@@ -86,6 +87,7 @@ private fun OrkoBridgeSettingsScreen(context: android.content.Context) {
                         Text("Bağlantı testi", fontWeight = FontWeight.Bold)
                         val statusText = when {
                             selfTest.acknowledged -> "✓ Orko Takip yanıt verdi. Bağlantı çalışıyor."
+                            selfTest.timedOut() -> "⚠ Orko Takip yanıt vermedi. İki uygulamanın da güncel ve kurulu olduğunu kontrol et."
                             selfTest.pending -> "Test gönderildi • Orko Takip yanıtı bekleniyor"
                             else -> "Henüz bağlantı testi yapılmadı"
                         }
@@ -98,7 +100,7 @@ private fun OrkoBridgeSettingsScreen(context: android.content.Context) {
                             },
                             modifier = Modifier.fillMaxWidth()
                         ) {
-                            Text("Dosefolk → Orko Takip bağlantısını test et")
+                            Text(if (selfTest.timedOut()) "Bağlantıyı tekrar test et" else "Dosefolk → Orko Takip bağlantısını test et")
                         }
                         Text(
                             "Bu test ilaç kaydı oluşturmaz, şeker planını değiştirmez ve yalnızca iki uygulamanın birbirini görebildiğini doğrular.",
