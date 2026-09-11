@@ -1,0 +1,20 @@
+services:
+  dosefolk-push-gateway:
+    build: .
+    container_name: dosefolk-push-gateway
+    restart: unless-stopped
+    environment:
+      HOST: 0.0.0.0
+      PORT: 2587
+      DATA_FILE: /data/registrations.json
+      APNS_BUNDLE_ID: com.ozkanmut.dosefolk
+      APNS_TEAM_ID: ${APNS_TEAM_ID:-}
+      APNS_KEY_ID: ${APNS_KEY_ID:-}
+      APNS_KEY_PATH: /run/secrets/apns_key.p8
+      INSTALL_HMAC_KEY: ${INSTALL_HMAC_KEY:-}
+      INTERNAL_WAKE_SECRET: ${INTERNAL_WAKE_SECRET:-}
+    ports:
+      - "127.0.0.1:2587:2587"
+    volumes:
+      - ./data:/data
+      - ./secrets:/run/secrets:ro
