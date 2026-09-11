@@ -35,4 +35,48 @@ final class DosefolkBootstrapTests: XCTestCase {
         XCTAssertNotNil(object["medications"])
         XCTAssertNotNil(object["medicationMeta"])
     }
+
+    func testLocalStoreRoundTripsMedicationData() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dosefolk-tests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = try LocalStore(directory: directory)
+        let medications = [Medication(id: "med-1", name: "Test", dose: "1", times: ["08:00"])]
+
+        try store.save(medications, to: .medications)
+        let restored = try store.load([Medication].self, from: .medications, default: [])
+
+        XCTAssertEqual(restored, medications)
+    }
+
+    func testLocalStoreReturnsDefaultForMissingCollection() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("dosefolk-tests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let store = try LocalStore(directory: directory)
+        let restored = try store.load([DoseEvent].self, from: .doseEvents, default: [])
+
+        XCTAssertTrue(restored.isEmpty)
+    }
+
+    func testAppSettingsUseUserDefaultsWithoutSecrets() throws {
+        let suiteName = "DosefolkTests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let settings = AppSettings(defaults: defaults)
+
+        settings.displayName = "Test User"
+        settings.language = "tr"
+        settings.localTopic = "publisher-topic"
+        settings.lastSyncID = "msg-1"
+
+        XCTAssertEqual(settings.displayName, "Test User")
+        XCTAssertEqual(settings.language, "tr")
+        XCTAssertEqual(settings.localTopic, "publisher-topic")
+        XCTAssertEqual(settings.lastSyncID, "msg-1")
+        XCTAssertNil(defaults.string(forKey: SecureCredentialKey.ntfyToken))
+        XCTAssertNil(defaults.string(forKey: SecureCredentialKey.provisioningSecret))
+    }
 }
