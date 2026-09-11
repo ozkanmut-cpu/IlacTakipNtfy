@@ -37,6 +37,11 @@
         <receiver android:name=".AlarmReceiver" android:exported="false" />
         <receiver android:name=".ActionReceiver" android:exported="false" />
         <receiver android:name=".EscalationReceiver" android:exported="false" />
+        <receiver android:name=".OrkoBridgeSelfTestAckReceiver" android:exported="true">
+            <intent-filter>
+                <action android:name="com.dosefolk.action.ORKO_BRIDGE_SELF_TEST_ACK" />
+            </intent-filter>
+        </receiver>
         <receiver android:name=".BootReceiver" android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
