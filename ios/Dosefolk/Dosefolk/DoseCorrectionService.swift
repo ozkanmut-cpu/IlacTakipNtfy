@@ -48,11 +48,18 @@ actor DoseCorrectionService {
     private let store: LocalStore
     private let publisher: ProtocolEventPublisher
     private let stockEngine: LocalStockEngine
+    private let onStockChanged: (() async throws -> Void)?
 
-    init(store: LocalStore, publisher: ProtocolEventPublisher, stockEngine: LocalStockEngine? = nil) {
+    init(
+        store: LocalStore,
+        publisher: ProtocolEventPublisher,
+        stockEngine: LocalStockEngine? = nil,
+        onStockChanged: (() async throws -> Void)? = nil
+    ) {
         self.store = store
         self.publisher = publisher
         self.stockEngine = stockEngine ?? LocalStockEngine(store: store)
+        self.onStockChanged = onStockChanged
     }
 
     func apply(_ intent: DoseCorrectionIntent, time: String, scheduledDate: String) async throws -> DoseCorrectionResult {
@@ -69,7 +76,10 @@ actor DoseCorrectionService {
                 medications: medications,
                 scheduledDate: scheduledDate
             )
-            _ = try await stockEngine.apply(event)
+            let changedStock = try await stockEngine.apply(event)
+            if !changedStock.isEmpty {
+                try await onStockChanged?()
+            }
             return .applied(event)
         }
     }
