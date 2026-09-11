@@ -14,6 +14,7 @@ struct LocalStore {
         case programOrdering
         case circlePresence
         case remoteCapabilities
+        case capabilityOrdering
     }
 
     private let directory: URL
