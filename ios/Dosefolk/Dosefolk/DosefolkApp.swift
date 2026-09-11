@@ -15,12 +15,17 @@ struct DosefolkApp: App {
             startupError = nil
 
             DosefolkAppDelegate.onDeviceToken = { token in
-                _ = APNsRegistration.makePayload(
-                    token: token,
-                    localTopic: createdRuntime.settings.localTopic,
-                    bundleId: Bundle.main.bundleIdentifier ?? "com.ozkanmut.dosefolk"
-                )
-                // Forwarding is enabled only after authenticated gateway provisioning exists.
+                Task {
+                    let subscriptions = (try? createdRuntime.transport.subscriptionTopics()) ?? [createdRuntime.settings.localTopic]
+                    let payload = APNsRegistration.makePayload(
+                        token: token,
+                        installId: createdRuntime.settings.ensureInstallId(),
+                        localTopic: createdRuntime.settings.localTopic,
+                        subscriptions: subscriptions,
+                        bundleId: Bundle.main.bundleIdentifier ?? "com.ozkanmut.dosefolk"
+                    )
+                    _ = try? await PushGatewayClient().register(payload)
+                }
             }
             DosefolkAppDelegate.onBackgroundWake = {
                 do {
