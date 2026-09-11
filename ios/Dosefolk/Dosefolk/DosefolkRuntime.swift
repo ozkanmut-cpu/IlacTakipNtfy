@@ -23,7 +23,12 @@ final class DosefolkRuntime {
 
         let publisher = ProtocolEventPublisher(settings: settings, store: resolvedStore)
         let lifecycle = CirclePairingLifecycle(localTopic: localTopic, store: resolvedStore)
-        let initialSync = CircleInitialSyncPublisher(store: resolvedStore, publisher: publisher, localTopic: localTopic)
+        let initialSync = CircleInitialSyncPublisher(
+            store: resolvedStore,
+            publisher: publisher,
+            localTopic: localTopic,
+            displayName: settings.displayName
+        )
         self.pairingService = CirclePairingService(
             settings: settings,
             store: resolvedStore,
