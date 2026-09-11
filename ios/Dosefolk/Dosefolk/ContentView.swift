@@ -58,6 +58,11 @@ struct ContentView: View {
                         } label: {
                             Label("Gerektiğinde kullanım", systemImage: "cross.case")
                         }
+                        NavigationLink {
+                            AssistantView(runtime: runtime)
+                        } label: {
+                            Label("Asistan", systemImage: "sparkles")
+                        }
                     }
                 }
 
@@ -136,6 +141,7 @@ struct ContentView: View {
                     doseActions(item)
                 }
                 .padding(.vertical, 4)
+                .accessibilityElement(children: .contain)
             }
         }
     }
@@ -145,45 +151,87 @@ struct ContentView: View {
         let isBusy = busyDoseID == item.id
         switch item.status {
         case .unknown, .pending:
-            HStack {
-                Button("Aldım") { runAction(.taken, item: item) }
-                    .buttonStyle(.borderedProminent)
-                Button("30 dk ertele") { runAction(.snooze, item: item) }
-                    .buttonStyle(.bordered)
-                Button("Almadım") { runAction(.missed, item: item) }
-                    .buttonStyle(.bordered)
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    Button("Aldım") { runAction(.taken, item: item) }
+                        .buttonStyle(.borderedProminent)
+                    Button("30 dk ertele") { runAction(.snooze, item: item) }
+                        .buttonStyle(.bordered)
+                    Button("Almadım") { runAction(.missed, item: item) }
+                        .buttonStyle(.bordered)
+                }
+                VStack(alignment: .leading) {
+                    Button("Aldım") { runAction(.taken, item: item) }
+                        .buttonStyle(.borderedProminent)
+                    Button("30 dk ertele") { runAction(.snooze, item: item) }
+                        .buttonStyle(.bordered)
+                    Button("Almadım") { runAction(.missed, item: item) }
+                        .buttonStyle(.bordered)
+                }
             }
             .disabled(isBusy)
         case .snoozed:
-            HStack {
-                Button("Aldım") { runAction(.taken, item: item) }
-                    .buttonStyle(.borderedProminent)
-                Button("Almadım") { runAction(.missed, item: item) }
-                    .buttonStyle(.bordered)
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    Button("Aldım") { runAction(.taken, item: item) }
+                        .buttonStyle(.borderedProminent)
+                    Button("Almadım") { runAction(.missed, item: item) }
+                        .buttonStyle(.bordered)
+                }
+                VStack(alignment: .leading) {
+                    Button("Aldım") { runAction(.taken, item: item) }
+                        .buttonStyle(.borderedProminent)
+                    Button("Almadım") { runAction(.missed, item: item) }
+                        .buttonStyle(.bordered)
+                }
             }
             .disabled(isBusy)
         case .taken:
-            HStack {
-                Button("Geri al") { runCorrection(.undo, item: item) }
-                    .buttonStyle(.bordered)
-                Button("Almadım olarak düzelt") { runCorrection(.correctToMissed, item: item) }
-                    .buttonStyle(.borderless)
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    Button("Geri al") { runCorrection(.undo, item: item) }
+                        .buttonStyle(.bordered)
+                    Button("Almadım olarak düzelt") { runCorrection(.correctToMissed, item: item) }
+                        .buttonStyle(.borderless)
+                }
+                VStack(alignment: .leading) {
+                    Button("Geri al") { runCorrection(.undo, item: item) }
+                        .buttonStyle(.bordered)
+                    Button("Almadım olarak düzelt") { runCorrection(.correctToMissed, item: item) }
+                        .buttonStyle(.borderless)
+                }
             }
             .disabled(isBusy)
         case .missed:
-            HStack {
-                Button("Geri al") { runCorrection(.undo, item: item) }
-                    .buttonStyle(.bordered)
-                Button("Aldım olarak düzelt") { runCorrection(.correctToTaken, item: item) }
-                    .buttonStyle(.borderless)
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    Button("Geri al") { runCorrection(.undo, item: item) }
+                        .buttonStyle(.bordered)
+                    Button("Aldım olarak düzelt") { runCorrection(.correctToTaken, item: item) }
+                        .buttonStyle(.borderless)
+                }
+                VStack(alignment: .leading) {
+                    Button("Geri al") { runCorrection(.undo, item: item) }
+                        .buttonStyle(.bordered)
+                    Button("Aldım olarak düzelt") { runCorrection(.correctToTaken, item: item) }
+                        .buttonStyle(.borderless)
+                }
             }
             .disabled(isBusy)
         case .conflict:
-            HStack {
-                Button("Aldım olarak düzelt") { runCorrection(.correctToTaken, item: item) }
-                    .buttonStyle(.borderedProminent)
-                Button("Almadım olarak düzelt") { runCorrection(.correctToMissed, item: item) }
-                    .buttonStyle(.bordered)
+            ViewThatFits(in: .horizontal) {
+                HStack {
+                    Button("Aldım olarak düzelt") { runCorrection(.correctToTaken, item: item) }
+                        .buttonStyle(.borderedProminent)
+                    Button("Almadım olarak düzelt") { runCorrection(.correctToMissed, item: item) }
+                        .buttonStyle(.bordered)
+                }
+                VStack(alignment: .leading) {
+                    Button("Aldım olarak düzelt") { runCorrection(.correctToTaken, item: item) }
+                        .buttonStyle(.borderedProminent)
+                    Button("Almadım olarak düzelt") { runCorrection(.correctToMissed, item: item) }
+                        .buttonStyle(.bordered)
+                }
             }
             .disabled(isBusy)
         }
