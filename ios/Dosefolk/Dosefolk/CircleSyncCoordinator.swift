@@ -15,7 +15,7 @@ final class CircleSyncCoordinator {
         store: LocalStore,
         topics: @escaping () -> [String],
         liveStream: NtfyLiveStream = NtfyLiveStream(),
-        remoteStateHandler: @escaping RemoteStateHandler = { _ in }
+        remoteStateHandler: RemoteStateHandler? = nil
     ) {
         self.liveStream = liveStream
         self.processor = CircleSyncProcessor(
@@ -24,7 +24,12 @@ final class CircleSyncCoordinator {
         )
         self.eventStore = DoseEventStore(store: store)
         self.topics = topics
-        self.remoteStateHandler = remoteStateHandler
+        if let remoteStateHandler {
+            self.remoteStateHandler = remoteStateHandler
+        } else {
+            let reducer = RemoteStateReducer(store: store, localOwnerId: localTopic)
+            self.remoteStateHandler = reducer.apply
+        }
     }
 
     func start() {
