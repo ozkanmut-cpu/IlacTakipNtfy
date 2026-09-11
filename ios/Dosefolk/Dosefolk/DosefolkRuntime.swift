@@ -1,4 +1,5 @@
 import Foundation
+import UserNotifications
 
 final class DosefolkRuntime {
     let settings: AppSettings
@@ -16,19 +17,32 @@ final class DosefolkRuntime {
         let resolvedStore = try store ?? LocalStore()
         self.store = resolvedStore
 
+        let scheduler = DoseNotificationScheduler(store: resolvedStore)
+        self.notificationScheduler = scheduler
+
         let transport = CircleTransport(settings: settings, store: resolvedStore)
         self.transport = transport
+        let reducer = RemoteStateReducer(store: resolvedStore, localOwnerId: localTopic)
         self.coordinator = CircleSyncCoordinator(
             localTopic: localTopic,
             store: resolvedStore,
-            topics: { (try? transport.subscriptionTopics()) ?? [localTopic] }
+            topics: { (try? transport.subscriptionTopics()) ?? [localTopic] },
+            remoteStateHandler: { event in
+                try reducer.apply(event)
+                let ownerId = event.ownerId.isEmpty ? event.actorTopic : event.ownerId
+                let affectsLocalProgram = ownerId == localTopic && [
+                    "program_added", "program_updated", "program_deleted", "program_rule_updated"
+                ].contains(event.type)
+                if affectsLocalProgram {
+                    Task { try? await scheduler.reconcile() }
+                }
+            }
         )
 
         let publisher = ProtocolEventPublisher(settings: settings, store: resolvedStore)
         let doseActionService = DoseActionService(store: resolvedStore, publisher: publisher)
         self.doseActionService = doseActionService
         self.notificationRouter = DoseNotificationRouter(store: resolvedStore, service: doseActionService)
-        self.notificationScheduler = DoseNotificationScheduler(store: resolvedStore)
 
         let lifecycle = CirclePairingLifecycle(localTopic: localTopic, store: resolvedStore)
         let initialSync = CircleInitialSyncPublisher(
@@ -57,6 +71,23 @@ final class DosefolkRuntime {
 
     func stop() {
         coordinator.stop()
+    }
+
+    func notificationAuthorizationStatus() async -> UNAuthorizationStatus {
+        await notificationScheduler.authorizationStatus()
+    }
+
+    @discardableResult
+    func requestNotificationAuthorization() async throws -> Bool {
+        let granted = try await notificationScheduler.requestAuthorization()
+        if granted {
+            try await notificationScheduler.reconcile()
+        }
+        return granted
+    }
+
+    func programDidChange() {
+        Task { try? await notificationScheduler.reconcile() }
     }
 
     @discardableResult
