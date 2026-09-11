@@ -8,6 +8,10 @@ private enum MedicationMetaKeys: String, CodingKey {
     case medicationId, form, quantity, administrationSite, packageCount, packageUnit, source, doseUnitOverride
 }
 
+private enum CirclePeerKeys: String, CodingKey {
+    case id, name, topic, canEdit
+}
+
 private enum DoseEventKeys: String, CodingKey {
     case v, eventId, type, time, scheduledDate, snoozeUntil, ownerId, targetTopic
     case actor, actorTopic, timestamp, revision, syncState, medications, medicationMeta
@@ -38,6 +42,16 @@ extension MedicationMeta {
         packageUnit = try c.decodeIfPresent(String.self, forKey: .packageUnit) ?? ""
         source = try c.decodeIfPresent(String.self, forKey: .source) ?? "manual"
         doseUnitOverride = try c.decodeIfPresent(String.self, forKey: .doseUnitOverride) ?? ""
+    }
+}
+
+extension CirclePeer {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CirclePeerKeys.self)
+        id = try c.decodeIfPresent(String.self, forKey: .id) ?? ""
+        name = try c.decodeIfPresent(String.self, forKey: .name) ?? ""
+        topic = try c.decodeIfPresent(String.self, forKey: .topic) ?? ""
+        canEdit = try c.decodeIfPresent(Bool.self, forKey: .canEdit) ?? false
     }
 }
 
