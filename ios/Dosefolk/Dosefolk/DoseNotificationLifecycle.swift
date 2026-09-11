@@ -45,7 +45,7 @@ struct DoseNotificationLifecycle: DoseNotificationManaging {
             content: content,
             trigger: trigger
         )
-        center.add(request)
+        center.add(request) { _ in }
     }
 
     static func baseIdentifier(time: String, scheduledDate: String) -> String {
