@@ -28,10 +28,12 @@ struct RemoteCapabilityState: Codable, Equatable {
 final class RemoteStateReducer {
     private let store: LocalStore
     private let localOwnerId: String
+    private let securityState: CircleSecurityState
 
     init(store: LocalStore, localOwnerId: String) {
         self.store = store
         self.localOwnerId = localOwnerId
+        self.securityState = CircleSecurityState(store: store)
     }
 
     func apply(_ event: DoseEvent) throws {
@@ -44,6 +46,8 @@ final class RemoteStateReducer {
             try applyProgramRule(event)
         case "circle_presence":
             try applyPresence(event)
+        case "circle_revoked":
+            try applyRemoteRevoke(event)
         case "capability_edit_program_granted", "capability_edit_program_revoked",
              "capability_edit_stock_granted", "capability_edit_stock_revoked":
             try applyCapability(event)
@@ -131,6 +135,27 @@ final class RemoteStateReducer {
             eventId: event.eventId
         )
         try store.save(presence, to: .circlePresence)
+    }
+
+    private func applyRemoteRevoke(_ event: DoseEvent) throws {
+        guard event.targetTopic == localOwnerId else { return }
+        let peerTopic = event.actorTopic
+        guard !peerTopic.isEmpty, peerTopic != localOwnerId else { return }
+
+        try securityState.revoke(actorTopic: peerTopic)
+
+        var peers = try store.load([CirclePeer].self, from: .circlePeers, default: [])
+        peers.removeAll { $0.topic == peerTopic }
+        try store.save(peers, to: .circlePeers)
+
+        var presence = try store.load([String: CirclePresenceEntry].self, from: .circlePresence, default: [:])
+        presence.removeValue(forKey: peerTopic)
+        try store.save(presence, to: .circlePresence)
+
+        var capabilities = try store.load(RemoteCapabilityState.self, from: .remoteCapabilities, default: RemoteCapabilityState())
+        capabilities.editProgram.remove(peerTopic)
+        capabilities.editStock.remove(peerTopic)
+        try store.save(capabilities, to: .remoteCapabilities)
     }
 
     private func applyCapability(_ event: DoseEvent) throws {
