@@ -193,17 +193,28 @@ private struct MedicationEditorView: View {
     }
 
     private var weekdayPicker: some View {
-        let labels = [(1, "Pzt"), (2, "Sal"), (3, "Çar"), (4, "Per"), (5, "Cum"), (6, "Cmt"), (7, "Paz")]
-        return LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 8) {
-            ForEach(labels, id: \.0) { item in
-                if weekdays.contains(item.0) {
-                    Button(item.1) { weekdays.remove(item.0) }
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 8) {
+            ForEach(1...7, id: \.self) { day in
+                if weekdays.contains(day) {
+                    Button(weekdayLabel(day)) { weekdays.remove(day) }
                         .buttonStyle(.borderedProminent)
                 } else {
-                    Button(item.1) { weekdays.insert(item.0) }
+                    Button(weekdayLabel(day)) { weekdays.insert(day) }
                         .buttonStyle(.bordered)
                 }
             }
+        }
+    }
+
+    private func weekdayLabel(_ day: Int) -> String {
+        switch day {
+        case 1: return "Pzt"
+        case 2: return "Sal"
+        case 3: return "Çar"
+        case 4: return "Per"
+        case 5: return "Cum"
+        case 6: return "Cmt"
+        default: return "Paz"
         }
     }
 
