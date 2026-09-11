@@ -5,6 +5,7 @@ final class AppSettings {
         static let displayName = "displayName"
         static let language = "language"
         static let localTopic = "localTopic"
+        static let installId = "installId"
         static let lastSyncID = "lastSyncID"
         static let lastSyncAt = "lastSyncAt"
     }
@@ -37,6 +38,20 @@ final class AppSettings {
         let suffix = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(24)
         let generated = "dosefolk-\(suffix)"
         localTopic = generated
+        return generated
+    }
+
+    var installId: String {
+        get { defaults.string(forKey: Key.installId) ?? "" }
+        set { defaults.set(newValue, forKey: Key.installId) }
+    }
+
+    @discardableResult
+    func ensureInstallId() -> String {
+        let current = installId.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !current.isEmpty { return current }
+        let generated = UUID().uuidString.lowercased()
+        installId = generated
         return generated
     }
 
