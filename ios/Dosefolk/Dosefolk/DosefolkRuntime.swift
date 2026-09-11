@@ -111,6 +111,16 @@ final class DosefolkRuntime {
         coordinator.stop()
     }
 
+    @discardableResult
+    func backgroundPullOnce() async throws -> Int {
+        let poll = CirclePollSync(
+            coordinator: coordinator,
+            transport: transport,
+            settings: settings
+        )
+        return try await poll.pullOnce()
+    }
+
     func notificationAuthorizationStatus() async -> UNAuthorizationStatus {
         await notificationScheduler.authorizationStatus()
     }
