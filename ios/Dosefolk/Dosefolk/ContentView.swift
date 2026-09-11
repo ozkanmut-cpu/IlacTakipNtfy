@@ -142,10 +142,22 @@ struct ContentView: View {
                     .buttonStyle(.bordered)
             }
             .disabled(isBusy)
-        case .taken, .missed:
-            Button("Geri al") { runCorrection(.undo, item: item) }
-                .buttonStyle(.bordered)
-                .disabled(isBusy)
+        case .taken:
+            HStack {
+                Button("Geri al") { runCorrection(.undo, item: item) }
+                    .buttonStyle(.bordered)
+                Button("Almadım olarak düzelt") { runCorrection(.correctToMissed, item: item) }
+                    .buttonStyle(.borderless)
+            }
+            .disabled(isBusy)
+        case .missed:
+            HStack {
+                Button("Geri al") { runCorrection(.undo, item: item) }
+                    .buttonStyle(.bordered)
+                Button("Aldım olarak düzelt") { runCorrection(.correctToTaken, item: item) }
+                    .buttonStyle(.borderless)
+            }
+            .disabled(isBusy)
         case .conflict:
             HStack {
                 Button("Aldım olarak düzelt") { runCorrection(.correctToTaken, item: item) }
