@@ -3,14 +3,17 @@ import Foundation
 struct CircleInitialSyncPublisher {
     typealias PublishEvent = (_ type: String, _ time: String, _ targetTopic: String, _ medications: [Medication], _ medicationMeta: [MedicationMeta]) async throws -> Void
     typealias PublishPresence = (_ targetTopic: String) async throws -> Void
+    typealias PublishStock = (_ targetTopic: String) async throws -> Void
 
     let store: LocalStore
     let publishPresence: PublishPresence
     let publishEvent: PublishEvent
+    let publishStock: PublishStock
 
     init(store: LocalStore, publisher: ProtocolEventPublisher, localTopic: String) {
         self.store = store
         let presence = CirclePresencePublisher(publisher: publisher, localTopic: localTopic)
+        let stock = StockSyncPublisher(localTopic: localTopic, store: store)
         self.publishPresence = { target in
             try await presence.publish(to: target)
         }
@@ -23,12 +26,21 @@ struct CircleInitialSyncPublisher {
                 medicationMeta: meta
             )
         }
+        self.publishStock = { target in
+            try await stock.publishAll(to: target)
+        }
     }
 
-    init(store: LocalStore, publishPresence: @escaping PublishPresence, publishEvent: @escaping PublishEvent) {
+    init(
+        store: LocalStore,
+        publishPresence: @escaping PublishPresence,
+        publishEvent: @escaping PublishEvent,
+        publishStock: @escaping PublishStock = { _ in }
+    ) {
         self.store = store
         self.publishPresence = publishPresence
         self.publishEvent = publishEvent
+        self.publishStock = publishStock
     }
 
     func publish(to targetTopic: String) async throws {
@@ -49,5 +61,6 @@ struct CircleInitialSyncPublisher {
             let carrier = Medication(id: medication.id, name: medication.name, dose: encodedRule, times: [])
             try await publishEvent("program_rule_updated", "program", target, [carrier], meta)
         }
+        try await publishStock(target)
     }
 }
