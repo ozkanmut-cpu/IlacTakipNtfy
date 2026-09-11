@@ -30,6 +30,16 @@ final class AppSettings {
         set { defaults.set(newValue, forKey: Key.localTopic) }
     }
 
+    @discardableResult
+    func ensureLocalTopic() -> String {
+        let current = localTopic.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !current.isEmpty { return current }
+        let suffix = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(24)
+        let generated = "dosefolk-\(suffix)"
+        localTopic = generated
+        return generated
+    }
+
     var lastSyncID: String {
         get { defaults.string(forKey: Key.lastSyncID) ?? "" }
         set { defaults.set(newValue, forKey: Key.lastSyncID) }
