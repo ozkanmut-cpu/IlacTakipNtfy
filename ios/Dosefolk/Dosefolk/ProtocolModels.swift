@@ -65,8 +65,12 @@ struct StockState: Codable, Equatable {
 
 struct ProgramRule: Codable, Equatable {
     var medicationId: String
-    var times: [String]
-    var enabled: Bool = true
+    var weekdays: Set<Int> = []
+    var startDate: String? = nil
+    var endDate: String? = nil
+    var everyNDays: Int = 1
+    var anchorDate: String? = nil
+    var routineLabel: String = ""
 }
 
 struct SyncEnvelope: Codable, Equatable {
