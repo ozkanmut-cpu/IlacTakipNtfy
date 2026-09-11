@@ -7,6 +7,9 @@ enum InboundRejection: Equatable {
     case wrongTarget
     case unsupportedProtocol(Int)
     case invalidDoseEvent
+    case duplicateEvent
+    case localEcho
+    case revokedPeer
 }
 
 enum InboundProtocolResult: Equatable {
@@ -60,6 +63,27 @@ enum InboundProtocolGate {
         guard let event = try? JSONDecoder().decode(DoseEvent.self, from: data),
               !event.eventId.isEmpty, !event.type.isEmpty, !event.time.isEmpty else {
             return .rejected(.invalidDoseEvent)
+        }
+        return .accepted(event)
+    }
+
+    static func inspectSecure(
+        envelope: SyncEnvelope,
+        localTopic: String,
+        securityState: CircleSecurityState
+    ) throws -> InboundProtocolResult {
+        let initial = inspect(envelope: envelope, localTopic: localTopic)
+        guard case .accepted(let event) = initial else { return initial }
+
+        if event.actorTopic == localTopic {
+            return .rejected(.localEcho)
+        }
+        if try securityState.isRevoked(actorTopic: event.actorTopic) {
+            try securityState.markProcessed(eventId: event.eventId)
+            return .rejected(.revokedPeer)
+        }
+        if try securityState.isProcessed(eventId: event.eventId) {
+            return .rejected(.duplicateEvent)
         }
         return .accepted(event)
     }
