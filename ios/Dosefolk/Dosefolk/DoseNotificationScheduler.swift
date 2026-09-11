@@ -16,6 +16,10 @@ actor DoseNotificationScheduler {
         self.calendar = calendar
     }
 
+    func authorizationStatus() async -> UNAuthorizationStatus {
+        await center.notificationSettings().authorizationStatus
+    }
+
     @discardableResult
     func requestAuthorization() async throws -> Bool {
         try await center.requestAuthorization(options: [.alert, .sound, .badge])
