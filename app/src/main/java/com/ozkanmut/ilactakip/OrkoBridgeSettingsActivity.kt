@@ -12,6 +12,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 
 class OrkoBridgeSettingsActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -35,6 +36,9 @@ private data class BridgeGroup(
 @Composable
 private fun OrkoBridgeSettingsScreen(context: android.content.Context) {
     var revision by remember { mutableIntStateOf(0) }
+    var selfTestRevision by remember { mutableIntStateOf(0) }
+    var selfTestToken by remember { mutableStateOf("") }
+    val selfTest = remember(selfTestRevision) { OrkoBridgeSelfTest.load(context) }
     val groups = remember(revision) {
         Store.load(context)
             .flatMap { med -> med.times.map { time -> time to med } }
@@ -48,6 +52,16 @@ private fun OrkoBridgeSettingsScreen(context: android.content.Context) {
                     saved = OrkoBridgeMappingStore.get(context, time)
                 )
             }
+    }
+
+    LaunchedEffect(selfTestToken) {
+        if (selfTestToken.isBlank()) return@LaunchedEffect
+        repeat(12) {
+            delay(500)
+            selfTestRevision++
+            val status = OrkoBridgeSelfTest.load(context)
+            if (status.token == selfTestToken && status.acknowledged) return@LaunchedEffect
+        }
     }
 
     Scaffold(
@@ -66,6 +80,34 @@ private fun OrkoBridgeSettingsScreen(context: android.content.Context) {
             Modifier.fillMaxSize().padding(padding).padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            item {
+                Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp)) {
+                    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("Bağlantı testi", fontWeight = FontWeight.Bold)
+                        val statusText = when {
+                            selfTest.acknowledged -> "✓ Orko Takip yanıt verdi. Bağlantı çalışıyor."
+                            selfTest.pending -> "Test gönderildi • Orko Takip yanıtı bekleniyor"
+                            else -> "Henüz bağlantı testi yapılmadı"
+                        }
+                        Text(statusText)
+                        Button(
+                            onClick = {
+                                val started = OrkoBridgeSelfTest.send(context)
+                                selfTestToken = started.token
+                                selfTestRevision++
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text("Dosefolk → Orko Takip bağlantısını test et")
+                        }
+                        Text(
+                            "Bu test ilaç kaydı oluşturmaz, şeker planını değiştirmez ve yalnızca iki uygulamanın birbirini görebildiğini doğrular.",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                    }
+                }
+            }
+
             item {
                 Card(Modifier.fillMaxWidth(), shape = RoundedCornerShape(20.dp)) {
                     Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
