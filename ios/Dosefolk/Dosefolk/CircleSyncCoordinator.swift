@@ -50,6 +50,11 @@ final class CircleSyncCoordinator {
         task = nil
     }
 
+    func restartSubscriptions() {
+        stop()
+        start()
+    }
+
     @discardableResult
     func processAny(_ envelope: SyncEnvelope) throws -> Bool {
         switch try stockProcessor.process(envelope) {
@@ -65,9 +70,18 @@ final class CircleSyncCoordinator {
 
     @discardableResult
     func process(_ envelope: SyncEnvelope) throws -> InboundProtocolResult {
-        try processor.process(envelope: envelope) { [eventStore, remoteStateHandler] event in
+        try processor.process(envelope: envelope) { [weak self, eventStore, remoteStateHandler] event in
             let canonical = try eventStore.appendIfAbsent(event)
             try remoteStateHandler(canonical)
+            if Self.requiresSubscriptionRefresh(canonical) {
+                Task { @MainActor [weak self] in
+                    self?.restartSubscriptions()
+                }
+            }
         }
+    }
+
+    static func requiresSubscriptionRefresh(_ event: DoseEvent) -> Bool {
+        event.type == "circle_revoked"
     }
 }
