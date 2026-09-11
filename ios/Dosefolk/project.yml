@@ -19,6 +19,7 @@ targets:
         PRODUCT_NAME: Dosefolk
         GENERATE_INFOPLIST_FILE: YES
         INFOPLIST_KEY_CFBundleDisplayName: Dosefolk
+        INFOPLIST_KEY_NSCameraUsageDescription: "Dosefolk, Circle eşleştirme QR kodunu taramak için kamerayı kullanır."
         CODE_SIGN_STYLE: Automatic
     scheme:
       testTargets:
