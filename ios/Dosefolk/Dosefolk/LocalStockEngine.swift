@@ -60,18 +60,33 @@ actor LocalStockEngine {
 
         runtime.processedEventIDs.insert(event.eventId)
         runtime.stocks = Array(stockByID.values).sorted { $0.medicationId < $1.medicationId }
-        try store.save(runtime, to: .stockRuntime)
-        try store.save(runtime.stocks, to: .stock)
+        try persist(runtime)
         return changed
     }
 
     func configure(_ stock: StockState) throws {
         var runtime = try loadRuntime()
         runtime.stocks.removeAll { $0.medicationId == stock.medicationId }
-        runtime.stocks.append(stock)
+        runtime.stocks.append(sanitize(stock))
         runtime.stocks.sort { $0.medicationId < $1.medicationId }
-        try store.save(runtime, to: .stockRuntime)
-        try store.save(runtime.stocks, to: .stock)
+        try persist(runtime)
+    }
+
+    @discardableResult
+    func openNewBox(medicationID: String, nowMillis: Int64 = Int64(Date().timeIntervalSince1970 * 1000)) throws -> StockState? {
+        var runtime = try loadRuntime()
+        guard let index = runtime.stocks.firstIndex(where: { $0.medicationId == medicationID }) else { return nil }
+        var stock = runtime.stocks[index]
+        guard stock.packSize > 0 else { return nil }
+        stock.remainingDoses = max(0, stock.remainingDoses) + stock.packSize
+        stock.updatedAt = nowMillis
+        runtime.stocks[index] = stock
+        try persist(runtime)
+        return stock
+    }
+
+    func stock(for medicationID: String) throws -> StockState? {
+        try loadRuntime().stocks.first { $0.medicationId == medicationID }
     }
 
     func all() throws -> [StockState] {
@@ -85,6 +100,19 @@ actor LocalStockEngine {
             from: .stockRuntime,
             default: LocalStockRuntime(stocks: fallbackStocks)
         )
+    }
+
+    private func persist(_ runtime: LocalStockRuntime) throws {
+        try store.save(runtime, to: .stockRuntime)
+        try store.save(runtime.stocks, to: .stock)
+    }
+
+    private func sanitize(_ stock: StockState) -> StockState {
+        var value = stock
+        value.remainingDoses = max(0, value.remainingDoses)
+        value.packSize = max(0, value.packSize)
+        value.lowThreshold = max(0, value.lowThreshold)
+        return value
     }
 
     private func uniqueMedications(_ medications: [Medication]) -> [Medication] {
