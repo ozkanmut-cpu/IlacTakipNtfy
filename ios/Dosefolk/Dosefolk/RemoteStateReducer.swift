@@ -29,6 +29,7 @@ final class RemoteStateReducer {
     private let store: LocalStore
     private let localOwnerId: String
     private let securityState: CircleSecurityState
+    private let capabilityGate: CapabilityEventGate
     private let notifications: DoseNotificationManaging
 
     init(
@@ -39,6 +40,7 @@ final class RemoteStateReducer {
         self.store = store
         self.localOwnerId = localOwnerId
         self.securityState = CircleSecurityState(store: store)
+        self.capabilityGate = CapabilityEventGate(store: store)
         self.notifications = notifications
     }
 
@@ -152,6 +154,7 @@ final class RemoteStateReducer {
         guard !peerTopic.isEmpty, peerTopic != localOwnerId else { return }
 
         try securityState.revoke(actorTopic: peerTopic)
+        try capabilityGate.clearPeer(peerTopic)
 
         var peers = try store.load([CirclePeer].self, from: .circlePeers, default: [])
         peers.removeAll { $0.topic == peerTopic }
@@ -169,6 +172,7 @@ final class RemoteStateReducer {
 
     private func applyCapability(_ event: DoseEvent) throws {
         guard !event.actorTopic.isEmpty else { return }
+        guard try capabilityGate.accept(event) else { return }
         var state = try store.load(RemoteCapabilityState.self, from: .remoteCapabilities, default: RemoteCapabilityState())
         switch event.type {
         case "capability_edit_program_granted": state.editProgram.insert(event.actorTopic)
