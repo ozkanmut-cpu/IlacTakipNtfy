@@ -29,5 +29,7 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - DosefolkTests
+    resources:
+      - path: ../../protocol-fixtures
     dependencies:
       - target: Dosefolk
