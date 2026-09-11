@@ -4,34 +4,34 @@ Amaç: Android Dosefolk ile aynı Circle protokolünü kullanan, native Swift/Sw
 
 ## Milestone 1 — Temel iOS iskeleti ve ortak protokol
 
-- [ ] `ios/Dosefolk/` altında Swift + SwiftUI Xcode projesini oluştur.
-- [ ] Minimum iOS sürümünü belirle (hedef: modern API'ler için iOS 17; cihaz gereksinimine göre düşürülebilir).
-- [ ] Bundle ID ve signing yapısını hazırla.
-- [ ] Android uygulamasındaki platformdan bağımsız protokolü `PROTOCOL_SPEC.md` olarak belgele.
-- [ ] Medication, DoseEvent, CirclePeer, MedicationMeta, ProgramRule, StockState ve SyncEnvelope modellerinin Swift karşılıklarını oluştur.
-- [ ] JSON alan adlarını Android ile birebir uyumlu tut.
-- [ ] Android fixture → iOS decode ve iOS fixture → Android decode compatibility testlerini oluştur.
-- [ ] Lokal veri katmanını kur (SwiftData/Core Data veya uygun SQLite katmanı).
-- [ ] Küçük uygulama ayarlarını UserDefaults'ta; gizli credential'ları Keychain'de sakla.
+- [x] `ios/Dosefolk/` altında Swift + SwiftUI Xcode projesini oluştur.
+- [x] Minimum iOS sürümünü belirle (hedef: modern API'ler için iOS 17; cihaz gereksinimine göre düşürülebilir).
+- [x] Bundle ID ve signing yapısını hazırla.
+- [x] Android uygulamasındaki platformdan bağımsız protokolü `PROTOCOL_SPEC.md` olarak belgele.
+- [x] Medication, DoseEvent, CirclePeer, MedicationMeta, ProgramRule, StockState ve SyncEnvelope modellerinin Swift karşılıklarını oluştur.
+- [x] JSON alan adlarını Android ile birebir uyumlu tut.
+- [x] Android fixture → iOS decode ve iOS fixture → Android decode compatibility testlerini oluştur.
+- [x] Lokal veri katmanını kur (atomik JSON store; protokol DTO'larından bağımsız kalacak şekilde).
+- [x] Küçük uygulama ayarlarını UserDefaults'ta; gizli credential'ları Keychain'de sakla.
 
 ## Milestone 2 — Self-hosted ntfy ve Circle
 
-- [ ] `https://ntfy.field-maintenance-prod.com` için Swift ntfy client oluştur.
-- [ ] URLSession POST publisher desteği ekle.
-- [ ] Stream/poll subscriber desteği ekle.
-- [ ] Timeout/reconnect/backoff davranışını ekle.
-- [ ] HTTP 429 ve Retry-After handling ekle.
-- [ ] Topic değiştiğinde subscription reconnect uygula.
-- [ ] Publisher-topic modelini Android ile birebir uygula.
-- [ ] `envelope.topic == actorTopic` doğrulamasını uygula.
-- [ ] `targetTopic` filtresini tüm side-effect'lerden önce uygula.
-- [ ] Replay protection uygula.
-- [ ] Revoked peer / re-pair fencing uygula.
-- [ ] Unsupported future protocol version'ları güvenli şekilde skip et.
-- [ ] Circle presence handshake'i uygula.
-- [ ] QR-first pairing akışını oluştur.
-- [ ] Android QR → iPhone ve iPhone QR → Android pairing testlerini yap.
-- [ ] Revoke/re-pair senaryolarını test et.
+- [x] `https://ntfy.field-maintenance-prod.com` için Swift ntfy client oluştur.
+- [x] URLSession POST publisher desteği ekle.
+- [x] Stream/poll subscriber desteği ekle.
+- [x] Timeout/reconnect/backoff davranışını ekle.
+- [x] HTTP 429 ve Retry-After handling ekle.
+- [ ] Topic değiştiğinde subscription reconnect davranışını tüm peer add/revoke yollarında doğrula.
+- [x] Publisher-topic modelini Android ile birebir uygula.
+- [x] `envelope.topic == actorTopic` doğrulamasını uygula.
+- [x] `targetTopic` filtresini tüm side-effect'lerden önce uygula.
+- [x] Replay protection uygula.
+- [x] Revoked peer / re-pair fencing uygula.
+- [x] Unsupported future protocol version'ları güvenli şekilde skip et.
+- [x] Circle presence handshake'i uygula.
+- [x] QR-first pairing akışını oluştur.
+- [ ] Android QR → iPhone ve iPhone QR → Android pairing testlerini fiziksel cihazlarda yap.
+- [x] Revoke/re-pair senaryolarını deterministic test et.
 
 ## Milestone 3 — İlaç motoru ve bildirimler
 
@@ -50,19 +50,19 @@ Amaç: Android Dosefolk ile aynı Circle protokolünü kullanan, native Swift/Sw
 
 ## Milestone 4 — Native iOS UX
 
-- [ ] Today ekranını SwiftUI ile oluştur.
-- [ ] Normal durumda sıfır etkileşim / gerektiğinde tek belirgin aksiyon ilkesini koru.
-- [ ] İlaç ekleme/düzenleme ekranını progressive disclosure ile oluştur.
-- [ ] PRN kullanımını ihtiyaç olana kadar gizli tut.
-- [ ] Circle ekranını oluştur; QR pairing öncelikli olsun.
-- [ ] Raw topic/teknik protokol bilgilerini normal kullanıcıdan gizle.
-- [ ] Stock ekranını oluştur.
-- [ ] History ekranını oluştur.
-- [ ] Teknik Circle/protocol eventlerini kullanıcı geçmişinden filtrele.
-- [ ] History eventlerini tarihe göre grupla ve insan-okunur isimler kullan.
-- [ ] Assistant ekranını Android'deki sade UX yaklaşımıyla oluştur.
-- [ ] Light/dark mode'u sistem temasına bağla.
-- [ ] Dynamic Type ve temel accessibility kontrollerini tamamla.
+- [x] Today ekranını SwiftUI ile oluştur.
+- [x] Normal durumda sıfır etkileşim / gerektiğinde tek belirgin aksiyon ilkesini koru.
+- [x] İlaç ekleme/düzenleme ekranını progressive disclosure ile oluştur.
+- [x] PRN kullanımını ihtiyaç olana kadar gizli tut.
+- [x] Circle ekranını oluştur; QR pairing öncelikli olsun.
+- [x] Raw topic/teknik protokol bilgilerini normal kullanıcıdan gizle.
+- [x] Stock ekranını oluştur.
+- [x] History ekranını oluştur.
+- [x] Teknik Circle/protocol eventlerini kullanıcı geçmişinden filtrele.
+- [x] History eventlerini tarihe göre grupla ve insan-okunur isimler kullan.
+- [x] Assistant ekranını Android'deki sade UX yaklaşımıyla oluştur.
+- [x] Light/dark mode'u sistem temasına bağla.
+- [x] Dynamic Type ve temel accessibility kontrollerini tamamla.
 
 ## Milestone 5 — Gerçek zamanlı background mimarisi
 
@@ -79,14 +79,14 @@ Amaç: Android Dosefolk ile aynı Circle protokolünü kullanan, native Swift/Sw
 
 - [ ] Anonymous/open ntfy kullanımını kaldıracak credential mimarisini oluştur.
 - [ ] Install başına runtime-provisioned credential/token üret.
-- [ ] iOS credential'ını Keychain'de sakla.
+- [x] iOS credential'ını Keychain'de sakla.
 - [ ] Android credential'ını Android Keystore ile güvenli sakla.
-- [ ] Public GitHub reposuna hiçbir static secret/token koyma.
+- [x] Public GitHub reposuna hiçbir static secret/token koyma.
 - [ ] Server-side provisioning/bootstrap oluştur.
 - [ ] ntfy `auth-file`/uygun auth yapısını etkinleştir.
 - [ ] `auth-default-access: deny-all` geçişini Android + iOS auth hazır olduğunda aynı rollout içinde yap.
 - [ ] Topic bazlı minimum yetki/ACL modelini uygula.
-- [ ] 429/backoff korumasını self-hosted sistemde de koru.
+- [x] 429/backoff korumasını self-hosted sistemde de koru.
 
 ## Milestone 7 — QA ve observability
 
@@ -101,28 +101,28 @@ Amaç: Android Dosefolk ile aynı Circle protokolünü kullanan, native Swift/Sw
 
 ## Milestone 8 — Cross-platform E2E
 
-- [ ] Android → Android regression testini koru.
+- [x] Android → Android regression testini koru.
 - [ ] Android → iPhone E2E testi yap.
 - [ ] iPhone → Android E2E testi yap.
 - [ ] iPhone → iPhone E2E testi yap.
-- [ ] Taken event senkronizasyonunu test et.
-- [ ] Snooze event senkronizasyonunu test et.
-- [ ] Missed event senkronizasyonunu test et.
-- [ ] Stock sync test et.
-- [ ] Program/rule sync test et.
-- [ ] Revoke/re-pair test et.
-- [ ] Replay ve duplicate event test et.
-- [ ] Wrong target ve publisher-topic mismatch security rejection testlerini yap.
-- [ ] Offline → online reconciliation test et.
+- [ ] Taken event senkronizasyonunu fiziksel cihazlarda test et.
+- [ ] Snooze event senkronizasyonunu fiziksel cihazlarda test et.
+- [ ] Missed event senkronizasyonunu fiziksel cihazlarda test et.
+- [ ] Stock sync fiziksel cihaz testi yap.
+- [ ] Program/rule sync fiziksel cihaz testi yap.
+- [x] Revoke/re-pair deterministic testlerini koru.
+- [x] Replay ve duplicate event deterministic testlerini koru.
+- [x] Wrong target ve publisher-topic mismatch security rejection testlerini koru.
+- [ ] Offline → online reconciliation fiziksel cihaz testi yap.
 
 ## Milestone 9 — CI/CD
 
-- [ ] GitHub Actions macOS iOS workflow oluştur.
-- [ ] Swift unit tests çalıştır.
-- [ ] Protocol compatibility tests çalıştır.
-- [ ] Xcode simulator build/test çalıştır.
+- [x] GitHub Actions macOS iOS workflow oluştur.
+- [x] Swift unit tests çalıştır.
+- [x] Protocol compatibility tests çalıştır.
+- [x] Xcode simulator build/test çalıştır.
 - [ ] iOS build/archive validation ekle.
-- [ ] Android veya iOS protocol değişikliğinde cross-platform compatibility testini zorunlu gate yap.
+- [x] Android veya iOS protocol değişikliğinde cross-platform compatibility testini zorunlu gate yap.
 - [ ] CI artifact üretimini doğrula.
 
 ## Milestone 10 — Apple/TestFlight/App Store
@@ -133,7 +133,7 @@ Amaç: Android Dosefolk ile aynı Circle protokolünü kullanan, native Swift/Sw
 - [ ] APNs key/capability yapılandır.
 - [ ] Notification capability ekle.
 - [ ] Gerekiyorsa Background Modes capability ekle.
-- [ ] QR kamera izni ve açıklamasını ekle.
+- [x] QR kamera izni ve açıklamasını ekle.
 - [ ] Privacy manifest'i hazırla.
 - [ ] App Store privacy disclosure bilgilerini hazırla.
 - [ ] Circle üzerinden hangi verilerin gönderildiğini açıkça belgele.
@@ -160,7 +160,3 @@ iOS sürümü tamamlanmış sayılmadan önce:
 - Hiçbir production secret public repoda bulunmamalı.
 - iOS unit/compatibility testleri ve build CI'da green olmalı.
 - TestFlight build gerçek cihaz QA'sından geçmiş olmalı.
-
-## Tahmini çalışma planı
-
-Mevcut Android mimarisi ve protokolü referans alınarak hedef: yaklaşık **1–2 yoğun geliştirme gününde çalışan iOS beta**, ardından fiziksel iPhone/APNs/TestFlight QA ve production hardening.
