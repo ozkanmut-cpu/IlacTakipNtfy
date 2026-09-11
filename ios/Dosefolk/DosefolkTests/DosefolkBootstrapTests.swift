@@ -15,6 +15,20 @@ final class DosefolkBootstrapTests: XCTestCase {
         XCTAssertEqual(event.medicationMeta.first?.form, .TABLET)
     }
 
+    func testSparseAndroidPayloadUsesAndroidCompatibleDefaults() throws {
+        let json = #"{"v":9,"eventId":"sparse-1","type":"taken","time":"08:00","actorTopic":"publisher","medications":[{"id":"med-1"}],"medicationMeta":[{"medicationId":"med-1"}]}"#
+        let event = try JSONDecoder().decode(DoseEvent.self, from: Data(json.utf8))
+
+        XCTAssertEqual(event.eventId, "sparse-1")
+        XCTAssertEqual(event.syncState, "pending")
+        XCTAssertEqual(event.targetTopic, "")
+        XCTAssertEqual(event.timestamp, 0)
+        XCTAssertEqual(event.medications.single?.name, "")
+        XCTAssertEqual(event.medications.single?.times, [])
+        XCTAssertEqual(event.medicationMeta.single?.form, .OTHER)
+        XCTAssertEqual(event.medicationMeta.single?.source, "manual")
+    }
+
     func testDoseEventEncodesCanonicalAndroidFieldNames() throws {
         let event = DoseEvent(
             eventId: "evt-2",
@@ -78,4 +92,8 @@ final class DosefolkBootstrapTests: XCTestCase {
         XCTAssertNil(defaults.string(forKey: SecureCredentialKey.ntfyToken))
         XCTAssertNil(defaults.string(forKey: SecureCredentialKey.provisioningSecret))
     }
+}
+
+private extension Array {
+    var single: Element? { count == 1 ? first : nil }
 }
