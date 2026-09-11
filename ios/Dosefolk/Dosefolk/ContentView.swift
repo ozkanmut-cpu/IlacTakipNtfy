@@ -53,6 +53,11 @@ struct ContentView: View {
                         } label: {
                             Label("Geçmiş", systemImage: "clock.arrow.circlepath")
                         }
+                        NavigationLink {
+                            PrnView(runtime: runtime)
+                        } label: {
+                            Label("Gerektiğinde kullanım", systemImage: "cross.case")
+                        }
                     }
                 }
 
