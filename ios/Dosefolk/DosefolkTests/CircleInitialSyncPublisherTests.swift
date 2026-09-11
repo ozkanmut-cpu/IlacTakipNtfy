@@ -2,7 +2,7 @@ import XCTest
 @testable import Dosefolk
 
 final class CircleInitialSyncPublisherTests: XCTestCase {
-    func testPublishesPresenceProgramAndAndroidRuleCarrier() async throws {
+    func testPublishesPresenceProgramRuleAndStockBootstrap() async throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = try LocalStore(directory: directory)
@@ -15,10 +15,12 @@ final class CircleInitialSyncPublisherTests: XCTestCase {
 
         var presenceTargets: [String] = []
         var published: [(String, String, String, [Medication], [MedicationMeta])] = []
+        var stockTargets: [String] = []
         let sut = CircleInitialSyncPublisher(
             store: store,
             publishPresence: { presenceTargets.append($0) },
-            publishEvent: { published.append(($0, $1, $2, $3, $4)) }
+            publishEvent: { published.append(($0, $1, $2, $3, $4)) },
+            publishStock: { stockTargets.append($0) }
         )
 
         try await sut.publish(to: "peer-topic")
@@ -36,5 +38,6 @@ final class CircleInitialSyncPublisherTests: XCTestCase {
         let decodedRule = try ProgramRuleCodec.decode(carrier.dose)
         XCTAssertEqual(decodedRule, rule)
         XCTAssertTrue(carrier.times.isEmpty)
+        XCTAssertEqual(stockTargets, ["peer-topic"])
     }
 }
