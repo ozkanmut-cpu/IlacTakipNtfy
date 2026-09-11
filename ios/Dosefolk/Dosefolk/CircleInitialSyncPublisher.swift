@@ -10,10 +10,10 @@ struct CircleInitialSyncPublisher {
     let publishEvent: PublishEvent
     let publishStock: PublishStock
 
-    init(store: LocalStore, publisher: ProtocolEventPublisher, localTopic: String) {
+    init(store: LocalStore, publisher: ProtocolEventPublisher, localTopic: String, displayName: String = "") {
         self.store = store
         let presence = CirclePresencePublisher(publisher: publisher, localTopic: localTopic)
-        let stock = StockSyncPublisher(localTopic: localTopic, store: store)
+        let stock = StockSyncPublisher(localTopic: localTopic, displayName: displayName, store: store)
         self.publishPresence = { target in
             try await presence.publish(to: target)
         }
