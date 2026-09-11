@@ -11,6 +11,8 @@ struct LocalStore {
         case remoteMedications
         case remoteProgramRules
         case remoteMedicationMeta
+        case remoteStock
+        case stockOrdering
         case remoteEventReceipts
         case revokedPeers
         case doseRuntime
