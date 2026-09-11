@@ -14,17 +14,20 @@ enum DoseActionResult: Equatable {
 actor DoseActionService {
     private let store: LocalStore
     private let publisher: ProtocolEventPublisher
+    private let stockEngine: LocalStockEngine
     private let notifications: DoseNotificationManaging
     private let nowMillis: () -> Int64
 
     init(
         store: LocalStore,
         publisher: ProtocolEventPublisher,
+        stockEngine: LocalStockEngine? = nil,
         notifications: DoseNotificationManaging = DoseNotificationLifecycle(),
         nowMillis: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }
     ) {
         self.store = store
         self.publisher = publisher
+        self.stockEngine = stockEngine ?? LocalStockEngine(store: store)
         self.notifications = notifications
         self.nowMillis = nowMillis
     }
@@ -54,6 +57,7 @@ actor DoseActionService {
             scheduledDate: scheduledDate,
             snoozeUntil: snoozeUntil
         )
+        _ = try await stockEngine.apply(event)
         if action == .snooze {
             notifications.snooze(time: time, scheduledDate: scheduledDate, untilMillis: snoozeUntil)
         } else {
