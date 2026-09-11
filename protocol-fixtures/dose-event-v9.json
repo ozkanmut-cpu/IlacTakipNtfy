@@ -1,0 +1,35 @@
+{
+  "v": 9,
+  "eventId": "fixture-v9-001",
+  "type": "taken",
+  "time": "08:00",
+  "scheduledDate": "2026-09-11",
+  "snoozeUntil": 0,
+  "ownerId": "owner-fixture",
+  "targetTopic": "target-fixture-topic",
+  "actor": "Fixture User",
+  "actorTopic": "publisher-fixture-topic",
+  "timestamp": 1789084800000,
+  "revision": 42,
+  "syncState": "synced",
+  "medications": [
+    {
+      "id": "med-fixture-1",
+      "name": "Fixture Medication",
+      "dose": "1 tablet",
+      "times": ["08:00", "20:00"]
+    }
+  ],
+  "medicationMeta": [
+    {
+      "medicationId": "med-fixture-1",
+      "form": "TABLET",
+      "quantity": 1.0,
+      "administrationSite": "",
+      "packageCount": 30,
+      "packageUnit": "tablet",
+      "source": "manual",
+      "doseUnitOverride": ""
+    }
+  ]
+}
