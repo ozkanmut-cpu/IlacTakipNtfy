@@ -9,6 +9,7 @@ final class DosefolkRuntime {
     let pairingService: CirclePairingService
     let localStockEngine: LocalStockEngine
     let medicationProgramService: MedicationProgramService
+    let prnDoseService: PrnDoseService
     let doseActionService: DoseActionService
     let doseCorrectionService: DoseCorrectionService
     let notificationRouter: DoseNotificationRouter
@@ -60,6 +61,11 @@ final class DosefolkRuntime {
             store: resolvedStore,
             publisher: publisher,
             onProgramChanged: { try await scheduler.reconcile() }
+        )
+        self.prnDoseService = PrnDoseService(
+            publisher: publisher,
+            stockEngine: stockEngine,
+            onStockChanged: syncStock
         )
         let doseActionService = DoseActionService(
             store: resolvedStore,
