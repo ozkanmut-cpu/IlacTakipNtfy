@@ -60,6 +60,21 @@ final class RemoteStateReducerTests: XCTestCase {
         XCTAssertTrue(capabilities.editProgram.contains("publisher-topic"))
     }
 
+    func testRemoteRevokeFencesPeerAndClearsPeerState() throws {
+        try store.save([CirclePeer(id: "peer", name: "Peer", topic: "publisher-topic")], to: .circlePeers)
+        try reducer.apply(event(type: "circle_presence", eventId: "presence"))
+        try reducer.apply(event(type: "capability_edit_program_granted", eventId: "cap"))
+
+        var revoke = event(type: "circle_revoked", eventId: "revoke")
+        revoke.targetTopic = "local-topic"
+        try reducer.apply(revoke)
+
+        XCTAssertTrue(try CircleSecurityState(store: store).isRevoked(actorTopic: "publisher-topic"))
+        XCTAssertTrue(try store.load([CirclePeer].self, from: .circlePeers, default: []).isEmpty)
+        XCTAssertNil(try store.load([String: CirclePresenceEntry].self, from: .circlePresence, default: [:])["publisher-topic"])
+        XCTAssertFalse(try store.load(RemoteCapabilityState.self, from: .remoteCapabilities, default: RemoteCapabilityState()).editProgram.contains("publisher-topic"))
+    }
+
     private func event(
         type: String,
         eventId: String,
