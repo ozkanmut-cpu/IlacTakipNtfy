@@ -195,6 +195,30 @@ final class RemoteStateReducer {
         capabilities.editProgram.remove(peerTopic)
         capabilities.editStock.remove(peerTopic)
         try store.save(capabilities, to: .remoteCapabilities)
+
+        var remoteMedications = try store.load([ScopedMedication].self, from: .remoteMedications, default: [])
+        remoteMedications.removeAll { $0.ownerId == peerTopic }
+        try store.save(remoteMedications, to: .remoteMedications)
+
+        var remoteRules = try store.load([ScopedProgramRule].self, from: .remoteProgramRules, default: [])
+        remoteRules.removeAll { $0.ownerId == peerTopic }
+        try store.save(remoteRules, to: .remoteProgramRules)
+
+        var remoteStock = try store.load([ScopedStockState].self, from: .remoteStock, default: [])
+        remoteStock.removeAll { $0.ownerId == peerTopic }
+        try store.save(remoteStock, to: .remoteStock)
+
+        var programOrdering = try store.load([String: ProgramOrderingEntry].self, from: .programOrdering, default: [:])
+        programOrdering = programOrdering.filter { !$0.key.hasPrefix("\(peerTopic)|") }
+        try store.save(programOrdering, to: .programOrdering)
+
+        var stockOrdering = try store.load([String: StockOrderingEntry].self, from: .stockOrdering, default: [:])
+        stockOrdering = stockOrdering.filter { !$0.key.hasPrefix("\(peerTopic)|") }
+        try store.save(stockOrdering, to: .stockOrdering)
+
+        var doseRuntime = try store.load([String: DoseRuntimeEntry].self, from: .doseRuntime, default: [:])
+        doseRuntime = doseRuntime.filter { !$0.key.hasPrefix("\(peerTopic)|") }
+        try store.save(doseRuntime, to: .doseRuntime)
     }
 
     private func applyCapability(_ event: DoseEvent) throws {
