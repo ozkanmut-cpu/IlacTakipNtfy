@@ -36,6 +36,21 @@ struct ContentView: View {
                     notificationPermissionContent
                 }
 
+                Section("Diğer") {
+                    if let runtime {
+                        NavigationLink {
+                            StockView(runtime: runtime)
+                        } label: {
+                            Label("Stok", systemImage: "shippingbox")
+                        }
+                        NavigationLink {
+                            HistoryView(runtime: runtime)
+                        } label: {
+                            Label("Geçmiş", systemImage: "clock.arrow.circlepath")
+                        }
+                    }
+                }
+
                 Section("Circle") {
                     if let runtime {
                         NavigationLink("Birini Circle’a ekle") {
