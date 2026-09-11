@@ -3,7 +3,7 @@ import XCTest
 
 final class DosefolkBootstrapTests: XCTestCase {
     func testSharedV9FixtureDecodesOnIOS() throws {
-        let url = try XCTUnwrap(Bundle(for: Self.self).url(forResource: "dose-event-v9", withExtension: "json"))
+        let url = try fixtureURL("dose-event-v9")
         let event = try JSONDecoder().decode(DoseEvent.self, from: Data(contentsOf: url))
 
         XCTAssertEqual(event.v, 9)
@@ -13,6 +13,15 @@ final class DosefolkBootstrapTests: XCTestCase {
         XCTAssertEqual(event.revision, 42)
         XCTAssertEqual(event.medications.first?.times, ["08:00", "20:00"])
         XCTAssertEqual(event.medicationMeta.first?.form, .TABLET)
+    }
+
+    func testIOSOriginV9FixtureIsBundledAndDecodes() throws {
+        let url = try fixtureURL("ios-dose-event-v9")
+        let event = try JSONDecoder().decode(DoseEvent.self, from: Data(contentsOf: url))
+
+        XCTAssertEqual(event.v, 9)
+        XCTAssertFalse(event.eventId.isEmpty)
+        XCTAssertFalse(event.actorTopic.isEmpty)
     }
 
     func testSparseAndroidPayloadUsesAndroidCompatibleDefaults() throws {
@@ -91,6 +100,28 @@ final class DosefolkBootstrapTests: XCTestCase {
         XCTAssertEqual(settings.lastSyncID, "msg-1")
         XCTAssertNil(defaults.string(forKey: SecureCredentialKey.ntfyToken))
         XCTAssertNil(defaults.string(forKey: SecureCredentialKey.provisioningSecret))
+    }
+
+    private func fixtureURL(_ name: String) throws -> URL {
+        let bundle = Bundle(for: Self.self)
+        if let direct = bundle.url(forResource: name, withExtension: "json") {
+            return direct
+        }
+        if let resourceURL = bundle.resourceURL,
+           let enumerator = FileManager.default.enumerator(
+                at: resourceURL,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+           ) {
+            for case let url as URL in enumerator where url.lastPathComponent == "\(name).json" {
+                return url
+            }
+        }
+        throw NSError(
+            domain: "DosefolkTests.Fixture",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "Fixture \(name).json not found in test bundle"]
+        )
     }
 }
 
