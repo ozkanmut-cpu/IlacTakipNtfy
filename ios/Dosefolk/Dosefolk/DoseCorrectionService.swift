@@ -47,10 +47,12 @@ enum DoseCorrectionPolicy {
 actor DoseCorrectionService {
     private let store: LocalStore
     private let publisher: ProtocolEventPublisher
+    private let stockEngine: LocalStockEngine
 
-    init(store: LocalStore, publisher: ProtocolEventPublisher) {
+    init(store: LocalStore, publisher: ProtocolEventPublisher, stockEngine: LocalStockEngine? = nil) {
         self.store = store
         self.publisher = publisher
+        self.stockEngine = stockEngine ?? LocalStockEngine(store: store)
     }
 
     func apply(_ intent: DoseCorrectionIntent, time: String, scheduledDate: String) async throws -> DoseCorrectionResult {
@@ -67,6 +69,7 @@ actor DoseCorrectionService {
                 medications: medications,
                 scheduledDate: scheduledDate
             )
+            _ = try await stockEngine.apply(event)
             return .applied(event)
         }
     }
