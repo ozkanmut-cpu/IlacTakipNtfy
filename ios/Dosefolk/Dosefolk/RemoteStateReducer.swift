@@ -25,6 +25,17 @@ struct RemoteCapabilityState: Codable, Equatable {
     var editStock: Set<String> = []
 }
 
+struct ScopedMedication: Codable, Equatable {
+    var ownerId: String
+    var medication: Medication
+    var medicationMeta: [MedicationMeta]
+}
+
+struct ScopedProgramRule: Codable, Equatable {
+    var ownerId: String
+    var rule: ProgramRule
+}
+
 final class RemoteStateReducer {
     private let store: LocalStore
     private let localOwnerId: String
@@ -83,58 +94,73 @@ final class RemoteStateReducer {
             snoozeUntil = 0
             notifications.resolve(time: event.time, scheduledDate: event.scheduledDate)
         }
-        state[key] = DoseRuntimeEntry(
-            status: status,
-            snoozeUntil: snoozeUntil,
-            eventId: event.eventId,
-            revision: event.revision
-        )
+        state[key] = DoseRuntimeEntry(status: status, snoozeUntil: snoozeUntil, eventId: event.eventId, revision: event.revision)
         try store.save(state, to: .doseRuntime)
     }
 
     private func applyProgram(_ event: DoseEvent) throws {
         guard let medication = event.medications.first, !medication.id.isEmpty else { return }
-        let ownerId = event.ownerId.isEmpty ? event.actorTopic : event.ownerId
+        let ownerId = resolvedOwner(event)
         guard !ownerId.isEmpty else { return }
 
-        let orderingKey = "\(ownerId)|\(medication.id)"
+        let orderingKey = "\(ownerId)|program|\(medication.id)"
         var ordering = try store.load([String: ProgramOrderingEntry].self, from: .programOrdering, default: [:])
         if let current = ordering[orderingKey], !wins(event, over: current) { return }
 
         if ownerId == localOwnerId {
             var medications = try store.load([Medication].self, from: .medications, default: [])
-            switch event.type {
-            case "program_deleted":
+            if event.type == "program_deleted" {
                 medications.removeAll { $0.id == medication.id }
-            default:
-                if let index = medications.firstIndex(where: { $0.id == medication.id }) {
-                    medications[index] = medication
-                } else {
-                    medications.append(medication)
-                }
+            } else if let index = medications.firstIndex(where: { $0.id == medication.id }) {
+                medications[index] = medication
+            } else {
+                medications.append(medication)
             }
             try store.save(medications, to: .medications)
+            if !event.medicationMeta.isEmpty {
+                var meta = try store.load([MedicationMeta].self, from: .medicationMeta, default: [])
+                meta.removeAll { $0.medicationId == medication.id }
+                meta.append(contentsOf: event.medicationMeta.filter { $0.medicationId == medication.id })
+                try store.save(meta, to: .medicationMeta)
+            }
+        } else {
+            var remote = try store.load([ScopedMedication].self, from: .remoteMedications, default: [])
+            remote.removeAll { $0.ownerId == ownerId && $0.medication.id == medication.id }
+            if event.type != "program_deleted" {
+                remote.append(ScopedMedication(ownerId: ownerId, medication: medication, medicationMeta: event.medicationMeta))
+            }
+            try store.save(remote, to: .remoteMedications)
         }
 
-        ordering[orderingKey] = ProgramOrderingEntry(
-            revision: event.revision,
-            actorTopic: event.actorTopic,
-            eventId: event.eventId,
-            timestamp: event.timestamp
-        )
+        ordering[orderingKey] = orderEntry(event)
         try store.save(ordering, to: .programOrdering)
     }
 
     private func applyProgramRule(_ event: DoseEvent) throws {
-        guard let medication = event.medications.first, !medication.id.isEmpty else { return }
-        var rules = try store.load([ProgramRule].self, from: .programRules, default: [])
-        let rule = ProgramRule(medicationId: medication.id, times: medication.times, enabled: true)
-        if let index = rules.firstIndex(where: { $0.medicationId == medication.id }) {
-            rules[index] = rule
-        } else {
+        guard let carrier = event.medications.first, !carrier.id.isEmpty, !carrier.dose.isEmpty else { return }
+        let rule = try ProgramRuleCodec.decode(carrier.dose)
+        guard rule.medicationId == carrier.id else { return }
+        let ownerId = resolvedOwner(event)
+        guard !ownerId.isEmpty else { return }
+
+        let orderingKey = "\(ownerId)|rule|\(carrier.id)"
+        var ordering = try store.load([String: ProgramOrderingEntry].self, from: .programOrdering, default: [:])
+        if let current = ordering[orderingKey], !wins(event, over: current) { return }
+
+        if ownerId == localOwnerId {
+            var rules = try store.load([ProgramRule].self, from: .programRules, default: [])
+            rules.removeAll { $0.medicationId == carrier.id }
             rules.append(rule)
+            try store.save(rules, to: .programRules)
+        } else {
+            var rules = try store.load([ScopedProgramRule].self, from: .remoteProgramRules, default: [])
+            rules.removeAll { $0.ownerId == ownerId && $0.rule.medicationId == carrier.id }
+            rules.append(ScopedProgramRule(ownerId: ownerId, rule: rule))
+            try store.save(rules, to: .remoteProgramRules)
         }
-        try store.save(rules, to: .programRules)
+
+        ordering[orderingKey] = orderEntry(event)
+        try store.save(ordering, to: .programOrdering)
     }
 
     private func applyPresence(_ event: DoseEvent) throws {
@@ -142,7 +168,7 @@ final class RemoteStateReducer {
         var presence = try store.load([String: CirclePresenceEntry].self, from: .circlePresence, default: [:])
         presence[event.actorTopic] = CirclePresenceEntry(
             actorTopic: event.actorTopic,
-            lastSeenAt: event.timestamp,
+            lastSeenAt: max(event.timestamp, Int64(Date().timeIntervalSince1970 * 1000)),
             eventId: event.eventId
         )
         try store.save(presence, to: .circlePresence)
@@ -190,11 +216,20 @@ final class RemoteStateReducer {
             if event.actorTopic != current.actorTopic { return event.actorTopic > current.actorTopic }
             return event.eventId > current.eventId
         }
-        return event.timestamp >= current.timestamp
+        if event.timestamp != current.timestamp { return event.timestamp >= current.timestamp }
+        if event.actorTopic != current.actorTopic { return event.actorTopic > current.actorTopic }
+        return event.eventId > current.eventId
+    }
+
+    private func orderEntry(_ event: DoseEvent) -> ProgramOrderingEntry {
+        ProgramOrderingEntry(revision: event.revision, actorTopic: event.actorTopic, eventId: event.eventId, timestamp: event.timestamp)
+    }
+
+    private func resolvedOwner(_ event: DoseEvent) -> String {
+        event.ownerId.isEmpty ? event.actorTopic : event.ownerId
     }
 
     private func doseKey(_ event: DoseEvent) -> String {
-        let ownerId = event.ownerId.isEmpty ? event.actorTopic : event.ownerId
-        return "\(ownerId)|\(event.scheduledDate)|\(event.time)"
+        "\(resolvedOwner(event))|\(event.scheduledDate)|\(event.time)"
     }
 }
