@@ -16,7 +16,7 @@ actor StockSyncPublisher {
     func publishAll(to targetTopic: String) async throws {
         let target = targetTopic.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !localTopic.isEmpty, !target.isEmpty, target != localTopic else { return }
-        let stocks = try store.load([StockState].self, from: .stock, default: [])
+        let stocks = try effectiveStocks()
         for stock in stocks {
             let payload = StockSyncPayload(
                 ownerId: localTopic,
@@ -30,6 +30,16 @@ actor StockSyncPublisher {
             guard let body = String(data: data, encoding: .utf8) else { continue }
             try await client.publish(topic: localTopic, body: body)
         }
+    }
+
+    private func effectiveStocks() throws -> [StockState] {
+        let legacy = try store.load([StockState].self, from: .stock, default: [])
+        let runtime = try store.load(
+            LocalStockRuntime.self,
+            from: .stockRuntime,
+            default: LocalStockRuntime(stocks: legacy)
+        )
+        return runtime.stocks
     }
 
     private func nextRevision() throws -> Int64 {
