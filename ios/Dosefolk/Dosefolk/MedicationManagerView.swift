@@ -4,6 +4,7 @@ struct MedicationManagerView: View {
     let runtime: DosefolkRuntime
 
     @State private var medications: [Medication] = []
+    @State private var rules: [ProgramRule] = []
     @State private var editing: Medication?
     @State private var showingNew = false
     @State private var errorMessage: String?
@@ -57,13 +58,17 @@ struct MedicationManagerView: View {
         }
         .task { reload() }
         .sheet(isPresented: $showingNew) {
-            MedicationEditorView(runtime: runtime, medication: nil) {
+            MedicationEditorView(runtime: runtime, medication: nil, rule: nil) {
                 showingNew = false
                 reload()
             }
         }
         .sheet(item: $editing) { medication in
-            MedicationEditorView(runtime: runtime, medication: medication) {
+            MedicationEditorView(
+                runtime: runtime,
+                medication: medication,
+                rule: rules.first(where: { $0.medicationId == medication.id })
+            ) {
                 editing = nil
                 reload()
             }
@@ -74,6 +79,7 @@ struct MedicationManagerView: View {
     private func reload() {
         do {
             medications = try runtime.store.load([Medication].self, from: .medications, default: [])
+            rules = try runtime.store.load([ProgramRule].self, from: .programRules, default: [])
             errorMessage = nil
         } catch {
             errorMessage = "İlaçlar yüklenemedi."
@@ -113,14 +119,15 @@ private struct MedicationEditorView: View {
     @State private var busy = false
     @State private var errorMessage: String?
 
-    init(runtime: DosefolkRuntime, medication: Medication?, onSaved: @escaping () -> Void) {
+    init(runtime: DosefolkRuntime, medication: Medication?, rule: ProgramRule?, onSaved: @escaping () -> Void) {
         self.runtime = runtime
         self.medication = medication
         self.onSaved = onSaved
         _name = State(initialValue: medication?.name ?? "")
         _dose = State(initialValue: medication?.dose ?? "")
         _times = State(initialValue: medication?.times ?? [])
-        _weekdays = State(initialValue: [])
+        _weekdays = State(initialValue: rule?.weekdays ?? [])
+        _showAdvanced = State(initialValue: !(rule?.weekdays.isEmpty ?? true))
     }
 
     var body: some View {
@@ -189,14 +196,13 @@ private struct MedicationEditorView: View {
         let labels = [(1, "Pzt"), (2, "Sal"), (3, "Çar"), (4, "Per"), (5, "Cum"), (6, "Cmt"), (7, "Paz")]
         return LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 8) {
             ForEach(labels, id: \.0) { item in
-                Button(item.1) {
-                    if weekdays.contains(item.0) {
-                        weekdays.remove(item.0)
-                    } else {
-                        weekdays.insert(item.0)
-                    }
+                if weekdays.contains(item.0) {
+                    Button(item.1) { weekdays.remove(item.0) }
+                        .buttonStyle(.borderedProminent)
+                } else {
+                    Button(item.1) { weekdays.insert(item.0) }
+                        .buttonStyle(.bordered)
                 }
-                .buttonStyle(weekdays.contains(item.0) ? .borderedProminent : .bordered)
             }
         }
     }
