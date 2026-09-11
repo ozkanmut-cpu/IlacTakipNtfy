@@ -16,6 +16,7 @@ object OrkoBridgeSelfTest {
     private const val KEY_TOKEN = "token"
     private const val KEY_SENT_AT = "sent_at"
     private const val KEY_ACK_AT = "ack_at"
+    private const val TIMEOUT_MS = 6_000L
 
     data class Status(
         val token: String = "",
@@ -24,6 +25,8 @@ object OrkoBridgeSelfTest {
     ) {
         val acknowledged: Boolean get() = token.isNotBlank() && ackAtMs >= sentAtMs && sentAtMs > 0L
         val pending: Boolean get() = token.isNotBlank() && sentAtMs > 0L && !acknowledged
+        fun timedOut(nowMs: Long = System.currentTimeMillis()): Boolean =
+            pending && nowMs - sentAtMs >= TIMEOUT_MS
     }
 
     fun send(context: Context): Status {
