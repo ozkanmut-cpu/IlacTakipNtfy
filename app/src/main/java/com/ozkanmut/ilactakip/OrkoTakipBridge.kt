@@ -42,12 +42,14 @@ object OrkoTakipBridge {
         val hasInsulin: Boolean
     )
 
+    internal fun operationFor(eventType: String): String? = when (eventType) {
+        "taken", "conflict_resolved_taken" -> OP_SET
+        "undo_taken", "missed", "conflict_resolved_missed" -> OP_CLEAR
+        else -> null
+    }
+
     fun observePersistedEvent(context: Context, event: DoseEvent) {
-        val operation = when (event.type) {
-            "taken", "conflict_resolved_taken" -> OP_SET
-            "undo_taken", "missed", "conflict_resolved_missed" -> OP_CLEAR
-            else -> return
-        }
+        val operation = operationFor(event.type) ?: return
 
         val localOwner = OwnerScopeStore.localOwnerId(context)
         if (event.ownerId.isNotBlank() && event.ownerId != localOwner) return
@@ -130,14 +132,11 @@ object OrkoTakipBridge {
         if (morning.getOrNull(0)?.first == target) return Anchor.MORNING_FIRST_GROUP
         if (morning.getOrNull(1)?.first == target) return Anchor.MORNING_SECOND_POST_MEAL_GROUP
 
-        // Bedtime is inferred semantically from the latest insulin-containing
-        // scheduled group at/after 20:00. Manual mappings can override this safely.
         val bedtime = parsed.lastOrNull {
             it.second.hasInsulin && !it.first.isBefore(LocalTime.of(20, 0))
         }
         if (bedtime?.first == target) return Anchor.BEDTIME_TOUJEO
 
-        // Dinner anchor is the latest evening group other than the bedtime insulin group.
         val evening = parsed.filter {
             !it.first.isBefore(LocalTime.of(16, 0)) && it.first != bedtime?.first
         }
