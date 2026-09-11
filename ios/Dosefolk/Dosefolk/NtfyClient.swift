@@ -5,6 +5,12 @@ enum NtfyClientError: Error, Equatable {
     case blocked
     case invalidResponse
     case http(Int)
+    case replayTruncated
+}
+
+struct NtfyPollResult: Equatable {
+    let envelopes: [SyncEnvelope]
+    let newestMessageID: String?
 }
 
 final class NtfyClient {
@@ -40,7 +46,7 @@ final class NtfyClient {
         rateGate.clearAfterSuccess()
     }
 
-    func poll(topics: [String], since: String) async throws -> [SyncEnvelope] {
+    func poll(topics: [String], since: String) async throws -> NtfyPollResult {
         guard let url = NtfyEndpoint.pollURL(topics: topics, since: since) else { throw NtfyClientError.invalidURL }
         var request = URLRequest(url: url, timeoutInterval: 15)
         request.httpMethod = "GET"
@@ -49,11 +55,19 @@ final class NtfyClient {
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw NtfyClientError.invalidResponse }
         guard (200...299).contains(http.statusCode) else { throw NtfyClientError.http(http.statusCode) }
+        if NtfyReplayGuard.isTruncated(http.value(forHTTPHeaderField: "X-Messages-Truncated")) {
+            throw NtfyClientError.replayTruncated
+        }
 
         let decoder = JSONDecoder()
-        return String(decoding: data, as: UTF8.self)
+        let envelopes = String(decoding: data, as: UTF8.self)
             .split(whereSeparator: \.isNewline)
             .compactMap { try? decoder.decode(SyncEnvelope.self, from: Data($0.utf8)) }
+        let newestMessageID = envelopes.reduce(nil as String?) { current, envelope in
+            guard envelope.event == "message", let id = envelope.id, !id.isEmpty else { return current }
+            return id
+        }
+        return NtfyPollResult(envelopes: envelopes, newestMessageID: newestMessageID)
     }
 
     private func addAuthorization(to request: inout URLRequest) throws {
