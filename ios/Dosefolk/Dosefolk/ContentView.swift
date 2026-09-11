@@ -5,8 +5,12 @@ struct ContentView: View {
     let runtime: DosefolkRuntime?
     let startupError: String?
 
+    @Environment(\.scenePhase) private var scenePhase
     @State private var notificationStatus: UNAuthorizationStatus?
     @State private var notificationError: String?
+
+    private let timeZoneDidChange = Notification.Name("NSSystemTimeZoneDidChangeNotification")
+    private let calendarDayDidChange = Notification.Name("NSCalendarDayChangedNotification")
 
     var body: some View {
         NavigationStack {
@@ -55,6 +59,19 @@ struct ContentView: View {
             .task {
                 runtime?.start()
                 await refreshNotificationStatus()
+            }
+            .onChange(of: scenePhase) { _, newPhase in
+                guard newPhase == .active else { return }
+                Task {
+                    await refreshNotificationStatus()
+                    runtime?.programDidChange()
+                }
+            }
+            .onReceive(NotificationCenter.default.publisher(for: timeZoneDidChange)) { _ in
+                runtime?.programDidChange()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: calendarDayDidChange)) { _ in
+                runtime?.programDidChange()
             }
         }
     }
