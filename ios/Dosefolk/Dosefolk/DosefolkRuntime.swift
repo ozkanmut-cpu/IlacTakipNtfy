@@ -12,12 +12,27 @@ final class DosefolkRuntime {
     let doseCorrectionService: DoseCorrectionService
     let notificationRouter: DoseNotificationRouter
     let notificationScheduler: DoseNotificationScheduler
+    private let stockSyncHandler: () async throws -> Void
 
     init(settings: AppSettings = AppSettings(), store: LocalStore? = nil) throws {
         self.settings = settings
         let localTopic = settings.ensureLocalTopic()
         let resolvedStore = try store ?? LocalStore()
         self.store = resolvedStore
+
+        let syncStock: () async throws -> Void = {
+            let peers = try resolvedStore.load([CirclePeer].self, from: .circlePeers, default: [])
+            guard !peers.isEmpty else { return }
+            let stockPublisher = StockSyncPublisher(
+                localTopic: localTopic,
+                displayName: settings.displayName,
+                store: resolvedStore
+            )
+            for peer in peers where !peer.topic.isEmpty && peer.topic != localTopic {
+                try await stockPublisher.publishAll(to: peer.topic)
+            }
+        }
+        self.stockSyncHandler = syncStock
 
         let scheduler = DoseNotificationScheduler(store: resolvedStore)
         self.notificationScheduler = scheduler
@@ -43,13 +58,15 @@ final class DosefolkRuntime {
         let doseActionService = DoseActionService(
             store: resolvedStore,
             publisher: publisher,
-            stockEngine: stockEngine
+            stockEngine: stockEngine,
+            onStockChanged: syncStock
         )
         self.doseActionService = doseActionService
         self.doseCorrectionService = DoseCorrectionService(
             store: resolvedStore,
             publisher: publisher,
-            stockEngine: stockEngine
+            stockEngine: stockEngine,
+            onStockChanged: syncStock
         )
         self.notificationRouter = DoseNotificationRouter(store: resolvedStore, service: doseActionService)
 
@@ -114,14 +131,14 @@ final class DosefolkRuntime {
             lowThreshold: max(0, lowThreshold),
             updatedAt: now
         ))
-        try await publishStockToCircle()
+        try await stockSyncHandler()
     }
 
     @discardableResult
     func openNewBox(medicationID: String) async throws -> StockState? {
         let updated = try await localStockEngine.openNewBox(medicationID: medicationID)
         if updated != nil {
-            try await publishStockToCircle()
+            try await stockSyncHandler()
         }
         return updated
     }
@@ -132,18 +149,5 @@ final class DosefolkRuntime {
         coordinator.stop()
         coordinator.start()
         return peer
-    }
-
-    private func publishStockToCircle() async throws {
-        let peers = try store.load([CirclePeer].self, from: .circlePeers, default: [])
-        guard !peers.isEmpty else { return }
-        let publisher = StockSyncPublisher(
-            localTopic: settings.localTopic,
-            displayName: settings.displayName,
-            store: store
-        )
-        for peer in peers where !peer.topic.isEmpty && peer.topic != settings.localTopic {
-            try await publisher.publishAll(to: peer.topic)
-        }
     }
 }
