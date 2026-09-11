@@ -82,4 +82,24 @@ final class LocalStockEngineTests: XCTestCase {
         let remaining = try await engine.all().first?.remainingDoses
         XCTAssertEqual(remaining, 8)
     }
+
+    func testOpenNewBoxAddsExactlyOnePack() async throws {
+        let store = try makeStore()
+        let engine = LocalStockEngine(store: store)
+        try await engine.configure(StockState(
+            medicationId: "med-1",
+            medicationName: "Test",
+            remainingDoses: 3,
+            packSize: 10,
+            lowThreshold: 5,
+            updatedAt: 1
+        ))
+
+        let updated = try await engine.openNewBox(medicationID: "med-1", nowMillis: 99)
+
+        XCTAssertEqual(updated?.remainingDoses, 13)
+        XCTAssertEqual(updated?.updatedAt, 99)
+        let persisted = try await engine.stock(for: "med-1")
+        XCTAssertEqual(persisted?.remainingDoses, 13)
+    }
 }
