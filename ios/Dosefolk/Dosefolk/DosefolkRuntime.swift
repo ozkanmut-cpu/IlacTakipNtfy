@@ -6,6 +6,8 @@ final class DosefolkRuntime {
     let transport: CircleTransport
     let coordinator: CircleSyncCoordinator
     let pairingService: CirclePairingService
+    let doseActionService: DoseActionService
+    let notificationRouter: DoseNotificationRouter
 
     init(settings: AppSettings = AppSettings(), store: LocalStore? = nil) throws {
         self.settings = settings
@@ -22,6 +24,10 @@ final class DosefolkRuntime {
         )
 
         let publisher = ProtocolEventPublisher(settings: settings, store: resolvedStore)
+        let doseActionService = DoseActionService(store: resolvedStore, publisher: publisher)
+        self.doseActionService = doseActionService
+        self.notificationRouter = DoseNotificationRouter(store: resolvedStore, service: doseActionService)
+
         let lifecycle = CirclePairingLifecycle(localTopic: localTopic, store: resolvedStore)
         let initialSync = CircleInitialSyncPublisher(
             store: resolvedStore,
@@ -42,6 +48,7 @@ final class DosefolkRuntime {
     }
 
     func start() {
+        notificationRouter.activate()
         coordinator.start()
     }
 
