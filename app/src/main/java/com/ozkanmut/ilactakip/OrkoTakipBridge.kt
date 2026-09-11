@@ -10,6 +10,10 @@ import java.time.LocalTime
  * Dosefolk remains the source of truth for medication status. Only a semantic
  * glucose timing anchor, the actual event timestamp and stable event identity
  * leave Dosefolk; medication names/doses are deliberately not broadcast.
+ *
+ * The bridge is state-aware: a taken event SETs an anchor, while undo/missed
+ * correction events CLEAR the corresponding anchor so Orko Takip cannot keep a
+ * stale glucose plan after a medication correction.
  */
 object OrkoTakipBridge {
     const val ACTION_MEDICATION_TAKEN = "com.dosefolk.action.ORKO_MEDICATION_TAKEN"
@@ -20,6 +24,10 @@ object OrkoTakipBridge {
     const val EXTRA_TAKEN_AT_MS = "takenAtMs"
     const val EXTRA_SCHEDULED_DATE = "scheduledDate"
     const val EXTRA_SCHEDULED_TIME = "scheduledTime"
+    const val EXTRA_OPERATION = "operation"
+
+    const val OP_SET = "SET"
+    const val OP_CLEAR = "CLEAR"
 
     enum class Anchor {
         MORNING_FIRST_GROUP,
@@ -35,7 +43,12 @@ object OrkoTakipBridge {
     )
 
     fun observePersistedEvent(context: Context, event: DoseEvent) {
-        if (event.type != "taken") return
+        val operation = when (event.type) {
+            "taken", "conflict_resolved_taken" -> OP_SET
+            "undo_taken", "missed", "conflict_resolved_missed" -> OP_CLEAR
+            else -> return
+        }
+
         val localOwner = OwnerScopeStore.localOwnerId(context)
         if (event.ownerId.isNotBlank() && event.ownerId != localOwner) return
 
@@ -44,8 +57,8 @@ object OrkoTakipBridge {
             DosefolkQaLog.record(
                 context,
                 DosefolkQaLog.Category.SYNC,
-                "orko_bridge_unmapped_taken",
-                mapOf("time" to event.time, "eventId" to event.eventId)
+                "orko_bridge_unmapped_event",
+                mapOf("time" to event.time, "eventId" to event.eventId, "type" to event.type)
             )
             return
         }
@@ -57,6 +70,7 @@ object OrkoTakipBridge {
             .putExtra(EXTRA_TAKEN_AT_MS, event.timestamp)
             .putExtra(EXTRA_SCHEDULED_DATE, event.scheduledDate)
             .putExtra(EXTRA_SCHEDULED_TIME, event.time)
+            .putExtra(EXTRA_OPERATION, operation)
 
         runCatching { context.sendBroadcast(intent) }
             .onSuccess {
@@ -64,7 +78,11 @@ object OrkoTakipBridge {
                     context,
                     DosefolkQaLog.Category.SYNC,
                     "orko_bridge_sent",
-                    mapOf("anchor" to anchor.name, "eventId" to event.eventId)
+                    mapOf(
+                        "anchor" to anchor.name,
+                        "operation" to operation,
+                        "eventId" to event.eventId
+                    )
                 )
             }
             .onFailure {
@@ -72,7 +90,11 @@ object OrkoTakipBridge {
                     context,
                     DosefolkQaLog.Category.ERROR,
                     "orko_bridge_send_failed",
-                    mapOf("anchor" to anchor.name, "error" to it.javaClass.simpleName)
+                    mapOf(
+                        "anchor" to anchor.name,
+                        "operation" to operation,
+                        "error" to it.javaClass.simpleName
+                    )
                 )
             }
     }
