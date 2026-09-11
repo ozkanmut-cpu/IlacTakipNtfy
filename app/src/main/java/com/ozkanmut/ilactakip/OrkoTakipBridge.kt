@@ -78,6 +78,11 @@ object OrkoTakipBridge {
     }
 
     fun resolve(context: Context, eventTime: String): Anchor {
+        OrkoBridgeMappingStore.get(context, eventTime)?.let { return it }
+        return inferredAnchor(context, eventTime)
+    }
+
+    fun inferredAnchor(context: Context, eventTime: String): Anchor {
         val meds = Store.load(context)
         val groups = meds
             .flatMap { med -> med.times.map { time -> time to med } }
@@ -104,7 +109,7 @@ object OrkoTakipBridge {
         if (morning.getOrNull(1)?.first == target) return Anchor.MORNING_SECOND_POST_MEAL_GROUP
 
         // Bedtime is inferred semantically from the latest insulin-containing
-        // scheduled group at/after 20:00. No medication-name matching is used.
+        // scheduled group at/after 20:00. Manual mappings can override this safely.
         val bedtime = parsed.lastOrNull {
             it.second.hasInsulin && !it.first.isBefore(LocalTime.of(20, 0))
         }
