@@ -5,6 +5,7 @@ final class CircleSyncCoordinator {
 
     private let liveStream: NtfyLiveStream
     private let processor: CircleSyncProcessor
+    private let stockProcessor: StockSyncProcessor
     private let eventStore: DoseEventStore
     private let topics: () -> [String]
     private let remoteStateHandler: RemoteStateHandler
@@ -18,10 +19,9 @@ final class CircleSyncCoordinator {
         remoteStateHandler: RemoteStateHandler? = nil
     ) {
         self.liveStream = liveStream
-        self.processor = CircleSyncProcessor(
-            localTopic: localTopic,
-            securityState: CircleSecurityState(store: store)
-        )
+        let securityState = CircleSecurityState(store: store)
+        self.processor = CircleSyncProcessor(localTopic: localTopic, securityState: securityState)
+        self.stockProcessor = StockSyncProcessor(localTopic: localTopic, store: store, securityState: securityState)
         self.eventStore = DoseEventStore(store: store)
         self.topics = topics
         if let remoteStateHandler {
@@ -39,7 +39,7 @@ final class CircleSyncCoordinator {
             await self.liveStream.runReconnecting(
                 topics: { self.topics() },
                 onEnvelope: { envelope in
-                    try? self.process(envelope)
+                    _ = try? self.processAny(envelope)
                 }
             )
         }
@@ -48,6 +48,19 @@ final class CircleSyncCoordinator {
     func stop() {
         task?.cancel()
         task = nil
+    }
+
+    @discardableResult
+    func processAny(_ envelope: SyncEnvelope) throws -> Bool {
+        switch try stockProcessor.process(envelope) {
+        case .applied:
+            return true
+        case .ignored:
+            return false
+        case .notStock:
+            if case .accepted = try process(envelope) { return true }
+            return false
+        }
     }
 
     @discardableResult
