@@ -58,15 +58,10 @@ struct ContentView: View {
 
                 Section("Circle") {
                     if let runtime {
-                        NavigationLink("Birini Circle’a ekle") {
-                            CirclePairingView(
-                                ownPayload: runtime.ownPairingPayload,
-                                addPair: { raw, name in
-                                    try await runtime.addPair(rawPayload: raw, fallbackName: name)
-                                }
-                            )
-                            .padding()
-                            .navigationTitle("Circle")
+                        NavigationLink {
+                            CircleOverviewView(runtime: runtime)
+                        } label: {
+                            Label("Circle", systemImage: "person.2")
                         }
                     } else {
                         Text("Circle başlatılamadı.")
