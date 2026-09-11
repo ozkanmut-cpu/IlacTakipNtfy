@@ -17,19 +17,22 @@ actor DoseActionService {
     private let stockEngine: LocalStockEngine
     private let notifications: DoseNotificationManaging
     private let nowMillis: () -> Int64
+    private let onStockChanged: (() async throws -> Void)?
 
     init(
         store: LocalStore,
         publisher: ProtocolEventPublisher,
         stockEngine: LocalStockEngine? = nil,
         notifications: DoseNotificationManaging = DoseNotificationLifecycle(),
-        nowMillis: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) }
+        nowMillis: @escaping () -> Int64 = { Int64(Date().timeIntervalSince1970 * 1000) },
+        onStockChanged: (() async throws -> Void)? = nil
     ) {
         self.store = store
         self.publisher = publisher
         self.stockEngine = stockEngine ?? LocalStockEngine(store: store)
         self.notifications = notifications
         self.nowMillis = nowMillis
+        self.onStockChanged = onStockChanged
     }
 
     func apply(_ action: DoseUserAction, time: String, scheduledDate: String, medications: [Medication]) async throws -> DoseActionResult {
@@ -57,7 +60,10 @@ actor DoseActionService {
             scheduledDate: scheduledDate,
             snoozeUntil: snoozeUntil
         )
-        _ = try await stockEngine.apply(event)
+        let changedStock = try await stockEngine.apply(event)
+        if !changedStock.isEmpty {
+            try await onStockChanged?()
+        }
         if action == .snooze {
             notifications.snooze(time: time, scheduledDate: scheduledDate, untilMillis: snoozeUntil)
         } else {
