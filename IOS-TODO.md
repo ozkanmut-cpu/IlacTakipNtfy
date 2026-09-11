@@ -35,18 +35,18 @@ Amaç: Android Dosefolk ile aynı Circle protokolünü kullanan, native Swift/Sw
 
 ## Milestone 3 — İlaç motoru ve bildirimler
 
-- [ ] Dose state engine'i Swift'e taşı.
-- [ ] Pending / Taken / Snoozed / Missed / correction davranışlarını Android ile eşleştir.
-- [ ] Event idempotency uygula; aynı event ikinci kez doz/stock değiştirmemeli.
-- [ ] Local notification altyapısını `UNUserNotificationCenter` ile kur.
-- [ ] Notification action olarak Taken / Snooze / Missed ekle.
-- [ ] Kullanıcının uygulamayı açmadan aksiyon alabilmesini sağla.
-- [ ] İlaç programlarını önceden schedule et.
-- [ ] Program değişikliğinde notification reconciliation yap.
-- [ ] Timezone değişiminde programları yeniden hesapla.
-- [ ] Snooze için yeni local notification schedule et.
-- [ ] Stock azaltma ve stock sync mantığını taşı.
-- [ ] Undo/correction akışını taşı.
+- [x] Dose state engine'i Swift'e taşı.
+- [x] Pending / Taken / Snoozed / Missed / correction davranışlarını Android ile eşleştir.
+- [x] Event idempotency uygula; aynı event ikinci kez doz/stock değiştirmemeli.
+- [x] Local notification altyapısını `UNUserNotificationCenter` ile kur.
+- [x] Notification action olarak Taken / Snooze / Missed ekle.
+- [x] Kullanıcının uygulamayı açmadan aksiyon alabilmesini sağla.
+- [x] İlaç programlarını önceden schedule et.
+- [x] Program değişikliğinde notification reconciliation yap.
+- [x] Timezone değişiminde programları yeniden hesapla.
+- [x] Snooze için yeni local notification schedule et.
+- [x] Stock azaltma ve stock sync mantığını taşı.
+- [x] Undo/correction akışını taşı.
 
 ## Milestone 4 — Native iOS UX
 
