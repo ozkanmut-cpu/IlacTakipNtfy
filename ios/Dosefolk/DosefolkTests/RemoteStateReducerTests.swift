@@ -72,6 +72,20 @@ final class RemoteStateReducerTests: XCTestCase {
         XCTAssertTrue(capabilities.editProgram.contains("publisher-topic"))
     }
 
+    func testOlderCapabilityGrantCannotReplayAfterNewerRevoke() throws {
+        var grant = event(type: "capability_edit_program_granted", eventId: "grant", revision: 4)
+        grant.timestamp = 100
+        var revoke = event(type: "capability_edit_program_revoked", eventId: "revoke", revision: 5)
+        revoke.timestamp = 200
+
+        try reducer.apply(grant)
+        try reducer.apply(revoke)
+        try reducer.apply(grant)
+
+        let capabilities = try store.load(RemoteCapabilityState.self, from: .remoteCapabilities, default: RemoteCapabilityState())
+        XCTAssertFalse(capabilities.editProgram.contains("publisher-topic"))
+    }
+
     func testRemoteRevokeFencesPeerAndClearsPeerState() throws {
         try store.save([CirclePeer(id: "peer", name: "Peer", topic: "publisher-topic")], to: .circlePeers)
         try reducer.apply(event(type: "circle_presence", eventId: "presence"))
