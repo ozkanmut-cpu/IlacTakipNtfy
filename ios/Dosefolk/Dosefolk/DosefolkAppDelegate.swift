@@ -1,9 +1,17 @@
 import UIKit
 
+enum APNsRegistrationState: Equatable {
+    case idle
+    case waitingForProvisioning
+    case registered
+    case failed
+}
+
 final class DosefolkAppDelegate: NSObject, UIApplicationDelegate {
     static var onDeviceToken: ((Data) -> Void)?
     static var onBackgroundWake: (() async -> Bool)?
     static private(set) var latestDeviceToken: Data?
+    static private(set) var apnsRegistrationState: APNsRegistrationState = .idle
 
     func application(
         _ application: UIApplication,
@@ -29,6 +37,10 @@ final class DosefolkAppDelegate: NSObject, UIApplicationDelegate {
     static func retryDeviceTokenRegistration() {
         guard let latestDeviceToken else { return }
         onDeviceToken?(latestDeviceToken)
+    }
+
+    static func markAPNsRegistration(_ state: APNsRegistrationState) {
+        apnsRegistrationState = state
     }
 
     func application(
