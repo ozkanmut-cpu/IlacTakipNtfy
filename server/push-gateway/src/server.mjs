@@ -3,6 +3,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { APNsClient } from './apns.mjs';
+import { loadGatewaySecrets } from './local-secrets.mjs';
 
 const cfg = {
   host: process.env.HOST || '127.0.0.1',
@@ -12,6 +13,8 @@ const cfg = {
   internalSecret: process.env.INTERNAL_WAKE_SECRET || '',
   bundleId: process.env.APNS_BUNDLE_ID || 'com.ozkanmut.dosefolk'
 };
+Object.assign(cfg, await loadGatewaySecrets(cfg));
+
 const apns = new APNsClient({
   teamId: process.env.APNS_TEAM_ID || '',
   keyId: process.env.APNS_KEY_ID || '',
