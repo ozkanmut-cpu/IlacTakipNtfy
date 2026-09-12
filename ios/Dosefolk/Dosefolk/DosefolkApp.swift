@@ -24,7 +24,14 @@ struct DosefolkApp: App {
                         subscriptions: subscriptions,
                         bundleId: Bundle.main.bundleIdentifier ?? "com.ozkanmut.dosefolk"
                     )
-                    _ = try? await PushGatewayClient().register(payload)
+                    do {
+                        let registered = try await PushGatewayClient().register(payload)
+                        DosefolkAppDelegate.markAPNsRegistration(
+                            registered ? .registered : .waitingForProvisioning
+                        )
+                    } catch {
+                        DosefolkAppDelegate.markAPNsRegistration(.failed)
+                    }
                 }
             }
             DosefolkAppDelegate.onBackgroundWake = {
