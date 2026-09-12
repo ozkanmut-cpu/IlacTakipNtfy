@@ -19,6 +19,55 @@ final class APNsRegistrationTests: XCTestCase {
         XCTAssertEqual(payload.subscriptions, ["dosefolk-local", "dosefolk-peer"])
     }
 
+    func testProvisioningRequestContainsOnlyInstallAndTicket() throws {
+        let url = try XCTUnwrap(URL(string: "https://example.invalid/v1/provision"))
+        let request = try PushGatewayClient.makeProvisioningRequest(
+            installId: "install-1234",
+            ticket: "ticket-1",
+            url: url
+        )
+
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        XCTAssertNil(request.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertEqual(request.timeoutInterval, 10)
+        XCTAssertEqual(
+            try JSONDecoder().decode(PushGatewayProvisionRequest.self, from: try XCTUnwrap(request.httpBody)),
+            PushGatewayProvisionRequest(installId: "install-1234", ticket: "ticket-1")
+        )
+    }
+
+    func testProvisioningResponseRequiresMatchingInstallAndCredential() throws {
+        let valid = try JSONEncoder().encode(PushGatewayProvisionResponse(
+            installId: "install-1234",
+            credential: "credential-1"
+        ))
+        XCTAssertEqual(
+            try PushGatewayClient.decodeProvisioningResponse(valid, expectedInstallId: "install-1234"),
+            "credential-1"
+        )
+
+        let wrongInstall = try JSONEncoder().encode(PushGatewayProvisionResponse(
+            installId: "install-other",
+            credential: "credential-1"
+        ))
+        XCTAssertThrowsError(
+            try PushGatewayClient.decodeProvisioningResponse(wrongInstall, expectedInstallId: "install-1234")
+        ) { error in
+            XCTAssertEqual(error as? PushGatewayError, .invalidResponse)
+        }
+
+        let emptyCredential = try JSONEncoder().encode(PushGatewayProvisionResponse(
+            installId: "install-1234",
+            credential: "   "
+        ))
+        XCTAssertThrowsError(
+            try PushGatewayClient.decodeProvisioningResponse(emptyCredential, expectedInstallId: "install-1234")
+        ) { error in
+            XCTAssertEqual(error as? PushGatewayError, .invalidResponse)
+        }
+    }
+
     func testRegistrationRequestCarriesCredentialAndPayload() throws {
         let payload = APNsRegistrationPayload(
             installId: "install-1",
