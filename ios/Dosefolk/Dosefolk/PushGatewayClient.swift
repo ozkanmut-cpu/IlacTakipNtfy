@@ -19,18 +19,31 @@ actor PushGatewayClient {
         self.keychain = keychain
     }
 
-    func register(_ payload: APNsRegistrationPayload) async throws -> Bool {
-        guard let credential = try keychain.string(for: SecureCredentialKey.provisioningSecret),
-              !credential.isEmpty else {
-            return false
-        }
-        guard let url = PushGatewayEndpoint.registrationURL else { throw PushGatewayError.invalidURL }
+    static func makeRegistrationRequest(
+        payload: APNsRegistrationPayload,
+        credential: String,
+        url: URL
+    ) throws -> URLRequest {
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = 10
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(credential)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONEncoder().encode(payload)
+        return request
+    }
+
+    func register(_ payload: APNsRegistrationPayload) async throws -> Bool {
+        guard let credential = try keychain.string(for: SecureCredentialKey.provisioningSecret),
+              !credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+        guard let url = PushGatewayEndpoint.registrationURL else { throw PushGatewayError.invalidURL }
+        let request = try Self.makeRegistrationRequest(
+            payload: payload,
+            credential: credential,
+            url: url
+        )
         let (_, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(status) else { throw PushGatewayError.rejected(status) }
