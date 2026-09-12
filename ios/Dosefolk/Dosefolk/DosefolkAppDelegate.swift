@@ -13,6 +13,10 @@ final class DosefolkAppDelegate: NSObject, UIApplicationDelegate {
         return true
     }
 
+    func applicationDidBecomeActive(_ application: UIApplication) {
+        Self.retryDeviceTokenRegistration()
+    }
+
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         Self.handleDeviceToken(deviceToken)
     }
