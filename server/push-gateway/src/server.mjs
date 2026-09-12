@@ -42,6 +42,9 @@ function validInstallId(value) {
 function hasInternalAccess(req) {
   return safeEqual(String(req.headers['x-internal-secret'] || ''), cfg.internalSecret);
 }
+function provisioningReady() {
+  return Boolean(cfg.installHmacKey && cfg.internalSecret);
+}
 async function readJson(req) {
   const chunks = []; let size = 0;
   for await (const chunk of req) { size += chunk.length; if (size > 65536) throw new Error('body_too_large'); chunks.push(chunk); }
@@ -53,15 +56,15 @@ function json(res, status, body) {
   res.end(data);
 }
 async function isReady() {
-  return Boolean(cfg.installHmacKey && cfg.internalSecret && await apns.ready());
+  return Boolean(provisioningReady() && await apns.ready());
 }
 
 const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && req.url === '/health') return json(res, 200, { ok: true, ready: await isReady() });
-    if (!(await isReady())) return json(res, 503, { error: 'not_provisioned' });
 
     if (req.method === 'POST' && req.url === '/internal/provision') {
+      if (!provisioningReady()) return json(res, 503, { error: 'not_provisioned' });
       if (!hasInternalAccess(req)) return json(res, 401, { error: 'unauthorized' });
       const body = await readJson(req);
       if (!validInstallId(body.installId)) return json(res, 400, { error: 'invalid_install_id' });
@@ -70,6 +73,8 @@ const server = http.createServer(async (req, res) => {
         credential: installToken(body.installId)
       });
     }
+
+    if (!(await isReady())) return json(res, 503, { error: 'not_provisioned' });
 
     if (req.method === 'POST' && req.url === '/v1/register') {
       const body = await readJson(req);
