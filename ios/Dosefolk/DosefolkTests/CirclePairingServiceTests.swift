@@ -20,6 +20,26 @@ final class CirclePairingServiceTests: XCTestCase {
         XCTAssertEqual(try context.store.load([CirclePeer].self, from: .circlePeers, default: []), [peer])
     }
 
+    func testPairingSignalsSubscriptionChangeAfterPeerIsStored() async throws {
+        let context = try TestContext()
+        var observedTopics: [String] = []
+        let service = CirclePairingService(
+            settings: context.settings,
+            store: context.store,
+            prepareRePair: { _ in },
+            completeRePair: { _ in },
+            initialSync: { _ in },
+            subscriptionsChanged: {
+                observedTopics = (try? CircleTransport(settings: context.settings, store: context.store).subscriptionTopics()) ?? []
+            },
+            makeID: { "peer-id" }
+        )
+
+        _ = try await service.add(rawPayload: "dosefolk://pair?topic=dosefolk-peer&name=Ayse")
+
+        XCTAssertEqual(observedTopics, ["dosefolk-local", "dosefolk-peer"])
+    }
+
     func testRevokedPeerDrainsBeforeFenceIsCleared() async throws {
         let context = try TestContext()
         try CircleSecurityState(store: context.store).revoke(actorTopic: "dosefolk-peer")
