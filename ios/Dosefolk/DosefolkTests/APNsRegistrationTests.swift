@@ -117,6 +117,13 @@ final class APNsRegistrationTests: XCTestCase {
         DosefolkAppDelegate.markAPNsRegistration(.idle)
     }
 
+    func testAPNsTokenRegistrationFailureMarksStateFailed() {
+        DosefolkAppDelegate.markAPNsRegistration(.idle)
+        DosefolkAppDelegate.handleDeviceTokenRegistrationFailure()
+        XCTAssertEqual(DosefolkAppDelegate.apnsRegistrationState, .failed)
+        DosefolkAppDelegate.markAPNsRegistration(.idle)
+    }
+
     func testSilentWakePayloadRecognition() {
         XCTAssertTrue(DosefolkAppDelegate.isWakePayload(["aps": ["content-available": 1]]))
         XCTAssertFalse(DosefolkAppDelegate.isWakePayload(["aps": ["alert": "x"]]))
