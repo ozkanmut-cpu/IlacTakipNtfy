@@ -55,11 +55,16 @@ struct DosefolkApp: App {
             return
         }
 
+        let replayGuard = PushGatewayEnrollmentReplayGuard()
+        guard !replayGuard.isConsumed(enrollment) else { return }
+
         Task {
-            _ = try? await PushGatewayClient().provision(
+            if (try? await PushGatewayClient().provision(
                 installId: enrollment.installId,
                 ticket: enrollment.ticket
-            )
+            )) == true {
+                replayGuard.markConsumed(enrollment)
+            }
         }
     }
 
