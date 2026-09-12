@@ -65,6 +65,7 @@ struct DosefolkApp: App {
                     ticket: enrollment.ticket
                 )
                 replayGuard.markConsumed(enrollment)
+                DosefolkAppDelegate.retryDeviceTokenRegistration()
             } catch {
                 // Leave the link unconsumed so a transient provisioning failure can be retried.
             }
