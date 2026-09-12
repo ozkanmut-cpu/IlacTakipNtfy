@@ -48,9 +48,25 @@ struct DosefolkApp: App {
         }
     }
 
+    private func handleEnrollmentURL(_ url: URL) {
+        guard let runtime,
+              let enrollment = PushGatewayEnrollmentLink.parse(url),
+              enrollment.installId == runtime.settings.ensureInstallId() else {
+            return
+        }
+
+        Task {
+            _ = try? await PushGatewayClient().provision(
+                installId: enrollment.installId,
+                ticket: enrollment.ticket
+            )
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView(runtime: runtime, startupError: startupError)
+                .onOpenURL(perform: handleEnrollmentURL)
         }
     }
 }
