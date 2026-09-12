@@ -91,6 +91,19 @@ final class APNsRegistrationTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(APNsRegistrationPayload.self, from: try XCTUnwrap(request.httpBody)), payload)
     }
 
+    func testDeviceTokenCanBeRetriedFromMemory() {
+        let token = Data([0x12, 0x34])
+        var callbacks: [Data] = []
+        DosefolkAppDelegate.onDeviceToken = { callbacks.append($0) }
+        defer { DosefolkAppDelegate.onDeviceToken = nil }
+
+        DosefolkAppDelegate.handleDeviceToken(token)
+        DosefolkAppDelegate.retryDeviceTokenRegistration()
+
+        XCTAssertEqual(callbacks, [token, token])
+        XCTAssertEqual(DosefolkAppDelegate.latestDeviceToken, token)
+    }
+
     func testSilentWakePayloadRecognition() {
         XCTAssertTrue(DosefolkAppDelegate.isWakePayload(["aps": ["content-available": 1]]))
         XCTAssertFalse(DosefolkAppDelegate.isWakePayload(["aps": ["alert": "x"]]))
