@@ -49,6 +49,9 @@ function installToken(installId) {
 function ticketHash(ticket) {
   return createHash('sha256').update(ticket).digest('base64url');
 }
+function enrollmentLink(installId, ticket) {
+  return `dosefolk://enroll?installId=${encodeURIComponent(installId)}&ticket=${encodeURIComponent(ticket)}`;
+}
 function validInstallId(value) {
   return typeof value === 'string' && /^[A-Za-z0-9._-]{8,128}$/.test(value);
 }
@@ -86,7 +89,12 @@ const server = http.createServer(async (req, res) => {
       const store = await loadStore();
       store.enrollments[ticketHash(ticket)] = { installId: body.installId, expiresAt };
       await saveStore(store);
-      return json(res, 200, { installId: body.installId, ticket, expiresAt });
+      return json(res, 200, {
+        installId: body.installId,
+        ticket,
+        expiresAt,
+        enrollmentURL: enrollmentLink(body.installId, ticket)
+      });
     }
 
     if (req.method === 'POST' && req.url === '/v1/provision') {
