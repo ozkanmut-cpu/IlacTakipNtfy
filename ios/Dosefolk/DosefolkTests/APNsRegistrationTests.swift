@@ -19,6 +19,29 @@ final class APNsRegistrationTests: XCTestCase {
         XCTAssertEqual(payload.subscriptions, ["dosefolk-local", "dosefolk-peer"])
     }
 
+    func testRegistrationRequestCarriesCredentialAndPayload() throws {
+        let payload = APNsRegistrationPayload(
+            installId: "install-1",
+            deviceToken: "aabb",
+            localTopic: "dosefolk-local",
+            subscriptions: ["dosefolk-local", "dosefolk-peer"],
+            appBundleId: "com.ozkanmut.dosefolk",
+            environment: "sandbox"
+        )
+        let url = try XCTUnwrap(URL(string: "https://example.invalid/v1/register"))
+        let request = try PushGatewayClient.makeRegistrationRequest(
+            payload: payload,
+            credential: "credential-1",
+            url: url
+        )
+
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer credential-1")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        XCTAssertEqual(request.timeoutInterval, 10)
+        XCTAssertEqual(try JSONDecoder().decode(APNsRegistrationPayload.self, from: try XCTUnwrap(request.httpBody)), payload)
+    }
+
     func testSilentWakePayloadRecognition() {
         XCTAssertTrue(DosefolkAppDelegate.isWakePayload(["aps": ["content-available": 1]]))
         XCTAssertFalse(DosefolkAppDelegate.isWakePayload(["aps": ["alert": "x"]]))
