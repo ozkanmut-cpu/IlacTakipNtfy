@@ -59,7 +59,7 @@ actor ProtocolEventPublisher {
                 "eventId": event.eventId,
                 "eventType": event.type,
                 "topic": topic,
-                "errorType": String(describing: type(of: error))
+                "errorType": String(describing: Swift.type(of: error))
             ])
             throw error
         }
