@@ -17,6 +17,10 @@ targets:
       path: Dosefolk/Info.plist
       properties:
         CFBundleDisplayName: Dosefolk
+        CFBundleURLTypes:
+          - CFBundleURLName: com.ozkanmut.dosefolk.enrollment
+            CFBundleURLSchemes:
+              - dosefolk
         NSCameraUsageDescription: "Dosefolk, Circle eşleştirme QR kodunu taramak için kamerayı kullanır."
         BGTaskSchedulerPermittedIdentifiers:
           - com.ozkanmut.dosefolk.refresh
