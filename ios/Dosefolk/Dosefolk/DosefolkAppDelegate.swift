@@ -3,6 +3,7 @@ import UIKit
 final class DosefolkAppDelegate: NSObject, UIApplicationDelegate {
     static var onDeviceToken: ((Data) -> Void)?
     static var onBackgroundWake: (() async -> Bool)?
+    static private(set) var latestDeviceToken: Data?
 
     func application(
         _ application: UIApplication,
@@ -13,7 +14,17 @@ final class DosefolkAppDelegate: NSObject, UIApplicationDelegate {
     }
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
-        Self.onDeviceToken?(deviceToken)
+        Self.handleDeviceToken(deviceToken)
+    }
+
+    static func handleDeviceToken(_ deviceToken: Data) {
+        latestDeviceToken = deviceToken
+        onDeviceToken?(deviceToken)
+    }
+
+    static func retryDeviceTokenRegistration() {
+        guard let latestDeviceToken else { return }
+        onDeviceToken?(latestDeviceToken)
     }
 
     func application(
