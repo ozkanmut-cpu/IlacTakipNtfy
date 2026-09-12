@@ -93,7 +93,10 @@ final class DosefolkRuntime {
             settings: settings,
             store: resolvedStore,
             lifecycle: lifecycle,
-            initialSyncPublisher: initialSync
+            initialSyncPublisher: initialSync,
+            subscriptionsChanged: {
+                DosefolkAppDelegate.retryDeviceTokenRegistration()
+            }
         )
     }
 
