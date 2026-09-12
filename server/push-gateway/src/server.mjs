@@ -36,6 +36,12 @@ function safeEqual(a, b) {
 function installToken(installId) {
   return createHmac('sha256', cfg.installHmacKey).update(installId).digest('base64url');
 }
+function validInstallId(value) {
+  return typeof value === 'string' && /^[A-Za-z0-9._-]{8,128}$/.test(value);
+}
+function hasInternalAccess(req) {
+  return safeEqual(String(req.headers['x-internal-secret'] || ''), cfg.internalSecret);
+}
 async function readJson(req) {
   const chunks = []; let size = 0;
   for await (const chunk of req) { size += chunk.length; if (size > 65536) throw new Error('body_too_large'); chunks.push(chunk); }
@@ -55,10 +61,20 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/health') return json(res, 200, { ok: true, ready: await isReady() });
     if (!(await isReady())) return json(res, 503, { error: 'not_provisioned' });
 
+    if (req.method === 'POST' && req.url === '/internal/provision') {
+      if (!hasInternalAccess(req)) return json(res, 401, { error: 'unauthorized' });
+      const body = await readJson(req);
+      if (!validInstallId(body.installId)) return json(res, 400, { error: 'invalid_install_id' });
+      return json(res, 200, {
+        installId: body.installId,
+        credential: installToken(body.installId)
+      });
+    }
+
     if (req.method === 'POST' && req.url === '/v1/register') {
       const body = await readJson(req);
       const auth = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-      if (!body.installId || !safeEqual(auth, installToken(body.installId))) return json(res, 401, { error: 'unauthorized' });
+      if (!validInstallId(body.installId) || !safeEqual(auth, installToken(body.installId))) return json(res, 401, { error: 'unauthorized' });
       if (!/^[0-9a-f]{64,256}$/i.test(body.deviceToken || '')) return json(res, 400, { error: 'invalid_device_token' });
       const subscriptions = [...new Set((body.subscriptions || []).filter(x => typeof x === 'string' && /^dosefolk-[A-Za-z0-9_-]+$/.test(x)))];
       const store = await loadStore();
@@ -74,7 +90,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && req.url === '/internal/wake') {
-      if (!safeEqual(String(req.headers['x-internal-secret'] || ''), cfg.internalSecret)) return json(res, 401, { error: 'unauthorized' });
+      if (!hasInternalAccess(req)) return json(res, 401, { error: 'unauthorized' });
       const body = await readJson(req);
       const topics = new Set((body.topics || []).filter(x => typeof x === 'string'));
       const store = await loadStore();
