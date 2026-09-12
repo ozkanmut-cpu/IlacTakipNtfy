@@ -59,11 +59,14 @@ struct DosefolkApp: App {
         guard !replayGuard.isConsumed(enrollment) else { return }
 
         Task {
-            if (try? await PushGatewayClient().provision(
-                installId: enrollment.installId,
-                ticket: enrollment.ticket
-            )) == true {
+            do {
+                try await PushGatewayClient().provision(
+                    installId: enrollment.installId,
+                    ticket: enrollment.ticket
+                )
                 replayGuard.markConsumed(enrollment)
+            } catch {
+                // Leave the link unconsumed so a transient provisioning failure can be retried.
             }
         }
     }
