@@ -29,9 +29,17 @@ final class DosefolkAppDelegate: NSObject, UIApplicationDelegate {
         Self.handleDeviceToken(deviceToken)
     }
 
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        Self.handleDeviceTokenRegistrationFailure()
+    }
+
     static func handleDeviceToken(_ deviceToken: Data) {
         latestDeviceToken = deviceToken
         onDeviceToken?(deviceToken)
+    }
+
+    static func handleDeviceTokenRegistrationFailure() {
+        apnsRegistrationState = .failed
     }
 
     static func retryDeviceTokenRegistration() {
