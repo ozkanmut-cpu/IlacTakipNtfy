@@ -97,6 +97,11 @@ test('enrollment ticket is install-bound and single-use', async t => {
   assert.equal(typeof issued.ticket, 'string');
   assert.ok(issued.ticket.length >= 40);
   assert.ok(issued.expiresAt > Date.now());
+  const enrollmentURL = new URL(issued.enrollmentURL);
+  assert.equal(enrollmentURL.protocol, 'dosefolk:');
+  assert.equal(enrollmentURL.hostname, 'enroll');
+  assert.equal(enrollmentURL.searchParams.get('installId'), installId);
+  assert.equal(enrollmentURL.searchParams.get('ticket'), issued.ticket);
 
   const wrongInstall = await fetch(`${base}/v1/provision`, {
     method: 'POST', headers: { 'content-type': 'application/json' },
