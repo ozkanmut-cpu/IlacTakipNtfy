@@ -10,6 +10,7 @@ final class CirclePairingService {
     typealias PrepareRePair = (_ topic: String) async throws -> Void
     typealias CompleteRePair = (_ topic: String) throws -> Void
     typealias InitialSync = (_ topic: String) async throws -> Void
+    typealias SubscriptionsChanged = () -> Void
 
     private let settings: AppSettings
     private let store: LocalStore
@@ -17,6 +18,7 @@ final class CirclePairingService {
     private let prepareRePair: PrepareRePair
     private let completeRePair: CompleteRePair
     private let initialSync: InitialSync
+    private let subscriptionsChanged: SubscriptionsChanged
     private let makeID: () -> String
 
     init(
@@ -24,6 +26,7 @@ final class CirclePairingService {
         store: LocalStore,
         lifecycle: CirclePairingLifecycle,
         initialSyncPublisher: CircleInitialSyncPublisher,
+        subscriptionsChanged: @escaping SubscriptionsChanged = {},
         makeID: @escaping () -> String = { UUID().uuidString }
     ) {
         self.settings = settings
@@ -32,6 +35,7 @@ final class CirclePairingService {
         self.prepareRePair = { try await lifecycle.prepareRePair(topic: $0) }
         self.completeRePair = { try lifecycle.completeRePair(topic: $0) }
         self.initialSync = { try await initialSyncPublisher.publish(to: $0) }
+        self.subscriptionsChanged = subscriptionsChanged
         self.makeID = makeID
     }
 
@@ -41,6 +45,7 @@ final class CirclePairingService {
         prepareRePair: @escaping PrepareRePair,
         completeRePair: @escaping CompleteRePair,
         initialSync: @escaping InitialSync,
+        subscriptionsChanged: @escaping SubscriptionsChanged = {},
         makeID: @escaping () -> String = { UUID().uuidString }
     ) {
         self.settings = settings
@@ -49,6 +54,7 @@ final class CirclePairingService {
         self.prepareRePair = prepareRePair
         self.completeRePair = completeRePair
         self.initialSync = initialSync
+        self.subscriptionsChanged = subscriptionsChanged
         self.makeID = makeID
     }
 
@@ -75,6 +81,7 @@ final class CirclePairingService {
         let peer = CirclePeer(id: makeID(), name: name, topic: peerTopic)
         peers.append(peer)
         try store.save(peers, to: .circlePeers)
+        subscriptionsChanged()
 
         if wasRevoked {
             try completeRePair(peerTopic)
