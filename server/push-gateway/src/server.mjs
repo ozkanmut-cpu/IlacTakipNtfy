@@ -1,5 +1,5 @@
 import http from 'node:http';
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { APNsClient } from './apns.mjs';
@@ -23,8 +23,15 @@ const apns = new APNsClient({
 });
 
 async function loadStore() {
-  try { return JSON.parse(await readFile(cfg.dataFile, 'utf8')); }
-  catch (error) { if (error.code === 'ENOENT') return { installs: {} }; throw error; }
+  try {
+    const store = JSON.parse(await readFile(cfg.dataFile, 'utf8'));
+    store.installs ||= {};
+    store.enrollments ||= {};
+    return store;
+  } catch (error) {
+    if (error.code === 'ENOENT') return { installs: {}, enrollments: {} };
+    throw error;
+  }
 }
 async function saveStore(store) {
   await mkdir(dirname(cfg.dataFile), { recursive: true });
@@ -38,6 +45,9 @@ function safeEqual(a, b) {
 }
 function installToken(installId) {
   return createHmac('sha256', cfg.installHmacKey).update(installId).digest('base64url');
+}
+function ticketHash(ticket) {
+  return createHash('sha256').update(ticket).digest('base64url');
 }
 function validInstallId(value) {
   return typeof value === 'string' && /^[A-Za-z0-9._-]{8,128}$/.test(value);
@@ -66,15 +76,41 @@ const server = http.createServer(async (req, res) => {
   try {
     if (req.method === 'GET' && req.url === '/health') return json(res, 200, { ok: true, ready: await isReady() });
 
+    if (req.method === 'POST' && req.url === '/internal/enrollment') {
+      if (!provisioningReady()) return json(res, 503, { error: 'not_provisioned' });
+      if (!hasInternalAccess(req)) return json(res, 401, { error: 'unauthorized' });
+      const body = await readJson(req);
+      if (!validInstallId(body.installId)) return json(res, 400, { error: 'invalid_install_id' });
+      const ticket = randomBytes(32).toString('base64url');
+      const expiresAt = Date.now() + 10 * 60 * 1000;
+      const store = await loadStore();
+      store.enrollments[ticketHash(ticket)] = { installId: body.installId, expiresAt };
+      await saveStore(store);
+      return json(res, 200, { installId: body.installId, ticket, expiresAt });
+    }
+
+    if (req.method === 'POST' && req.url === '/v1/provision') {
+      if (!provisioningReady()) return json(res, 503, { error: 'not_provisioned' });
+      const body = await readJson(req);
+      if (!validInstallId(body.installId) || typeof body.ticket !== 'string') return json(res, 400, { error: 'invalid_request' });
+      const store = await loadStore();
+      const hash = ticketHash(body.ticket);
+      const enrollment = store.enrollments[hash];
+      if (!enrollment || enrollment.installId !== body.installId || enrollment.expiresAt < Date.now()) {
+        if (enrollment) { delete store.enrollments[hash]; await saveStore(store); }
+        return json(res, 401, { error: 'invalid_or_expired_ticket' });
+      }
+      delete store.enrollments[hash];
+      await saveStore(store);
+      return json(res, 200, { installId: body.installId, credential: installToken(body.installId) });
+    }
+
     if (req.method === 'POST' && req.url === '/internal/provision') {
       if (!provisioningReady()) return json(res, 503, { error: 'not_provisioned' });
       if (!hasInternalAccess(req)) return json(res, 401, { error: 'unauthorized' });
       const body = await readJson(req);
       if (!validInstallId(body.installId)) return json(res, 400, { error: 'invalid_install_id' });
-      return json(res, 200, {
-        installId: body.installId,
-        credential: installToken(body.installId)
-      });
+      return json(res, 200, { installId: body.installId, credential: installToken(body.installId) });
     }
 
     if (!(await isReady())) return json(res, 503, { error: 'not_provisioned' });
