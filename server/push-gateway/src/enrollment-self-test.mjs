@@ -27,6 +27,17 @@ const issued = await post('/internal/enrollment', { installId }, {
 });
 
 const ticket = typeof issued.body.ticket === 'string' ? issued.body.ticket : '';
+let enrollmentURLValid = false;
+try {
+  const enrollmentURL = new URL(String(issued.body.enrollmentURL || ''));
+  enrollmentURLValid = enrollmentURL.protocol === 'dosefolk:'
+    && enrollmentURL.hostname === 'enroll'
+    && enrollmentURL.searchParams.get('installId') === installId
+    && enrollmentURL.searchParams.get('ticket') === ticket;
+} catch {
+  enrollmentURLValid = false;
+}
+
 const redeemed = ticket
   ? await post('/v1/provision', { installId, ticket })
   : { status: 0, body: {} };
@@ -44,6 +55,7 @@ const replay = ticket
   : { status: 0, body: {} };
 
 const ok = issued.status === 200
+  && enrollmentURLValid
   && redeemed.status === 200
   && credentialValid
   && replay.status === 401;
@@ -51,6 +63,7 @@ const ok = issued.status === 200
 console.log(JSON.stringify({
   ok,
   issueStatus: issued.status,
+  enrollmentURLValid,
   redeemStatus: redeemed.status,
   credentialValid,
   credentialLength: actual.length,
