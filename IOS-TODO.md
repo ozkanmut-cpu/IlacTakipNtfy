@@ -66,23 +66,23 @@ Amaç: Android Dosefolk ile aynı Circle protokolünü kullanan, native Swift/Sw
 
 ## Milestone 5 — Gerçek zamanlı background mimarisi
 
-- [ ] iOS background kısıtlarını ntfy stream'den bağımsız ele al.
-- [ ] APNs push wake-up mimarisini tasarla.
-- [ ] VDS üzerinde iOS push gateway/provisioning servisini oluştur.
-- [ ] Cihaz APNs token registration akışını oluştur.
-- [ ] Circle event geldiğinde ilgili iOS cihazını APNs ile uyandır.
-- [ ] ntfy'yi event/protocol source of truth olarak koru.
-- [ ] BackgroundTasks ile reconciliation/fallback mekanizmasını uygula.
+- [x] iOS background kısıtlarını ntfy stream'den bağımsız ele al.
+- [x] APNs push wake-up mimarisini tasarla.
+- [x] VDS üzerinde iOS push gateway/provisioning servisini oluştur.
+- [x] Cihaz APNs token registration akışını oluştur.
+- [x] Circle event geldiğinde ilgili iOS cihazını APNs ile uyandır.
+- [x] ntfy'yi event/protocol source of truth olarak koru.
+- [x] BackgroundTasks ile reconciliation/fallback mekanizmasını uygula.
 - [ ] Uygulama force-quit, ekran kilitli ve uzun süre background senaryolarını fiziksel cihazda test et.
 
 ## Milestone 6 — ntfy production security
 
 - [ ] Anonymous/open ntfy kullanımını kaldıracak credential mimarisini oluştur.
-- [ ] Install başına runtime-provisioned credential/token üret.
+- [x] Install başına runtime-provisioned credential/token üret.
 - [x] iOS credential'ını Keychain'de sakla.
 - [ ] Android credential'ını Android Keystore ile güvenli sakla.
 - [x] Public GitHub reposuna hiçbir static secret/token koyma.
-- [ ] Server-side provisioning/bootstrap oluştur.
+- [x] Server-side provisioning/bootstrap oluştur.
 - [ ] ntfy `auth-file`/uygun auth yapısını etkinleştir.
 - [ ] `auth-default-access: deny-all` geçişini Android + iOS auth hazır olduğunda aynı rollout içinde yap.
 - [ ] Topic bazlı minimum yetki/ACL modelini uygula.
