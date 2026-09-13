@@ -7,10 +7,14 @@ This checklist captures the remaining Apple-account-side work required before th
 - App name: `Dosefolk`
 - Bundle identifier: `com.ozkanmut.dosefolk`
 - Minimum iOS version: `17.0`
+- Marketing version: `1.0.0`
+- Build number: `1`
 - Background task identifier: `com.ozkanmut.dosefolk.refresh`
 - URL scheme: `dosefolk`
 - Push entitlement: `aps-environment`
 - Background modes: `fetch`, `remote-notification`
+
+The iOS CI validates that the Release archive contains `CFBundleShortVersionString = 1.0.0` and `CFBundleVersion = 1`. Increment `CURRENT_PROJECT_VERSION` before each subsequent App Store Connect/TestFlight upload; keep `MARKETING_VERSION` aligned with the intended public release version.
 
 ## Apple Developer portal
 
