@@ -96,8 +96,8 @@ Amaç: Android Dosefolk ile aynı Circle protokolünü kullanan, native Swift/Sw
 - [x] Topic/token/secret değerlerini mask/hash et.
 - [x] İlaç adı, doz, notification body veya protokol payload'ını QA loguna yazma.
 - [x] QA logunu yalnız uygulamaya ait özel dizinde tut.
-- [ ] Güvenli Share Sheet ile QA log export ekle.
-- [ ] Android ve iOS loglarını event ID üzerinden korele edilebilir hale getir.
+- [x] Güvenli Share Sheet ile QA log export ekle.
+- [x] Android ve iOS loglarını event ID üzerinden korele edilebilir hale getir.
 
 ## Milestone 8 — Cross-platform E2E
 
