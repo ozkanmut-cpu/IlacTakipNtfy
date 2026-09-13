@@ -70,7 +70,12 @@ jobs:
             -archivePath "$RUNNER_TEMP/Dosefolk.xcarchive" \
             CODE_SIGNING_ALLOWED=NO \
             archive
-          test -d "$RUNNER_TEMP/Dosefolk.xcarchive/Products/Applications/Dosefolk.app"
+          APP="$RUNNER_TEMP/Dosefolk.xcarchive/Products/Applications/Dosefolk.app"
+          test -d "$APP"
+          test -f "$APP/PrivacyInfo.xcprivacy"
+          plutil -lint "$APP/PrivacyInfo.xcprivacy"
+          grep -q 'NSPrivacyAccessedAPICategoryUserDefaults' "$APP/PrivacyInfo.xcprivacy"
+          grep -q 'CA92.1' "$APP/PrivacyInfo.xcprivacy"
 
       - name: Upload iOS archive artifact
         uses: actions/upload-artifact@v4
