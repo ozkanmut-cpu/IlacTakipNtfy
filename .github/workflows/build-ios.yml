@@ -57,6 +57,13 @@ jobs:
       - name: Generate Xcode project
         run: xcodegen generate
 
+      - name: Validate generated entitlements binding
+        run: |
+          set -euo pipefail
+          PBXPROJ="Dosefolk.xcodeproj/project.pbxproj"
+          test -f "$PBXPROJ"
+          grep -q 'CODE_SIGN_ENTITLEMENTS = Dosefolk/Dosefolk.entitlements;' "$PBXPROJ"
+
       - name: Build iOS app
         run: |
           set -o pipefail
