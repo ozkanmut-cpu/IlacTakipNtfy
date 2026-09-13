@@ -175,4 +175,10 @@ final class DosefolkRuntime {
         coordinator.start()
         return peer
     }
+
+    func revokePair(topic: String) throws {
+        try pairingService.revoke(topic: topic)
+        coordinator.stop()
+        coordinator.start()
+    }
 }
