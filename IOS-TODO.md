@@ -135,7 +135,7 @@ Amaç: Android Dosefolk ile aynı Circle protokolünü kullanan, native Swift/Sw
 - [ ] Gerekiyorsa Background Modes capability ekle.
 - [x] QR kamera izni ve açıklamasını ekle.
 - [x] Privacy manifest'i hazırla.
-- [ ] App Store privacy disclosure bilgilerini hazırla.
+- [x] App Store privacy disclosure bilgilerini hazırla.
 - [x] Circle üzerinden hangi verilerin gönderildiğini açıkça belgele.
 - [ ] İlk TestFlight build'ini çıkar.
 - [ ] En az iki fiziksel cihazla final QA yap.
