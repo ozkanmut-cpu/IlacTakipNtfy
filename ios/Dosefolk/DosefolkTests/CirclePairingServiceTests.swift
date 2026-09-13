@@ -40,6 +40,35 @@ final class CirclePairingServiceTests: XCTestCase {
         XCTAssertEqual(observedTopics, ["dosefolk-local", "dosefolk-peer"])
     }
 
+    func testRevokeRemovesPeerAndSignalsUpdatedSubscriptions() throws {
+        let context = try TestContext()
+        try context.store.save([
+            CirclePeer(id: "peer-id", name: "Ayse", topic: "dosefolk-peer"),
+            CirclePeer(id: "other-id", name: "Mehmet", topic: "dosefolk-other")
+        ], to: .circlePeers)
+
+        var observedTopics: [String] = []
+        let service = CirclePairingService(
+            settings: context.settings,
+            store: context.store,
+            prepareRePair: { _ in },
+            completeRePair: { _ in },
+            initialSync: { _ in },
+            subscriptionsChanged: {
+                observedTopics = (try? CircleTransport(settings: context.settings, store: context.store).subscriptionTopics()) ?? []
+            }
+        )
+
+        try service.revoke(topic: "dosefolk-peer")
+
+        XCTAssertEqual(
+            try context.store.load([CirclePeer].self, from: .circlePeers, default: []),
+            [CirclePeer(id: "other-id", name: "Mehmet", topic: "dosefolk-other")]
+        )
+        XCTAssertEqual(observedTopics, ["dosefolk-local", "dosefolk-other"])
+        XCTAssertTrue(try CircleSecurityState(store: context.store).isRevoked(actorTopic: "dosefolk-peer"))
+    }
+
     func testRevokedPeerDrainsBeforeFenceIsCleared() async throws {
         let context = try TestContext()
         try CircleSecurityState(store: context.store).revoke(actorTopic: "dosefolk-peer")
