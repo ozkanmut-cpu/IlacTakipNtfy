@@ -81,11 +81,19 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             archive
           APP="$RUNNER_TEMP/Dosefolk.xcarchive/Products/Applications/Dosefolk.app"
+          INFO="$APP/Info.plist"
           test -d "$APP"
+          test -f "$INFO"
           test -f "$APP/PrivacyInfo.xcprivacy"
           plutil -lint "$APP/PrivacyInfo.xcprivacy"
           grep -q 'NSPrivacyAccessedAPICategoryUserDefaults' "$APP/PrivacyInfo.xcprivacy"
           grep -q 'CA92.1' "$APP/PrivacyInfo.xcprivacy"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INFO")" = "com.ozkanmut.dosefolk"
+          CAMERA_USAGE="$(/usr/libexec/PlistBuddy -c 'Print :NSCameraUsageDescription' "$INFO")"
+          test -n "$CAMERA_USAGE"
+          /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes' "$INFO" | grep -q 'fetch'
+          /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes' "$INFO" | grep -q 'remote-notification'
+          /usr/libexec/PlistBuddy -c 'Print :BGTaskSchedulerPermittedIdentifiers' "$INFO" | grep -q 'com.ozkanmut.dosefolk.refresh'
 
       - name: Upload iOS archive artifact
         uses: actions/upload-artifact@v4
