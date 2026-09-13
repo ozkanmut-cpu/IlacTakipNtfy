@@ -63,6 +63,14 @@ jobs:
             archive
           test -d "$RUNNER_TEMP/Dosefolk.xcarchive/Products/Applications/Dosefolk.app"
 
+      - name: Upload iOS archive artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dosefolk-iOS-unsigned-archive
+          path: ${{ runner.temp }}/Dosefolk.xcarchive
+          if-no-files-found: error
+          retention-days: 30
+
       - name: Run iOS unit tests
         run: |
           set -euo pipefail
