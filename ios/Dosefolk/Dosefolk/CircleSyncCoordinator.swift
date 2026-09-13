@@ -70,7 +70,7 @@ final class CircleSyncCoordinator {
 
     @discardableResult
     func process(_ envelope: SyncEnvelope) throws -> InboundProtocolResult {
-        try processor.process(envelope: envelope) { [weak self, eventStore, remoteStateHandler] event in
+        let result = try processor.process(envelope: envelope) { [weak self, eventStore, remoteStateHandler] event in
             let canonical = try eventStore.appendIfAbsent(event)
             try remoteStateHandler(canonical)
             if Self.requiresSubscriptionRefresh(canonical) {
@@ -79,6 +79,17 @@ final class CircleSyncCoordinator {
                 }
             }
         }
+
+        if case .accepted(let event) = result {
+            Task {
+                await DosefolkQaLog.shared.record(category: .NTFY_RX, event: "event_applied", details: [
+                    "eventId": event.eventId,
+                    "eventType": event.type,
+                    "revision": event.revision
+                ])
+            }
+        }
+        return result
     }
 
     static func requiresSubscriptionRefresh(_ event: DoseEvent) -> Bool {
