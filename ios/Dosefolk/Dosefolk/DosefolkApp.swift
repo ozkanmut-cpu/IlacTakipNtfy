@@ -82,6 +82,11 @@ struct DosefolkApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView(runtime: runtime, startupError: startupError)
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        QaLogShareView()
+                    }
+                }
                 .onOpenURL(perform: handleEnrollmentURL)
         }
     }
