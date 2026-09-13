@@ -21,7 +21,7 @@ Amaç: Android Dosefolk ile aynı Circle protokolünü kullanan, native Swift/Sw
 - [x] Stream/poll subscriber desteği ekle.
 - [x] Timeout/reconnect/backoff davranışını ekle.
 - [x] HTTP 429 ve Retry-After handling ekle.
-- [ ] Topic değiştiğinde subscription reconnect davranışını tüm peer add/revoke yollarında doğrula.
+- [x] Topic değiştiğinde subscription reconnect davranışını tüm peer add/revoke yollarında doğrula.
 - [x] Publisher-topic modelini Android ile birebir uygula.
 - [x] `envelope.topic == actorTopic` doğrulamasını uygula.
 - [x] `targetTopic` filtresini tüm side-effect'lerden önce uygula.
