@@ -90,12 +90,12 @@ Amaç: Android Dosefolk ile aynı Circle protokolünü kullanan, native Swift/Sw
 
 ## Milestone 7 — QA ve observability
 
-- [ ] Android QA log formatıyla uyumlu iOS QA logger oluştur.
-- [ ] Her log satırına timestamp, session, app version/build, iOS version ve cihaz modeli ekle.
-- [ ] NTFY_TX / NTFY_RX / SYNC / PAIR / REVOKE / ALARM / ACTION / ERROR / SECURITY_REJECT kategorilerini uygula.
-- [ ] Topic/token/secret değerlerini mask/hash et.
-- [ ] İlaç adı, doz, notification body veya protokol payload'ını QA loguna yazma.
-- [ ] QA logunu yalnız uygulamaya ait özel dizinde tut.
+- [x] Android QA log formatıyla uyumlu iOS QA logger oluştur.
+- [x] Her log satırına timestamp, session, app version/build, iOS version ve cihaz modeli ekle.
+- [x] NTFY_TX / NTFY_RX / SYNC / PAIR / REVOKE / ALARM / ACTION / ERROR / SECURITY_REJECT kategorilerini uygula.
+- [x] Topic/token/secret değerlerini mask/hash et.
+- [x] İlaç adı, doz, notification body veya protokol payload'ını QA loguna yazma.
+- [x] QA logunu yalnız uygulamaya ait özel dizinde tut.
 - [ ] Güvenli Share Sheet ile QA log export ekle.
 - [ ] Android ve iOS loglarını event ID üzerinden korele edilebilir hale getir.
 
