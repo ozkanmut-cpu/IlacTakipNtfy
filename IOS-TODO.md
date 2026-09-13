@@ -123,7 +123,7 @@ Amaç: Android Dosefolk ile aynı Circle protokolünü kullanan, native Swift/Sw
 - [x] Xcode simulator build/test çalıştır.
 - [x] iOS build/archive validation ekle.
 - [x] Android veya iOS protocol değişikliğinde cross-platform compatibility testini zorunlu gate yap.
-- [ ] CI artifact üretimini doğrula.
+- [x] CI artifact üretimini doğrula.
 
 ## Milestone 10 — Apple/TestFlight/App Store
 
