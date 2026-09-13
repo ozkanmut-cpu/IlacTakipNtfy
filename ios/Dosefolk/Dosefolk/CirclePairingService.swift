@@ -2,6 +2,7 @@ import Foundation
 
 enum CirclePairingServiceError: Error, Equatable {
     case invalidPayload
+    case invalidTopic
     case selfPair
     case duplicatePeer
 }
@@ -88,5 +89,22 @@ final class CirclePairingService {
         }
         try await initialSync(peerTopic)
         return peer
+    }
+
+    func revoke(topic: String) throws {
+        let localTopic = settings.localTopic.trimmingCharacters(in: .whitespacesAndNewlines)
+        let peerTopic = topic.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !peerTopic.isEmpty else { throw CirclePairingServiceError.invalidTopic }
+        guard peerTopic != localTopic else { throw CirclePairingServiceError.selfPair }
+
+        try securityState.revoke(actorTopic: peerTopic)
+
+        var peers = try store.load([CirclePeer].self, from: .circlePeers, default: [])
+        let oldCount = peers.count
+        peers.removeAll { $0.topic == peerTopic }
+        guard peers.count != oldCount else { return }
+
+        try store.save(peers, to: .circlePeers)
+        subscriptionsChanged()
     }
 }
