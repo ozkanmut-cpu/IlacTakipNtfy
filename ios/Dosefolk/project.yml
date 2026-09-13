@@ -17,6 +17,8 @@ targets:
       path: Dosefolk/Info.plist
       properties:
         CFBundleDisplayName: Dosefolk
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         CFBundleURLTypes:
           - CFBundleURLName: com.ozkanmut.dosefolk.enrollment
             CFBundleURLSchemes:
