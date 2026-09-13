@@ -4,6 +4,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { APNsClient } from './apns.mjs';
 import { loadGatewaySecrets } from './local-secrets.mjs';
+import { selectWakeTargets } from './wake-targets.mjs';
 
 const cfg = {
   host: process.env.HOST || '127.0.0.1',
@@ -144,9 +145,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && req.url === '/internal/wake') {
       if (!hasInternalAccess(req)) return json(res, 401, { error: 'unauthorized' });
       const body = await readJson(req);
-      const topics = new Set((body.topics || []).filter(x => typeof x === 'string'));
       const store = await loadStore();
-      const targets = Object.values(store.installs).filter(x => x.subscriptions.some(topic => topics.has(topic)));
+      const targets = selectWakeTargets(store.installs, body.topics);
       const results = await Promise.allSettled(targets.map(target => apns.wake(target.deviceToken, target.environment)));
       return json(res, 200, { targeted: targets.length, sent: results.filter(x => x.status === 'fulfilled').length });
     }
