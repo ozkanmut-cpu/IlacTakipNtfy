@@ -35,6 +35,15 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Validate privacy manifest
+        run: |
+          set -euo pipefail
+          MANIFEST="Dosefolk/PrivacyInfo.xcprivacy"
+          test -f "$MANIFEST"
+          plutil -lint "$MANIFEST"
+          grep -q 'NSPrivacyAccessedAPICategoryUserDefaults' "$MANIFEST"
+          grep -q 'CA92.1' "$MANIFEST"
+
       - name: Generate Xcode project
         run: xcodegen generate
 
