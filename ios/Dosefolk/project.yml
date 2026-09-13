@@ -32,6 +32,10 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.ozkanmut.dosefolk
         PRODUCT_NAME: Dosefolk
         CODE_SIGN_STYLE: Automatic
+    entitlements:
+      path: Dosefolk/Dosefolk.entitlements
+      properties:
+        aps-environment: development
     scheme:
       testTargets:
         - DosefolkTests
