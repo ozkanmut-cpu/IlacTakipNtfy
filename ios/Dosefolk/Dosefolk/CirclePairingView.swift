@@ -106,6 +106,7 @@ struct CirclePairingView: View {
     private func pairingMessage(for error: Error) -> String {
         switch error as? CirclePairingServiceError {
         case .invalidPayload: return "Bu Dosefolk eşleştirme QR’ı değil."
+        case .invalidTopic: return "Bu Circle bağlantısı geçerli bir kişi içermiyor."
         case .selfPair: return "Bu QR bu telefona ait."
         case .duplicatePeer: return "Bu kişi zaten Circle’da."
         case nil: return "Eşleştirme tamamlanamadı. İnternet bağlantısını kontrol edip tekrar dene."
