@@ -89,6 +89,8 @@ jobs:
           grep -q 'NSPrivacyAccessedAPICategoryUserDefaults' "$APP/PrivacyInfo.xcprivacy"
           grep -q 'CA92.1' "$APP/PrivacyInfo.xcprivacy"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$INFO")" = "com.ozkanmut.dosefolk"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO")" = "1.0.0"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO")" = "1"
           CAMERA_USAGE="$(/usr/libexec/PlistBuddy -c 'Print :NSCameraUsageDescription' "$INFO")"
           test -n "$CAMERA_USAGE"
           /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes' "$INFO" | grep -q 'fetch'
