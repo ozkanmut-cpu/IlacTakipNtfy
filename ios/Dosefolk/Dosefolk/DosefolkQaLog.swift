@@ -1,6 +1,5 @@
 import CryptoKit
 import Foundation
-import UIKit
 
 actor DosefolkQaLog {
     enum Category: String, Codable, CaseIterable {
@@ -41,7 +40,7 @@ actor DosefolkQaLog {
                 "session": sessionId,
                 "appVersion": Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "",
                 "appCode": Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "",
-                "ios": UIDevice.current.systemVersion,
+                "ios": ProcessInfo.processInfo.operatingSystemVersionString,
                 "device": Self.deviceModel(),
                 "category": category.rawValue,
                 "event": Self.truncate(event)
