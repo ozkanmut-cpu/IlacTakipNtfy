@@ -29,6 +29,7 @@ targets:
         UIBackgroundModes:
           - fetch
           - remote-notification
+        UILaunchScreen: {}
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.ozkanmut.dosefolk
