@@ -131,7 +131,7 @@ Amaç: Android Dosefolk ile aynı Circle protokolünü kullanan, native Swift/Sw
 - [ ] App ID oluştur.
 - [ ] Signing certificate ve provisioning profile oluştur.
 - [ ] APNs key/capability yapılandır.
-- [ ] Notification capability ekle.
+- [x] Notification capability ekle.
 - [ ] Gerekiyorsa Background Modes capability ekle.
 - [x] QR kamera izni ve açıklamasını ekle.
 - [x] Privacy manifest'i hazırla.
