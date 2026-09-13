@@ -49,6 +49,20 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             build
 
+      - name: Validate unsigned iOS archive
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/Dosefolk.xcarchive"
+          xcodebuild \
+            -project Dosefolk.xcodeproj \
+            -scheme Dosefolk \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath "$RUNNER_TEMP/Dosefolk.xcarchive" \
+            CODE_SIGNING_ALLOWED=NO \
+            archive
+          test -d "$RUNNER_TEMP/Dosefolk.xcarchive/Products/Applications/Dosefolk.app"
+
       - name: Run iOS unit tests
         run: |
           set -euo pipefail
