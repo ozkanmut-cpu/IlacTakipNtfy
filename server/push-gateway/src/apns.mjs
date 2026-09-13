@@ -6,6 +6,10 @@ function base64url(value) {
   return Buffer.from(value).toString('base64url');
 }
 
+export function silentWakePayload() {
+  return { aps: { 'content-available': 1 } };
+}
+
 export class APNsClient {
   constructor({ teamId, keyId, keyPath, bundleId }) {
     this.teamId = teamId;
@@ -43,7 +47,7 @@ export class APNsClient {
       : 'https://api.push.apple.com';
     const client = connect(origin);
     const token = await this.jwt();
-    const body = JSON.stringify({ aps: { 'content-available': 1 } });
+    const body = JSON.stringify(silentWakePayload());
 
     return new Promise((resolve, reject) => {
       let response = '';
