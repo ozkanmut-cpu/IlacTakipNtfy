@@ -166,7 +166,7 @@ object SyncEngine {
                             rejected++
                             val version = IncomingEventGuard.protocolVersion(payload)
                             InboundProtocolHealth.recordUnsupported(context, version)
-                            DosefolkQaLog.record(context, DosefolkQaLog.Category.SECURITY_REJECT, "unsupported_protocol", mapOf("topic" to envelopeTopic, "version" to version, "type" to payload.optString("type"))))
+                            DosefolkQaLog.record(context, DosefolkQaLog.Category.SECURITY_REJECT, "unsupported_protocol", mapOf("topic" to envelopeTopic, "version" to version, "type" to payload.optString("type")))
                             return@forEach
                         }
                         val incoming = parseDoseEvent(payload)
