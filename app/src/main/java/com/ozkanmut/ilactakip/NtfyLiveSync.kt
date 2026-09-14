@@ -19,8 +19,9 @@ object NtfyLiveSync {
     @Synchronized
     fun ensure(c: Context) {
         if (started) return
-        started = true
         val context = c.applicationContext
+        if (!NtfyAuth.isProvisioned(context)) return
+        started = true
         DosefolkQaLog.record(context, DosefolkQaLog.Category.SYNC, "live_stream_start")
         thread(name = "dosefolk-ntfy-live", isDaemon = true) {
             var retryMs = 1_000L

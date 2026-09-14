@@ -69,9 +69,11 @@ object NtfyAuth {
     internal fun bearerValue(credential: String?): String? =
         credential?.trim()?.takeIf { it.isNotEmpty() }?.let { "Bearer $it" }
 
+    fun isProvisioned(c: Context): Boolean = bearerValue(NtfyCredentialStore.load(c)) != null
+
     fun apply(c: Context, connection: HttpURLConnection) {
-        bearerValue(NtfyCredentialStore.load(c))?.let {
-            connection.setRequestProperty("Authorization", it)
-        }
+        val value = bearerValue(NtfyCredentialStore.load(c))
+            ?: throw IllegalStateException("ntfy credential unavailable")
+        connection.setRequestProperty("Authorization", value)
     }
 }
