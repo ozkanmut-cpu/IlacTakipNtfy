@@ -106,6 +106,23 @@ jobs:
           /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes' "$INFO" | grep -q 'fetch'
           /usr/libexec/PlistBuddy -c 'Print :UIBackgroundModes' "$INFO" | grep -q 'remote-notification'
           /usr/libexec/PlistBuddy -c 'Print :BGTaskSchedulerPermittedIdentifiers' "$INFO" | grep -q 'com.ozkanmut.dosefolk.refresh'
+          python3 - "$INFO" <<'PY'
+          import plistlib
+          import sys
+
+          with open(sys.argv[1], "rb") as handle:
+              info = plistlib.load(handle)
+
+          assert info.get("UISupportedInterfaceOrientations") == [
+              "UIInterfaceOrientationPortrait",
+          ]
+          assert info.get("UISupportedInterfaceOrientations~ipad") == [
+              "UIInterfaceOrientationPortrait",
+              "UIInterfaceOrientationPortraitUpsideDown",
+              "UIInterfaceOrientationLandscapeLeft",
+              "UIInterfaceOrientationLandscapeRight",
+          ]
+          PY
 
       - name: Upload iOS archive artifact
         uses: actions/upload-artifact@v4
