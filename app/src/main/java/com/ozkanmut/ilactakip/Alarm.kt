@@ -310,6 +310,7 @@ object Ntfy {
         DosefolkQaLog.record(context, DosefolkQaLog.Category.NTFY_TX, "send_start", mapOf("topic" to topic, "priority" to priority))
         return try {
             val connection = URL(NtfyEndpoint.topicUrl(topic)).openConnection() as HttpURLConnection
+            NtfyAuth.apply(context, connection)
             connection.requestMethod = "POST"
             connection.doOutput = true
             connection.connectTimeout = 10_000
