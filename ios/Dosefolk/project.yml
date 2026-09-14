@@ -23,6 +23,7 @@ targets:
           - CFBundleURLName: com.ozkanmut.dosefolk.enrollment
             CFBundleURLSchemes:
               - dosefolk
+        ITSAppUsesNonExemptEncryption: false
         NSCameraUsageDescription: "Dosefolk, Circle eşleştirme QR kodunu taramak için kamerayı kullanır."
         BGTaskSchedulerPermittedIdentifiers:
           - com.ozkanmut.dosefolk.refresh
