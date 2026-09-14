@@ -110,6 +110,7 @@ object SyncEngine {
         val url = URL(NtfyEndpoint.pollUrl(topics, since))
         return try {
             val connection = url.openConnection() as HttpURLConnection
+            NtfyAuth.apply(context, connection)
             connection.requestMethod = "GET"
             connection.connectTimeout = 10_000
             connection.readTimeout = 15_000
@@ -165,7 +166,7 @@ object SyncEngine {
                             rejected++
                             val version = IncomingEventGuard.protocolVersion(payload)
                             InboundProtocolHealth.recordUnsupported(context, version)
-                            DosefolkQaLog.record(context, DosefolkQaLog.Category.SECURITY_REJECT, "unsupported_protocol", mapOf("topic" to envelopeTopic, "version" to version, "type" to payload.optString("type")))
+                            DosefolkQaLog.record(context, DosefolkQaLog.Category.SECURITY_REJECT, "unsupported_protocol", mapOf("topic" to envelopeTopic, "version" to version, "type" to payload.optString("type"))))
                             return@forEach
                         }
                         val incoming = parseDoseEvent(payload)
