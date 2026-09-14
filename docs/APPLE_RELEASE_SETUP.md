@@ -13,8 +13,15 @@ This checklist captures the remaining Apple-account-side work required before th
 - URL scheme: `dosefolk`
 - Push entitlement: `aps-environment`
 - Background modes: `fetch`, `remote-notification`
+- Export compliance metadata: `ITSAppUsesNonExemptEncryption = false`
 
-The iOS CI validates that the Release archive contains `CFBundleShortVersionString = 1.0.0` and `CFBundleVersion = 1`. Increment `CURRENT_PROJECT_VERSION` before each subsequent App Store Connect/TestFlight upload; keep `MARKETING_VERSION` aligned with the intended public release version.
+The iOS CI validates that the Release archive contains `CFBundleShortVersionString = 1.0.0`, `CFBundleVersion = 1`, and `ITSAppUsesNonExemptEncryption = false`. Increment `CURRENT_PROJECT_VERSION` before each subsequent App Store Connect/TestFlight upload; keep `MARKETING_VERSION` aligned with the intended public release version.
+
+## Export compliance decision
+
+The current iOS app uses Apple platform networking/security facilities such as `URLSession` over HTTPS/TLS and Keychain storage, and does not implement or bundle its own non-exempt cryptographic algorithm. For this current codebase, the app therefore declares `ITSAppUsesNonExemptEncryption = false`.
+
+Re-evaluate this setting before shipping any future build that adds a custom cryptographic implementation, a third-party cryptography library, VPN/tunneling functionality, encrypted messaging implemented by the app, or another feature that could change Apple export-compliance classification. Do not mechanically keep the current value after such a change.
 
 ## Apple Developer portal
 
@@ -38,7 +45,8 @@ The iOS CI validates that the Release archive contains `CFBundleShortVersionStri
 2. Configure the required app metadata and public Privacy Policy URL.
 3. Use `docs/APP_STORE_PRIVACY_DISCLOSURE.md` as the working source for App Privacy answers, then recheck the production build and current Apple taxonomy before publishing the answers.
 4. Reconcile the App Privacy answers with `docs/CIRCLE_DATA_DISCLOSURE.md` and `ios/Dosefolk/Dosefolk/PrivacyInfo.xcprivacy`.
-5. Upload the first signed archive to TestFlight.
+5. Confirm the export-compliance answer still matches the current production binary and the `ITSAppUsesNonExemptEncryption` declaration.
+6. Upload the first signed archive to TestFlight.
 
 ## APNs / Dosefolk backend
 
@@ -62,6 +70,7 @@ Do not mark the first TestFlight build complete until all of the following are t
 - APNs key is installed securely outside the repository;
 - App Store Connect app record exists;
 - privacy metadata has been reviewed against the production build;
+- export-compliance classification has been reviewed against the production build;
 - a Release archive signs successfully;
 - the signed build uploads to TestFlight;
 - at least two physical devices are available for final Android ↔ iPhone ↔ iPhone QA.
