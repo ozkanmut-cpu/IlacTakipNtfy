@@ -7,11 +7,13 @@ on:
       - ios-milestone-1
     paths:
       - 'ios/**'
+      - 'release-assets/dosefolk-appicon/**'
       - 'PROTOCOL_SPEC.md'
       - '.github/workflows/build-ios.yml'
   pull_request:
     paths:
       - 'ios/**'
+      - 'release-assets/dosefolk-appicon/**'
       - 'PROTOCOL_SPEC.md'
       - '.github/workflows/build-ios.yml'
   workflow_dispatch:
@@ -34,6 +36,34 @@ jobs:
 
       - name: Install XcodeGen
         run: brew install xcodegen
+
+      - name: Materialize Dosefolk AppIcon
+        run: |
+          set -euo pipefail
+          SOURCE="../../release-assets/dosefolk-appicon"
+          OUT="Dosefolk/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png"
+          JPEG="$RUNNER_TEMP/dosefolk-appicon.jpg"
+          python3 - "$SOURCE" "$JPEG" <<'PY'
+          import base64
+          import hashlib
+          import pathlib
+          import sys
+
+          source = pathlib.Path(sys.argv[1])
+          payload = "".join(
+              path.read_text(encoding="utf-8").strip()
+              for path in sorted(source.glob("part-*.b64"))
+          )[:91484]
+          assert len(payload) == 91484
+          data = base64.b64decode(payload, validate=True)
+          assert hashlib.sha256(data).hexdigest() == "ef3d8b4feac711849e0e090f6fa551262ac145fecf95da04ab85625b7f3ef939"
+          pathlib.Path(sys.argv[2]).write_bytes(data)
+          PY
+          sips -s format png "$JPEG" --out "$OUT" >/dev/null
+          test -f "$OUT"
+          test "$(sips -g pixelWidth "$OUT" | awk '/pixelWidth/ {print $2}')" = "1024"
+          test "$(sips -g pixelHeight "$OUT" | awk '/pixelHeight/ {print $2}')" = "1024"
+          test "$(sips -g hasAlpha "$OUT" | awk '/hasAlpha/ {print $2}')" = "no"
 
       - name: Validate privacy manifest
         run: |
@@ -59,8 +89,10 @@ jobs:
           set -euo pipefail
           CATALOG="Dosefolk/Assets.xcassets/Contents.json"
           APPICON="Dosefolk/Assets.xcassets/AppIcon.appiconset/Contents.json"
+          ICON="Dosefolk/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png"
           test -f "$CATALOG"
           test -f "$APPICON"
+          test -f "$ICON"
           python3 - "$CATALOG" "$APPICON" <<'PY'
           import json
           import sys
@@ -75,7 +107,8 @@ jobs:
           assert appicon.get("info", {}).get("author") == "xcode"
           assert appicon.get("info", {}).get("version") == 1
           assert any(
-              image.get("idiom") == "universal"
+              image.get("filename") == "AppIcon-1024.png"
+              and image.get("idiom") == "universal"
               and image.get("platform") == "ios"
               and image.get("size") == "1024x1024"
               for image in appicon.get("images", [])
@@ -123,6 +156,7 @@ jobs:
           test -d "$APP"
           test -f "$INFO"
           test -f "$APP/PrivacyInfo.xcprivacy"
+          test -f "$APP/Assets.car"
           plutil -lint "$APP/PrivacyInfo.xcprivacy"
           grep -q 'NSPrivacyAccessedAPICategoryUserDefaults' "$APP/PrivacyInfo.xcprivacy"
           grep -q 'CA92.1' "$APP/PrivacyInfo.xcprivacy"
