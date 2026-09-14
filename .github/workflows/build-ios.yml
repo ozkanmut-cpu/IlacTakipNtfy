@@ -54,6 +54,34 @@ jobs:
           grep -q 'path: Dosefolk/Dosefolk.entitlements' project.yml
           grep -q 'aps-environment: development' project.yml
 
+      - name: Validate AppIcon catalog scaffold
+        run: |
+          set -euo pipefail
+          CATALOG="Dosefolk/Assets.xcassets/Contents.json"
+          APPICON="Dosefolk/Assets.xcassets/AppIcon.appiconset/Contents.json"
+          test -f "$CATALOG"
+          test -f "$APPICON"
+          python3 - "$CATALOG" "$APPICON" <<'PY'
+          import json
+          import sys
+
+          with open(sys.argv[1], encoding="utf-8") as handle:
+              catalog = json.load(handle)
+          with open(sys.argv[2], encoding="utf-8") as handle:
+              appicon = json.load(handle)
+
+          assert catalog.get("info", {}).get("author") == "xcode"
+          assert catalog.get("info", {}).get("version") == 1
+          assert appicon.get("info", {}).get("author") == "xcode"
+          assert appicon.get("info", {}).get("version") == 1
+          assert any(
+              image.get("idiom") == "universal"
+              and image.get("platform") == "ios"
+              and image.get("size") == "1024x1024"
+              for image in appicon.get("images", [])
+          )
+          PY
+
       - name: Generate Xcode project
         run: xcodegen generate
 
