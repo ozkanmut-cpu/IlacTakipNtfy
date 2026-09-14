@@ -63,6 +63,7 @@ jobs:
           PBXPROJ="Dosefolk.xcodeproj/project.pbxproj"
           test -f "$PBXPROJ"
           grep -q 'CODE_SIGN_ENTITLEMENTS = Dosefolk/Dosefolk.entitlements;' "$PBXPROJ"
+          grep -q 'TARGETED_DEVICE_FAMILY = "1,2";' "$PBXPROJ"
 
       - name: Build iOS app
         run: |
@@ -113,6 +114,7 @@ jobs:
           with open(sys.argv[1], "rb") as handle:
               info = plistlib.load(handle)
 
+          assert info.get("UIDeviceFamily") == [1, 2]
           assert info.get("UISupportedInterfaceOrientations") == [
               "UIInterfaceOrientationPortrait",
           ]
