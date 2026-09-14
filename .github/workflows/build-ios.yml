@@ -8,12 +8,14 @@ on:
     paths:
       - 'ios/**'
       - 'release-assets/dosefolk-appicon/**'
+      - 'release-assets/dosefolk-appicon-v2/**'
       - 'PROTOCOL_SPEC.md'
       - '.github/workflows/build-ios.yml'
   pull_request:
     paths:
       - 'ios/**'
       - 'release-assets/dosefolk-appicon/**'
+      - 'release-assets/dosefolk-appicon-v2/**'
       - 'PROTOCOL_SPEC.md'
       - '.github/workflows/build-ios.yml'
   workflow_dispatch:
@@ -40,26 +42,13 @@ jobs:
       - name: Materialize Dosefolk AppIcon
         run: |
           set -euo pipefail
-          SOURCE="../../release-assets/dosefolk-appicon"
+          SOURCE="../../release-assets/dosefolk-appicon-v2/source-192.jpg"
           OUT="Dosefolk/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png"
-          JPEG="$RUNNER_TEMP/dosefolk-appicon.jpg"
-          python3 - "$SOURCE" "$JPEG" <<'PY'
-          import base64
-          import hashlib
-          import pathlib
-          import sys
-
-          source = pathlib.Path(sys.argv[1])
-          payload = "".join(
-              path.read_text(encoding="utf-8").strip()
-              for path in sorted(source.glob("part-*.b64"))
-          )[:91484]
-          assert len(payload) == 91484
-          data = base64.b64decode(payload, validate=True)
-          assert hashlib.sha256(data).hexdigest() == "8b95d8af25674e4f094c84abc68b6cde5e4fa021afc74d3bea10a45741edb785"
-          pathlib.Path(sys.argv[2]).write_bytes(data)
-          PY
-          sips -s format png "$JPEG" --out "$OUT" >/dev/null
+          RESIZED="$RUNNER_TEMP/dosefolk-appicon-1024.jpg"
+          test -f "$SOURCE"
+          test "$(shasum -a 256 "$SOURCE" | awk '{print $1}')" = "3fe8c299604f12e7b7b5325f0e6c2c8d434d32c39c0b869645650aefe9d37944"
+          sips -z 1024 1024 "$SOURCE" --out "$RESIZED" >/dev/null
+          sips -s format png "$RESIZED" --out "$OUT" >/dev/null
           test -f "$OUT"
           test "$(sips -g pixelWidth "$OUT" | awk '/pixelWidth/ {print $2}')" = "1024"
           test "$(sips -g pixelHeight "$OUT" | awk '/pixelHeight/ {print $2}')" = "1024"
