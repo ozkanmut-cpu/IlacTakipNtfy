@@ -80,7 +80,7 @@ Amaç: Android Dosefolk ile aynı Circle protokolünü kullanan, native Swift/Sw
 - [ ] Anonymous/open ntfy kullanımını kaldıracak credential mimarisini oluştur.
 - [x] Install başına runtime-provisioned credential/token üret.
 - [x] iOS credential'ını Keychain'de sakla.
-- [ ] Android credential'ını Android Keystore ile güvenli sakla.
+- [x] Android credential'ını Android Keystore ile güvenli sakla.
 - [x] Public GitHub reposuna hiçbir static secret/token koyma.
 - [x] Server-side provisioning/bootstrap oluştur.
 - [ ] ntfy `auth-file`/uygun auth yapısını etkinleştir.
