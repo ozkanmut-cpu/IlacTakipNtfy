@@ -64,6 +64,7 @@ jobs:
           test -f "$PBXPROJ"
           grep -q 'CODE_SIGN_ENTITLEMENTS = Dosefolk/Dosefolk.entitlements;' "$PBXPROJ"
           grep -q 'TARGETED_DEVICE_FAMILY = "1,2";' "$PBXPROJ"
+          grep -q 'IPHONEOS_DEPLOYMENT_TARGET = 17.0;' "$PBXPROJ"
 
       - name: Build iOS app
         run: |
@@ -114,6 +115,8 @@ jobs:
           with open(sys.argv[1], "rb") as handle:
               info = plistlib.load(handle)
 
+          assert info.get("MinimumOSVersion") == "17.0"
+          assert info.get("CFBundleSupportedPlatforms") == ["iPhoneOS"]
           assert info.get("UIDeviceFamily") == [1, 2]
           assert info.get("UISupportedInterfaceOrientations") == [
               "UIInterfaceOrientationPortrait",
