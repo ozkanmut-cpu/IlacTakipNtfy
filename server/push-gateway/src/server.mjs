@@ -4,6 +4,8 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { APNsClient } from './apns.mjs';
 import { loadGatewaySecrets } from './local-secrets.mjs';
+import { NtfyAuthManager } from './ntfy-auth.mjs';
+import { buildProvisioningCredentials } from './provisioning-credentials.mjs';
 import { selectWakeTargets } from './wake-targets.mjs';
 
 const cfg = {
@@ -15,6 +17,8 @@ const cfg = {
   bundleId: process.env.APNS_BUNDLE_ID || 'com.ozkanmut.dosefolk'
 };
 Object.assign(cfg, await loadGatewaySecrets(cfg));
+
+const ntfyAuth = new NtfyAuthManager();
 
 const apns = new APNsClient({
   teamId: process.env.APNS_TEAM_ID || '',
@@ -109,9 +113,25 @@ const server = http.createServer(async (req, res) => {
         if (enrollment) { delete store.enrollments[hash]; await saveStore(store); }
         return json(res, 401, { error: 'invalid_or_expired_ticket' });
       }
+      let credentials;
+      try {
+        credentials = await buildProvisioningCredentials({
+          installId: body.installId,
+          gatewayCredential: installToken(body.installId),
+          localTopic: body.localTopic,
+          subscriptions: body.subscriptions,
+          ntfyAuth
+        });
+      } catch (error) {
+        if (String(error.message || '').startsWith('invalid_')) {
+          return json(res, 400, { error: 'invalid_topic_access' });
+        }
+        console.error('ntfy credential provisioning failed');
+        return json(res, 503, { error: 'ntfy_provisioning_failed' });
+      }
       delete store.enrollments[hash];
       await saveStore(store);
-      return json(res, 200, { installId: body.installId, credential: installToken(body.installId) });
+      return json(res, 200, credentials);
     }
 
     if (req.method === 'POST' && req.url === '/internal/provision') {
@@ -119,7 +139,22 @@ const server = http.createServer(async (req, res) => {
       if (!hasInternalAccess(req)) return json(res, 401, { error: 'unauthorized' });
       const body = await readJson(req);
       if (!validInstallId(body.installId)) return json(res, 400, { error: 'invalid_install_id' });
-      return json(res, 200, { installId: body.installId, credential: installToken(body.installId) });
+      try {
+        const credentials = await buildProvisioningCredentials({
+          installId: body.installId,
+          gatewayCredential: installToken(body.installId),
+          localTopic: body.localTopic,
+          subscriptions: body.subscriptions,
+          ntfyAuth
+        });
+        return json(res, 200, credentials);
+      } catch (error) {
+        if (String(error.message || '').startsWith('invalid_')) {
+          return json(res, 400, { error: 'invalid_topic_access' });
+        }
+        console.error('ntfy credential provisioning failed');
+        return json(res, 503, { error: 'ntfy_provisioning_failed' });
+      }
     }
 
     if (!(await isReady())) return json(res, 503, { error: 'not_provisioned' });
