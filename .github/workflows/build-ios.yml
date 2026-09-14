@@ -101,6 +101,10 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$INFO")" = "Dosefolk"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO")" = "1.0.0"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO")" = "1"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundlePackageType' "$INFO")" = "APPL"
+          EXECUTABLE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$INFO")"
+          test -n "$EXECUTABLE"
+          test -x "$APP/$EXECUTABLE"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0' "$INFO")" = "dosefolk"
           test "$(/usr/libexec/PlistBuddy -c 'Print :ITSAppUsesNonExemptEncryption' "$INFO")" = "false"
           /usr/libexec/PlistBuddy -c 'Print :UILaunchScreen' "$INFO" >/dev/null
