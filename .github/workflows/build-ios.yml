@@ -102,6 +102,7 @@ jobs:
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$INFO")" = "1.0.0"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$INFO")" = "1"
           test "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleURLTypes:0:CFBundleURLSchemes:0' "$INFO")" = "dosefolk"
+          test "$(/usr/libexec/PlistBuddy -c 'Print :ITSAppUsesNonExemptEncryption' "$INFO")" = "false"
           /usr/libexec/PlistBuddy -c 'Print :UILaunchScreen' "$INFO" >/dev/null
           CAMERA_USAGE="$(/usr/libexec/PlistBuddy -c 'Print :NSCameraUsageDescription' "$INFO")"
           test -n "$CAMERA_USAGE"
