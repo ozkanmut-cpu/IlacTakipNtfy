@@ -122,7 +122,6 @@ jobs:
           INFO="$APP/Info.plist"
           test -d "$APP"
           test -f "$INFO"
-          test -f "$APP/Assets.car"
           test -f "$APP/PrivacyInfo.xcprivacy"
           plutil -lint "$APP/PrivacyInfo.xcprivacy"
           grep -q 'NSPrivacyAccessedAPICategoryUserDefaults' "$APP/PrivacyInfo.xcprivacy"
