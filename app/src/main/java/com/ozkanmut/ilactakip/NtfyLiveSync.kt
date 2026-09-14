@@ -40,6 +40,7 @@ object NtfyLiveSync {
                     val connection = URL(NtfyEndpoint.streamUrl(topics, "10s"))
                         .openConnection() as HttpURLConnection
                     activeConnection = connection
+                    NtfyAuth.apply(context, connection)
                     connection.requestMethod = "GET"
                     connection.connectTimeout = 10_000
                     connection.readTimeout = 15_000
