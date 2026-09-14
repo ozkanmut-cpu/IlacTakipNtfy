@@ -176,7 +176,7 @@ object AlertOutbox {
             }
 
             if (alert.inFlight) {
-                when (probeDelivered(alert)) {
+                when (probeDelivered(c, alert)) {
                     ProbeResult.DELIVERED -> {
                         all = all.filterNot { it.id == alert.id }
                         save(c, all)
@@ -224,10 +224,11 @@ object AlertOutbox {
 
     private enum class ProbeResult { DELIVERED, NOT_FOUND, UNKNOWN }
 
-    private fun probeDelivered(alert: PendingAlert): ProbeResult = try {
+    private fun probeDelivered(c: Context, alert: PendingAlert): ProbeResult = try {
         val sinceSeconds = ((alert.createdAt - 5_000L).coerceAtLeast(0L) / 1000L).toString()
         val encodedSince = URLEncoder.encode(sinceSeconds, "UTF-8")
         val connection = URL(NtfyEndpoint.pollUrl(listOf(alert.topic), sinceSeconds)).openConnection() as HttpURLConnection
+        NtfyAuth.apply(c.applicationContext, connection)
         connection.requestMethod = "GET"
         connection.connectTimeout = 10_000
         connection.readTimeout = 10_000
@@ -253,6 +254,7 @@ object AlertOutbox {
         if (NtfyRateGate.isBlocked(c)) return PostResult.RATE_LIMITED
         return try {
             val connection = URL(NtfyEndpoint.topicUrl(alert.topic)).openConnection() as HttpURLConnection
+            NtfyAuth.apply(c.applicationContext, connection)
             connection.requestMethod = "POST"
             connection.doOutput = true
             connection.connectTimeout = 10_000
