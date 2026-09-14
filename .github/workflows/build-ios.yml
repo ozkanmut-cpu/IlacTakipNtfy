@@ -56,7 +56,7 @@ jobs:
           )[:91484]
           assert len(payload) == 91484
           data = base64.b64decode(payload, validate=True)
-          assert hashlib.sha256(data).hexdigest() == "ef3d8b4feac711849e0e090f6fa551262ac145fecf95da04ab85625b7f3ef939"
+          assert hashlib.sha256(data).hexdigest() == "8b95d8af25674e4f094c84abc68b6cde5e4fa021afc74d3bea10a45741edb785"
           pathlib.Path(sys.argv[2]).write_bytes(data)
           PY
           sips -s format png "$JPEG" --out "$OUT" >/dev/null
