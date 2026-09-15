@@ -173,6 +173,17 @@ const server = http.createServer(async (req, res) => {
       if (!validInstallId(body.installId) || !safeEqual(auth, installToken(body.installId))) return json(res, 401, { error: 'unauthorized' });
       if (!/^[0-9a-f]{64,256}$/i.test(body.deviceToken || '')) return json(res, 400, { error: 'invalid_device_token' });
       const subscriptions = [...new Set((body.subscriptions || []).filter(x => typeof x === 'string' && /^dosefolk-[A-Za-z0-9_-]+$/.test(x)))];
+      if (ntfyAuth.ready) {
+        try {
+          await ntfyAuth.setAccess(body.installId, body.localTopic, body.subscriptions);
+        } catch (error) {
+          if (String(error.message || '').startsWith('invalid_')) {
+            return json(res, 400, { error: 'invalid_topic_access' });
+          }
+          console.error('ntfy access synchronization failed');
+          return json(res, 503, { error: 'ntfy_access_sync_failed' });
+        }
+      }
       const store = await loadStore();
       store.installs[body.installId] = {
         deviceToken: body.deviceToken,
