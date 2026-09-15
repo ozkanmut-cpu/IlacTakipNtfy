@@ -142,6 +142,28 @@ final class APNsRegistrationTests: XCTestCase {
         XCTAssertNil(json["localTopic"])
     }
 
+    func testAccessStatusUpdatesReprovisionState() {
+        let suite = "APNsRegistrationTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults)
+
+        settings.ntfyReprovisionRequired = false
+        XCTAssertThrowsError(try PushGatewayClient.applyAccessStatus(409, settings: settings)) { error in
+            XCTAssertEqual(error as? PushGatewayError, .rejected(409))
+        }
+        XCTAssertTrue(settings.ntfyReprovisionRequired)
+
+        XCTAssertNoThrow(try PushGatewayClient.applyAccessStatus(204, settings: settings))
+        XCTAssertFalse(settings.ntfyReprovisionRequired)
+
+        settings.ntfyReprovisionRequired = true
+        XCTAssertThrowsError(try PushGatewayClient.applyAccessStatus(503, settings: settings)) { error in
+            XCTAssertEqual(error as? PushGatewayError, .rejected(503))
+        }
+        XCTAssertTrue(settings.ntfyReprovisionRequired)
+    }
+
     func testDeviceTokenCanBeRetriedFromMemory() {
         let token = Data([0x12, 0x34])
         var callbacks: [Data] = []
