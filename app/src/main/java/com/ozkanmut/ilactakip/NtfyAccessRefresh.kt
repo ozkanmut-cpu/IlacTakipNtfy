@@ -10,20 +10,30 @@ import kotlin.concurrent.thread
 
 object NtfyAccessRefresh {
     private const val ACCESS_URL = "https://ntfy.field-maintenance-prod.com/dosefolk-push/v1/access"
+    private const val PREFS = "dosefolk_ntfy_access_refresh"
+    private const val LAST_SUBSCRIPTIONS = "last_subscriptions_v1"
 
-    fun schedule(c: Context) {
+    fun schedule(c: Context, force: Boolean = false) {
         val context = c.applicationContext
         thread(name = "dosefolk-ntfy-access", isDaemon = true) {
-            refreshBlocking(context)
+            refreshBlocking(context, force)
         }
     }
 
     @Synchronized
-    fun refreshBlocking(c: Context): Boolean {
+    fun refreshBlocking(c: Context, force: Boolean = false): Boolean {
         val context = c.applicationContext
         val installId = NtfyInstallIdStore.load(context) ?: return false
         val gatewayCredential = PushGatewayCredentialStore.load(context) ?: return false
         if (!NtfyAuth.isProvisioned(context)) return false
+
+        val subscriptions = normalizedSubscriptions(context)
+        val fingerprint = subscriptions.joinToString("\n")
+        if (!force && context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getString(LAST_SUBSCRIPTIONS, null) == fingerprint) {
+            DosefolkQaLog.record(context, DosefolkQaLog.Category.SYNC, "ntfy_access_refresh_unchanged")
+            return true
+        }
 
         val connection = URL(ACCESS_URL).openConnection() as HttpURLConnection
         return try {
@@ -35,7 +45,7 @@ object NtfyAccessRefresh {
             connection.setRequestProperty("Authorization", "Bearer $gatewayCredential")
             val payload = JSONObject()
                 .put("installId", installId)
-                .put("subscriptions", JSONArray(CircleTransport.subscriptionTopics(context)))
+                .put("subscriptions", JSONArray(subscriptions))
                 .toString()
             connection.outputStream.use { it.write(payload.toByteArray(StandardCharsets.UTF_8)) }
             val status = connection.responseCode
@@ -50,7 +60,14 @@ object NtfyAccessRefresh {
                 false
             } else {
                 connection.inputStream?.close()
-                DosefolkQaLog.record(context, DosefolkQaLog.Category.SYNC, "ntfy_access_refresh_success")
+                context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .edit().putString(LAST_SUBSCRIPTIONS, fingerprint).apply()
+                DosefolkQaLog.record(
+                    context,
+                    DosefolkQaLog.Category.SYNC,
+                    "ntfy_access_refresh_success",
+                    mapOf("forced" to force, "topicCount" to subscriptions.size)
+                )
                 true
             }
         } catch (e: Exception) {
@@ -65,4 +82,7 @@ object NtfyAccessRefresh {
             connection.disconnect()
         }
     }
+
+    private fun normalizedSubscriptions(c: Context): List<String> =
+        CircleTransport.subscriptionTopics(c).map(String::trim).filter(String::isNotEmpty).distinct().sorted()
 }
