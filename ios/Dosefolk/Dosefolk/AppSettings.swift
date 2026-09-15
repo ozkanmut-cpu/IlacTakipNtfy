@@ -8,6 +8,7 @@ final class AppSettings {
         static let installId = "installId"
         static let lastSyncID = "lastSyncID"
         static let lastSyncAt = "lastSyncAt"
+        static let ntfyReprovisionRequired = "ntfyReprovisionRequired"
     }
 
     private let defaults: UserDefaults
@@ -63,5 +64,10 @@ final class AppSettings {
     var lastSyncAt: Date? {
         get { defaults.object(forKey: Key.lastSyncAt) as? Date }
         set { defaults.set(newValue, forKey: Key.lastSyncAt) }
+    }
+
+    var ntfyReprovisionRequired: Bool {
+        get { defaults.bool(forKey: Key.ntfyReprovisionRequired) }
+        set { defaults.set(newValue, forKey: Key.ntfyReprovisionRequired) }
     }
 }
