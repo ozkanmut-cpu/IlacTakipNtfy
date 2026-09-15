@@ -67,9 +67,13 @@ struct DosefolkApp: App {
 
         Task {
             do {
+                let localTopic = runtime.transport.publishTopic()
+                let subscriptions = try runtime.transport.subscriptionTopics()
                 try await PushGatewayClient().provision(
                     installId: enrollment.installId,
-                    ticket: enrollment.ticket
+                    ticket: enrollment.ticket,
+                    localTopic: localTopic,
+                    subscriptions: subscriptions
                 )
                 replayGuard.markConsumed(enrollment)
                 DosefolkAppDelegate.retryDeviceTokenRegistration()
