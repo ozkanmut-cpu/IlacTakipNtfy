@@ -135,7 +135,7 @@ final class APNsRegistrationTests: XCTestCase {
             try JSONDecoder().decode(PushGatewayAccessRequest.self, from: body),
             PushGatewayAccessRequest(
                 installId: "install-1",
-                subscriptions: ["dosefolk-local", "dosefolk-peer"]
+                subscriptions: ["dosefolk-peer", "dosefolk-local"]
             )
         )
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
