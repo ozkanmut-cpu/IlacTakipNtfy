@@ -37,7 +37,8 @@ async function startServer(t, port, dataFile) {
       INTERNAL_WAKE_SECRET: internalSecret,
       APNS_TEAM_ID: '',
       APNS_KEY_ID: '',
-      APNS_KEY_PATH: ''
+      APNS_KEY_PATH: '',
+      NTFY_AUTH_FILE: ''
     },
     stdio: ['ignore', 'pipe', 'pipe']
   });
@@ -137,4 +138,49 @@ test('enrollment ticket is install-bound and single-use', async t => {
     body: JSON.stringify({ installId, ticket: 'not-a-real-ticket' })
   });
   assert.equal(bogus.status, 401);
+});
+
+test('secure provisioning failure does not consume enrollment ticket', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'dosefolk-secure-retry-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const base = await startServer(t, 25993, join(dir, 'registrations.json'));
+  const installId = 'install-secure-1234';
+
+  const issue = await fetch(`${base}/internal/enrollment`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-internal-secret': internalSecret },
+    body: JSON.stringify({ installId })
+  });
+  assert.equal(issue.status, 200);
+  const issued = await issue.json();
+
+  const secureAttempt = await fetch(`${base}/v1/provision`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      installId,
+      ticket: issued.ticket,
+      requireNtfyToken: true,
+      localTopic: 'dosefolk-local',
+      subscriptions: ['dosefolk-local', 'dosefolk-peer']
+    })
+  });
+  assert.equal(secureAttempt.status, 503);
+  assert.deepEqual(await secureAttempt.json(), { error: 'ntfy_auth_unavailable' });
+
+  const legacyRetry = await fetch(`${base}/v1/provision`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ installId, ticket: issued.ticket })
+  });
+  assert.equal(legacyRetry.status, 200);
+  const expected = createHmac('sha256', installKey).update(installId).digest('base64url');
+  assert.deepEqual(await legacyRetry.json(), { installId, credential: expected });
+
+  const replay = await fetch(`${base}/v1/provision`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ installId, ticket: issued.ticket })
+  });
+  assert.equal(replay.status, 401);
 });
