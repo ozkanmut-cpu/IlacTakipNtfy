@@ -19,6 +19,11 @@ jobs:
       - name: Run push gateway tests
         working-directory: server/push-gateway
         run: npm test
+      - name: Build push gateway container
+        working-directory: server/push-gateway
+        run: docker build --tag dosefolk-push-gateway:ci .
+      - name: Verify bundled ntfy CLI
+        run: docker run --rm --entrypoint ntfy dosefolk-push-gateway:ci --version
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
