@@ -10,6 +10,7 @@ enum PushGatewayEndpoint {
     static let baseURL = "https://ntfy.field-maintenance-prod.com/dosefolk-push"
     static var registrationURL: URL? { URL(string: "\(baseURL)/v1/register") }
     static var provisioningURL: URL? { URL(string: "\(baseURL)/v1/provision") }
+    static var accessURL: URL? { URL(string: "\(baseURL)/v1/access") }
 }
 
 struct PushGatewayProvisionRequest: Codable, Equatable {
@@ -24,6 +25,11 @@ struct PushGatewayProvisionResponse: Codable, Equatable {
     let installId: String
     let credential: String
     let ntfyToken: String
+}
+
+struct PushGatewayAccessRequest: Codable, Equatable {
+    let installId: String
+    let subscriptions: [String]
 }
 
 actor PushGatewayClient {
@@ -99,6 +105,24 @@ actor PushGatewayClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(credential)", forHTTPHeaderField: "Authorization")
         request.httpBody = try JSONEncoder().encode(payload)
+        return request
+    }
+
+    static func makeAccessRequest(
+        installId: String,
+        subscriptions: [String],
+        credential: String,
+        url: URL
+    ) throws -> URLRequest {
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = 10
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(credential)", forHTTPHeaderField: "Authorization")
+        request.httpBody = try JSONEncoder().encode(PushGatewayAccessRequest(
+            installId: installId,
+            subscriptions: CircleTransport.normalizeTopics(subscriptions)
+        ))
         return request
     }
 
