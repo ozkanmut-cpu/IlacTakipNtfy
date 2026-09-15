@@ -12,6 +12,7 @@ object NtfyAccessRefresh {
     private const val ACCESS_URL = "https://ntfy.field-maintenance-prod.com/dosefolk-push/v1/access"
     private const val PREFS = "dosefolk_ntfy_access_refresh"
     private const val LAST_SUBSCRIPTIONS = "last_subscriptions_v1"
+    private const val REPROVISION_REQUIRED = "reprovision_required_v1"
 
     fun schedule(c: Context, force: Boolean = false) {
         val context = c.applicationContext
@@ -19,6 +20,10 @@ object NtfyAccessRefresh {
             refreshBlocking(context, force)
         }
     }
+
+    fun isReprovisionRequired(c: Context): Boolean =
+        c.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .getBoolean(REPROVISION_REQUIRED, false)
 
     @Synchronized
     fun refreshBlocking(c: Context, force: Boolean = false): Boolean {
@@ -29,8 +34,9 @@ object NtfyAccessRefresh {
 
         val subscriptions = normalizedSubscriptions(context)
         val fingerprint = subscriptions.joinToString("\n")
-        if (!force && context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                .getString(LAST_SUBSCRIPTIONS, null) == fingerprint) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        if (!force && !prefs.getBoolean(REPROVISION_REQUIRED, false) &&
+            prefs.getString(LAST_SUBSCRIPTIONS, null) == fingerprint) {
             DosefolkQaLog.record(context, DosefolkQaLog.Category.SYNC, "ntfy_access_refresh_unchanged")
             return true
         }
@@ -51,6 +57,9 @@ object NtfyAccessRefresh {
             val status = connection.responseCode
             if (status !in 200..299) {
                 connection.errorStream?.close()
+                if (status == 409) {
+                    prefs.edit().putBoolean(REPROVISION_REQUIRED, true).apply()
+                }
                 DosefolkQaLog.record(
                     context,
                     if (status == 409) DosefolkQaLog.Category.SECURITY_REJECT else DosefolkQaLog.Category.ERROR,
@@ -60,8 +69,10 @@ object NtfyAccessRefresh {
                 false
             } else {
                 connection.inputStream?.close()
-                context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                    .edit().putString(LAST_SUBSCRIPTIONS, fingerprint).apply()
+                prefs.edit()
+                    .putString(LAST_SUBSCRIPTIONS, fingerprint)
+                    .putBoolean(REPROVISION_REQUIRED, false)
+                    .apply()
                 DosefolkQaLog.record(
                     context,
                     DosefolkQaLog.Category.SYNC,
