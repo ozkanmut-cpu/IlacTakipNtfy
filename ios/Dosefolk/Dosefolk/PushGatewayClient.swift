@@ -15,11 +15,15 @@ enum PushGatewayEndpoint {
 struct PushGatewayProvisionRequest: Codable, Equatable {
     let installId: String
     let ticket: String
+    let requireNtfyToken: Bool
+    let localTopic: String
+    let subscriptions: [String]
 }
 
 struct PushGatewayProvisionResponse: Codable, Equatable {
     let installId: String
     let credential: String
+    let ntfyToken: String
 }
 
 actor PushGatewayClient {
@@ -34,6 +38,8 @@ actor PushGatewayClient {
     static func makeProvisioningRequest(
         installId: String,
         ticket: String,
+        localTopic: String,
+        subscriptions: [String],
         url: URL
     ) throws -> URLRequest {
         var request = URLRequest(url: url)
@@ -42,28 +48,44 @@ actor PushGatewayClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONEncoder().encode(PushGatewayProvisionRequest(
             installId: installId,
-            ticket: ticket
+            ticket: ticket,
+            requireNtfyToken: true,
+            localTopic: localTopic,
+            subscriptions: CircleTransport.normalizeTopics([localTopic] + subscriptions)
         ))
         return request
     }
 
-    static func decodeProvisioningResponse(_ data: Data, expectedInstallId: String) throws -> String {
+    static func decodeProvisioningResponse(_ data: Data, expectedInstallId: String) throws -> PushGatewayProvisionResponse {
         let body = try JSONDecoder().decode(PushGatewayProvisionResponse.self, from: data)
         guard body.installId == expectedInstallId,
-              !body.credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+              !body.credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !body.ntfyToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             throw PushGatewayError.invalidResponse
         }
-        return body.credential
+        return body
     }
 
-    func provision(installId: String, ticket: String) async throws {
+    func provision(
+        installId: String,
+        ticket: String,
+        localTopic: String,
+        subscriptions: [String]
+    ) async throws {
         guard let url = PushGatewayEndpoint.provisioningURL else { throw PushGatewayError.invalidURL }
-        let request = try Self.makeProvisioningRequest(installId: installId, ticket: ticket, url: url)
+        let request = try Self.makeProvisioningRequest(
+            installId: installId,
+            ticket: ticket,
+            localTopic: localTopic,
+            subscriptions: subscriptions,
+            url: url
+        )
         let (data, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(status) else { throw PushGatewayError.rejected(status) }
-        let credential = try Self.decodeProvisioningResponse(data, expectedInstallId: installId)
-        try keychain.set(credential, for: SecureCredentialKey.provisioningSecret)
+        let credentials = try Self.decodeProvisioningResponse(data, expectedInstallId: installId)
+        try keychain.set(credentials.credential, for: SecureCredentialKey.provisioningSecret)
+        try keychain.set(credentials.ntfyToken, for: SecureCredentialKey.ntfyToken)
     }
 
     static func makeRegistrationRequest(
