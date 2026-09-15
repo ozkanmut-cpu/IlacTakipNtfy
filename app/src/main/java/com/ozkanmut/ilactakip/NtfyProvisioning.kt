@@ -10,6 +10,7 @@ import java.nio.charset.StandardCharsets
 import kotlin.concurrent.thread
 
 internal data class NtfyEnrollment(val installId: String, val ticket: String)
+internal data class NtfyProvisioningCredentials(val gatewayCredential: String, val ntfyToken: String)
 
 object NtfyInstallIdStore {
     private const val PREFS = "dosefolk_ntfy_provisioning"
@@ -55,11 +56,13 @@ object NtfyProvisioning {
         NtfyEnrollment(installId, ticket)
     }.getOrNull()
 
-    internal fun decodeProvisioningResponse(body: String, expectedInstallId: String): String? = runCatching {
+    internal fun decodeProvisioningResponse(body: String, expectedInstallId: String): NtfyProvisioningCredentials? = runCatching {
         val json = JSONObject(body)
         val installId = json.optString("installId").trim()
-        val credential = json.optString("credential").trim()
-        credential.takeIf { installId == expectedInstallId && it.isNotEmpty() }
+        val gatewayCredential = json.optString("credential").trim()
+        val ntfyToken = json.optString("ntfyToken").trim()
+        if (installId != expectedInstallId || gatewayCredential.isEmpty() || ntfyToken.isEmpty()) return null
+        NtfyProvisioningCredentials(gatewayCredential, ntfyToken)
     }.getOrNull()
 
     fun handleEnrollmentUrl(c: Context, raw: String): Boolean {
@@ -97,9 +100,14 @@ object NtfyProvisioning {
             connection.connectTimeout = 10_000
             connection.readTimeout = 10_000
             connection.setRequestProperty("Content-Type", "application/json")
+            val localTopic = Store.topic(c)
+            val subscriptions = CircleTransport.subscriptionTopics(c)
             val payload = JSONObject()
                 .put("installId", enrollment.installId)
                 .put("ticket", enrollment.ticket)
+                .put("requireNtfyToken", true)
+                .put("localTopic", localTopic)
+                .put("subscriptions", org.json.JSONArray(subscriptions))
                 .toString()
             connection.outputStream.use { it.write(payload.toByteArray(StandardCharsets.UTF_8)) }
             val status = connection.responseCode
@@ -108,8 +116,8 @@ object NtfyProvisioning {
                 false
             } else {
                 val response = connection.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
-                val credential = decodeProvisioningResponse(response, enrollment.installId) ?: return false
-                NtfyCredentialStore.save(c, credential)
+                val credentials = decodeProvisioningResponse(response, enrollment.installId) ?: return false
+                NtfyCredentialStore.save(c, credentials.ntfyToken)
                 NtfyInstallIdStore.save(c, enrollment.installId)
                 true
             }

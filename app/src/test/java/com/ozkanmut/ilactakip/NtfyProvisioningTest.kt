@@ -21,23 +21,29 @@ class NtfyProvisioningTest {
     }
 
     @Test
-    fun validatesProvisioningResponseBinding() {
+    fun validatesProvisioningResponseBindingAndSeparatesCredentials() {
         assertEquals(
-            "secret-token",
+            NtfyProvisioningCredentials("gateway-secret", "tk_native-token"),
             NtfyProvisioning.decodeProvisioningResponse(
-                "{\"installId\":\"install-1234\",\"credential\":\" secret-token \"}",
+                "{\"installId\":\"install-1234\",\"credential\":\" gateway-secret \",\"ntfyToken\":\" tk_native-token \"}",
                 "install-1234"
             )
         )
         assertNull(
             NtfyProvisioning.decodeProvisioningResponse(
-                "{\"installId\":\"other-install\",\"credential\":\"secret-token\"}",
+                "{\"installId\":\"other-install\",\"credential\":\"gateway-secret\",\"ntfyToken\":\"tk_native-token\"}",
                 "install-1234"
             )
         )
         assertNull(
             NtfyProvisioning.decodeProvisioningResponse(
-                "{\"installId\":\"install-1234\",\"credential\":\"   \"}",
+                "{\"installId\":\"install-1234\",\"credential\":\"gateway-secret\"}",
+                "install-1234"
+            )
+        )
+        assertNull(
+            NtfyProvisioning.decodeProvisioningResponse(
+                "{\"installId\":\"install-1234\",\"credential\":\"gateway-secret\",\"ntfyToken\":\"   \"}",
                 "install-1234"
             )
         )
