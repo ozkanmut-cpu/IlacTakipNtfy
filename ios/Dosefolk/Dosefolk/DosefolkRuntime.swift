@@ -99,10 +99,18 @@ final class DosefolkRuntime {
                 Task {
                     guard let subscriptions = try? transport.subscriptionTopics() else { return }
                     let installId = settings.ensureInstallId()
-                    _ = try? await PushGatewayClient().refreshAccess(
-                        installId: installId,
-                        subscriptions: subscriptions
-                    )
+                    do {
+                        _ = try await PushGatewayClient().refreshAccess(
+                            installId: installId,
+                            subscriptions: subscriptions,
+                            settings: settings
+                        )
+                    } catch PushGatewayError.rejected(409) {
+                        // Persistent reprovision state is set by PushGatewayClient.
+                        // The UI observes settings and routes the user to enrollment.
+                    } catch {
+                        // Transient access-refresh failures preserve the existing state.
+                    }
                 }
             }
         )
