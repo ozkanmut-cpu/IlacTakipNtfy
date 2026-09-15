@@ -90,8 +90,10 @@ object PairingLifecycle {
     }
 
     fun completeRePair(c: Context, topic: String) {
-        RevokedPeerFence.clear(c.applicationContext, topic)
-        DosefolkQaLog.record(c, DosefolkQaLog.Category.PAIR, "repair_complete", mapOf("peerTopic" to topic))
+        val context = c.applicationContext
+        RevokedPeerFence.clear(context, topic)
+        DosefolkQaLog.record(context, DosefolkQaLog.Category.PAIR, "repair_complete", mapOf("peerTopic" to topic))
+        NtfyAccessRefresh.schedule(context)
     }
 
     private fun cleanupPeer(c: Context, topic: String, dropOutbox: Boolean) {
