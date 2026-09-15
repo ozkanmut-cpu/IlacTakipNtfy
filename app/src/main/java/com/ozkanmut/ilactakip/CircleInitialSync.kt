@@ -44,6 +44,7 @@ object CircleInitialSync {
         }
 
         StockSync.publishAll(context, targetTopic)
+        NtfyAccessRefresh.schedule(context)
         DosefolkSyncScheduler.kick(context)
     }
 
