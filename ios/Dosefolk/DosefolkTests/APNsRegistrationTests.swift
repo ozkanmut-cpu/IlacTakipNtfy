@@ -19,11 +19,13 @@ final class APNsRegistrationTests: XCTestCase {
         XCTAssertEqual(payload.subscriptions, ["dosefolk-local", "dosefolk-peer"])
     }
 
-    func testProvisioningRequestContainsOnlyInstallAndTicket() throws {
+    func testProvisioningRequestRequiresNativeTokenAndCarriesTopicAccess() throws {
         let url = try XCTUnwrap(URL(string: "https://example.invalid/v1/provision"))
         let request = try PushGatewayClient.makeProvisioningRequest(
             installId: "install-1234",
             ticket: "ticket-1",
+            localTopic: "dosefolk-local",
+            subscriptions: ["dosefolk-peer", "dosefolk-local", "dosefolk-peer"],
             url: url
         )
 
@@ -33,23 +35,35 @@ final class APNsRegistrationTests: XCTestCase {
         XCTAssertEqual(request.timeoutInterval, 10)
         XCTAssertEqual(
             try JSONDecoder().decode(PushGatewayProvisionRequest.self, from: try XCTUnwrap(request.httpBody)),
-            PushGatewayProvisionRequest(installId: "install-1234", ticket: "ticket-1")
+            PushGatewayProvisionRequest(
+                installId: "install-1234",
+                ticket: "ticket-1",
+                requireNtfyToken: true,
+                localTopic: "dosefolk-local",
+                subscriptions: ["dosefolk-local", "dosefolk-peer"]
+            )
         )
     }
 
-    func testProvisioningResponseRequiresMatchingInstallAndCredential() throws {
+    func testProvisioningResponseRequiresMatchingInstallAndBothCredentials() throws {
         let valid = try JSONEncoder().encode(PushGatewayProvisionResponse(
             installId: "install-1234",
-            credential: "credential-1"
+            credential: "credential-1",
+            ntfyToken: "tk_native-token"
         ))
         XCTAssertEqual(
             try PushGatewayClient.decodeProvisioningResponse(valid, expectedInstallId: "install-1234"),
-            "credential-1"
+            PushGatewayProvisionResponse(
+                installId: "install-1234",
+                credential: "credential-1",
+                ntfyToken: "tk_native-token"
+            )
         )
 
         let wrongInstall = try JSONEncoder().encode(PushGatewayProvisionResponse(
             installId: "install-other",
-            credential: "credential-1"
+            credential: "credential-1",
+            ntfyToken: "tk_native-token"
         ))
         XCTAssertThrowsError(
             try PushGatewayClient.decodeProvisioningResponse(wrongInstall, expectedInstallId: "install-1234")
@@ -59,10 +73,22 @@ final class APNsRegistrationTests: XCTestCase {
 
         let emptyCredential = try JSONEncoder().encode(PushGatewayProvisionResponse(
             installId: "install-1234",
-            credential: "   "
+            credential: "   ",
+            ntfyToken: "tk_native-token"
         ))
         XCTAssertThrowsError(
             try PushGatewayClient.decodeProvisioningResponse(emptyCredential, expectedInstallId: "install-1234")
+        ) { error in
+            XCTAssertEqual(error as? PushGatewayError, .invalidResponse)
+        }
+
+        let emptyNtfyToken = try JSONEncoder().encode(PushGatewayProvisionResponse(
+            installId: "install-1234",
+            credential: "credential-1",
+            ntfyToken: "   "
+        ))
+        XCTAssertThrowsError(
+            try PushGatewayClient.decodeProvisioningResponse(emptyNtfyToken, expectedInstallId: "install-1234")
         ) { error in
             XCTAssertEqual(error as? PushGatewayError, .invalidResponse)
         }
