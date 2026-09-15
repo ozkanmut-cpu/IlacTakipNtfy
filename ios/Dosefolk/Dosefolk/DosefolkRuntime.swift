@@ -96,6 +96,14 @@ final class DosefolkRuntime {
             initialSyncPublisher: initialSync,
             subscriptionsChanged: {
                 DosefolkAppDelegate.retryDeviceTokenRegistration()
+                Task {
+                    guard let subscriptions = try? transport.subscriptionTopics() else { return }
+                    let installId = settings.ensureInstallId()
+                    _ = try? await PushGatewayClient().refreshAccess(
+                        installId: installId,
+                        subscriptions: subscriptions
+                    )
+                }
             }
         )
     }
