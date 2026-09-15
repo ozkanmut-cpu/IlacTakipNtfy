@@ -92,7 +92,9 @@ object NtfyProvisioning {
 
     @Synchronized
     private fun provisionBlocking(c: Context, enrollment: NtfyEnrollment): Boolean {
-        if (NtfyAuth.isProvisioned(c)) return NtfyInstallIdStore.load(c) == enrollment.installId
+        if (NtfyAuth.isProvisioned(c)) {
+            return NtfyInstallIdStore.load(c) == enrollment.installId && PushGatewayCredentialStore.load(c) != null
+        }
         val connection = URL(PROVISION_URL).openConnection() as HttpURLConnection
         return try {
             connection.requestMethod = "POST"
@@ -118,6 +120,7 @@ object NtfyProvisioning {
                 val response = connection.inputStream.bufferedReader(StandardCharsets.UTF_8).use { it.readText() }
                 val credentials = decodeProvisioningResponse(response, enrollment.installId) ?: return false
                 NtfyCredentialStore.save(c, credentials.ntfyToken)
+                PushGatewayCredentialStore.save(c, credentials.gatewayCredential)
                 NtfyInstallIdStore.save(c, enrollment.installId)
                 true
             }
