@@ -142,4 +142,24 @@ actor PushGatewayClient {
         guard (200..<300).contains(status) else { throw PushGatewayError.rejected(status) }
         return true
     }
+
+    func refreshAccess(installId: String, subscriptions: [String]) async throws -> Bool {
+        guard let credential = try keychain.string(for: SecureCredentialKey.provisioningSecret),
+              !credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              let ntfyToken = try keychain.string(for: SecureCredentialKey.ntfyToken),
+              !ntfyToken.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+        guard let url = PushGatewayEndpoint.accessURL else { throw PushGatewayError.invalidURL }
+        let request = try Self.makeAccessRequest(
+            installId: installId,
+            subscriptions: subscriptions,
+            credential: credential,
+            url: url
+        )
+        let (_, response) = try await session.data(for: request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard (200..<300).contains(status) else { throw PushGatewayError.rejected(status) }
+        return true
+    }
 }
