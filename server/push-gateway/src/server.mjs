@@ -32,9 +32,10 @@ async function loadStore() {
     const store = JSON.parse(await readFile(cfg.dataFile, 'utf8'));
     store.installs ||= {};
     store.enrollments ||= {};
+    store.topicBindings ||= {};
     return store;
   } catch (error) {
-    if (error.code === 'ENOENT') return { installs: {}, enrollments: {} };
+    if (error.code === 'ENOENT') return { installs: {}, enrollments: {}, topicBindings: {} };
     throw error;
   }
 }
@@ -133,6 +134,7 @@ const server = http.createServer(async (req, res) => {
         console.error('ntfy credential provisioning failed');
         return json(res, 503, { error: 'ntfy_provisioning_failed' });
       }
+      if (body.requireNtfyToken === true) store.topicBindings[body.installId] = body.localTopic;
       delete store.enrollments[hash];
       await saveStore(store);
       return json(res, 200, credentials);
@@ -152,6 +154,11 @@ const server = http.createServer(async (req, res) => {
           ntfyAuth,
           requireNtfyToken: body.requireNtfyToken === true
         });
+        if (body.requireNtfyToken === true) {
+          const store = await loadStore();
+          store.topicBindings[body.installId] = body.localTopic;
+          await saveStore(store);
+        }
         return json(res, 200, credentials);
       } catch (error) {
         if (String(error.message || '').startsWith('invalid_')) {
@@ -173,9 +180,17 @@ const server = http.createServer(async (req, res) => {
       if (!validInstallId(body.installId) || !safeEqual(auth, installToken(body.installId))) return json(res, 401, { error: 'unauthorized' });
       if (!/^[0-9a-f]{64,256}$/i.test(body.deviceToken || '')) return json(res, 400, { error: 'invalid_device_token' });
       const subscriptions = [...new Set((body.subscriptions || []).filter(x => typeof x === 'string' && /^dosefolk-[A-Za-z0-9_-]+$/.test(x)))];
+      const store = await loadStore();
       if (ntfyAuth.ready) {
+        const boundLocalTopic = store.topicBindings[body.installId];
+        if (typeof boundLocalTopic !== 'string' || !boundLocalTopic) {
+          return json(res, 409, { error: 'ntfy_reprovision_required' });
+        }
+        if (body.localTopic !== boundLocalTopic) {
+          return json(res, 409, { error: 'ntfy_topic_mismatch' });
+        }
         try {
-          await ntfyAuth.setAccess(body.installId, body.localTopic, body.subscriptions);
+          await ntfyAuth.setAccess(body.installId, boundLocalTopic, body.subscriptions);
         } catch (error) {
           if (String(error.message || '').startsWith('invalid_')) {
             return json(res, 400, { error: 'invalid_topic_access' });
@@ -184,7 +199,6 @@ const server = http.createServer(async (req, res) => {
           return json(res, 503, { error: 'ntfy_access_sync_failed' });
         }
       }
-      const store = await loadStore();
       store.installs[body.installId] = {
         deviceToken: body.deviceToken,
         environment: body.environment === 'sandbox' ? 'sandbox' : 'production',
