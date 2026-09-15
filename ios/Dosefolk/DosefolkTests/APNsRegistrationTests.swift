@@ -117,6 +117,31 @@ final class APNsRegistrationTests: XCTestCase {
         XCTAssertEqual(try JSONDecoder().decode(APNsRegistrationPayload.self, from: try XCTUnwrap(request.httpBody)), payload)
     }
 
+    func testAccessRequestCarriesGatewayCredentialAndNormalizedSubscriptions() throws {
+        let url = try XCTUnwrap(URL(string: "https://example.invalid/v1/access"))
+        let request = try PushGatewayClient.makeAccessRequest(
+            installId: "install-1",
+            subscriptions: ["dosefolk-peer", "dosefolk-local", "dosefolk-peer"],
+            credential: "credential-1",
+            url: url
+        )
+
+        XCTAssertEqual(request.httpMethod, "POST")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer credential-1")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        XCTAssertEqual(request.timeoutInterval, 10)
+        let body = try XCTUnwrap(request.httpBody)
+        XCTAssertEqual(
+            try JSONDecoder().decode(PushGatewayAccessRequest.self, from: body),
+            PushGatewayAccessRequest(
+                installId: "install-1",
+                subscriptions: ["dosefolk-local", "dosefolk-peer"]
+            )
+        )
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        XCTAssertNil(json["localTopic"])
+    }
+
     func testDeviceTokenCanBeRetriedFromMemory() {
         let token = Data([0x12, 0x34])
         var callbacks: [Data] = []
