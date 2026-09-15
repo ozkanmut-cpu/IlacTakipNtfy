@@ -5,10 +5,14 @@ export async function buildProvisioningCredentials({
   gatewayCredential,
   localTopic,
   subscriptions = [],
-  ntfyAuth
+  ntfyAuth,
+  requireNtfyToken = false
 }) {
   const response = { installId, credential: gatewayCredential };
-  if (!ntfyAuth?.ready) return response;
+  if (!ntfyAuth?.ready) {
+    if (requireNtfyToken) throw new Error('ntfy_auth_unavailable');
+    return response;
+  }
 
   const access = normalizeTopicAccess(localTopic, subscriptions);
   const native = await ntfyAuth.provision(

@@ -57,3 +57,17 @@ test('native provisioning rejects invalid topic access before issuing token', as
   );
   assert.equal(called, false);
 });
+
+test('required native token fails closed when ntfy auth is disabled', async () => {
+  await assert.rejects(
+    buildProvisioningCredentials({
+      installId: 'install-1234',
+      gatewayCredential: 'gateway-secret',
+      localTopic: 'dosefolk-local',
+      subscriptions: [],
+      ntfyAuth: { ready: false },
+      requireNtfyToken: true
+    }),
+    /ntfy_auth_unavailable/
+  );
+});

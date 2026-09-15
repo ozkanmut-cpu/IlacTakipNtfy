@@ -120,11 +120,15 @@ const server = http.createServer(async (req, res) => {
           gatewayCredential: installToken(body.installId),
           localTopic: body.localTopic,
           subscriptions: body.subscriptions,
-          ntfyAuth
+          ntfyAuth,
+          requireNtfyToken: body.requireNtfyToken === true
         });
       } catch (error) {
         if (String(error.message || '').startsWith('invalid_')) {
           return json(res, 400, { error: 'invalid_topic_access' });
+        }
+        if (error.message === 'ntfy_auth_unavailable') {
+          return json(res, 503, { error: 'ntfy_auth_unavailable' });
         }
         console.error('ntfy credential provisioning failed');
         return json(res, 503, { error: 'ntfy_provisioning_failed' });
@@ -145,12 +149,16 @@ const server = http.createServer(async (req, res) => {
           gatewayCredential: installToken(body.installId),
           localTopic: body.localTopic,
           subscriptions: body.subscriptions,
-          ntfyAuth
+          ntfyAuth,
+          requireNtfyToken: body.requireNtfyToken === true
         });
         return json(res, 200, credentials);
       } catch (error) {
         if (String(error.message || '').startsWith('invalid_')) {
           return json(res, 400, { error: 'invalid_topic_access' });
+        }
+        if (error.message === 'ntfy_auth_unavailable') {
+          return json(res, 503, { error: 'ntfy_auth_unavailable' });
         }
         console.error('ntfy credential provisioning failed');
         return json(res, 503, { error: 'ntfy_provisioning_failed' });
