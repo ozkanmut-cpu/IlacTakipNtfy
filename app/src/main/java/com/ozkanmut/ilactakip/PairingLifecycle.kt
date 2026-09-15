@@ -103,5 +103,6 @@ object PairingLifecycle {
         StockEngine.clearRemoteOwner(c, topic)
         CirclePresence.clear(c, topic)
         if (dropOutbox) AlertOutbox.dropTopic(c, topic)
+        NtfyAccessRefresh.schedule(c)
     }
 }
