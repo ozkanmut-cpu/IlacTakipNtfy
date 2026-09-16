@@ -16,6 +16,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Install push gateway dependencies
+        working-directory: server/push-gateway
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Check push gateway syntax
+        working-directory: server/push-gateway
+        run: npm run check
       - name: Run push gateway tests
         working-directory: server/push-gateway
         run: npm test
