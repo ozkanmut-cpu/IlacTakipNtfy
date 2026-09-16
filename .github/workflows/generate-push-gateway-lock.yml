@@ -1,0 +1,30 @@
+name: Generate Push Gateway Lockfile
+
+on:
+  push:
+    branches: [ ios-milestone-1 ]
+    paths:
+      - '.github/workflows/generate-push-gateway-lock.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  lockfile:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Generate package lock
+        working-directory: server/push-gateway
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Commit package lock
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server/push-gateway/package-lock.json
+          git diff --cached --quiet && exit 0
+          git commit -m 'Lock push gateway dependencies'
+          git push origin HEAD:ios-milestone-1
