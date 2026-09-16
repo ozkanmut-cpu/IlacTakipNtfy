@@ -19,7 +19,9 @@ struct CirclePairingPayload: Equatable {
 
     static func parse(_ raw: String) -> CirclePairingPayload? {
         let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if value.hasPrefix("dosefolk://pair"), let components = URLComponents(string: value) {
+        if value.hasPrefix("dosefolk://pair"),
+           let components = URLComponents(string: value) {
+            guard components.scheme == "dosefolk", components.host == "pair" else { return nil }
             let topic = components.queryItems?.first(where: { $0.name == "topic" })?.value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let name = components.queryItems?.first(where: { $0.name == "name" })?.value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             guard !topic.isEmpty else { return nil }

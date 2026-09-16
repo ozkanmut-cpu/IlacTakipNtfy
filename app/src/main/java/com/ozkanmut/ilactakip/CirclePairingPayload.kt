@@ -16,6 +16,7 @@ data class CirclePairingPayload(val topic: String, val name: String) {
             val value = raw.trim()
             if (value.startsWith("dosefolk://pair")) {
                 val uri = runCatching { Uri.parse(value) }.getOrNull() ?: return null
+                if (uri.scheme != "dosefolk" || uri.authority != "pair") return null
                 val topic = uri.getQueryParameter("topic").orEmpty().trim()
                 val name = uri.getQueryParameter("name").orEmpty().trim()
                 if (topic.isBlank()) return null
