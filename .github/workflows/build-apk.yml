@@ -2,7 +2,7 @@ name: Build APK
 
 on:
   push:
-    branches: [ main, ios-milestone-1 ]
+    branches: [ main, ios-milestone-1, encrypted-relay-migration ]
     paths-ignore:
       - 'ios/**'
       - '.github/workflows/build-ios.yml'
