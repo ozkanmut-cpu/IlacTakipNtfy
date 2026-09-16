@@ -27,6 +27,10 @@
                 <data android:scheme="dosefolk" android:host="enroll" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".NtfyReprovisionHelpActivity"
+            android:exported="false"
+            android:label="Dosefolk" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
