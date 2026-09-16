@@ -25,6 +25,14 @@ object NtfyAccessRefresh {
         c.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getBoolean(REPROVISION_REQUIRED, false)
 
+    fun markReprovisionRequired(c: Context) {
+        c.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(REPROVISION_REQUIRED, true)
+            .apply()
+        NtfyReprovisionNotifier.show(c)
+    }
+
     fun clearReprovisionRequired(c: Context) {
         c.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .edit()
@@ -65,10 +73,7 @@ object NtfyAccessRefresh {
             val status = connection.responseCode
             if (status !in 200..299) {
                 connection.errorStream?.close()
-                if (status == 409) {
-                    prefs.edit().putBoolean(REPROVISION_REQUIRED, true).apply()
-                    NtfyReprovisionNotifier.show(context)
-                }
+                if (status == 409) markReprovisionRequired(context)
                 DosefolkQaLog.record(
                     context,
                     if (status == 409) DosefolkQaLog.Category.SECURITY_REJECT else DosefolkQaLog.Category.ERROR,
