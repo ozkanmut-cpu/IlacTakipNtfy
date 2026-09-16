@@ -9,6 +9,7 @@ final class AppSettings {
         static let lastSyncID = "lastSyncID"
         static let lastSyncAt = "lastSyncAt"
         static let ntfyReprovisionRequired = "ntfyReprovisionRequired"
+        static let ntfyAccessFingerprint = "ntfyAccessFingerprint"
     }
 
     private let defaults: UserDefaults
@@ -69,5 +70,10 @@ final class AppSettings {
     var ntfyReprovisionRequired: Bool {
         get { defaults.bool(forKey: Key.ntfyReprovisionRequired) }
         set { defaults.set(newValue, forKey: Key.ntfyReprovisionRequired) }
+    }
+
+    var ntfyAccessFingerprint: String {
+        get { defaults.string(forKey: Key.ntfyAccessFingerprint) ?? "" }
+        set { defaults.set(newValue, forKey: Key.ntfyAccessFingerprint) }
     }
 }
