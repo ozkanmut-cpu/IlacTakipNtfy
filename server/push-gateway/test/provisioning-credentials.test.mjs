@@ -14,6 +14,18 @@ test('legacy provisioning response is unchanged when ntfy auth is disabled', asy
   assert.deepEqual(result, { installId: 'install-1234', credential: gatewayCredential });
 });
 
+test('legacy provisioning without topic metadata survives auth migration', async () => {
+  let called = false;
+  const result = await buildProvisioningCredentials({
+    installId: 'install-1234',
+    gatewayCredential,
+    ntfyAuth: { ready: true, provision: async () => { called = true; } },
+    requireNtfyToken: false
+  });
+  assert.deepEqual(result, { installId: 'install-1234', credential: gatewayCredential });
+  assert.equal(called, false);
+});
+
 test('native ntfy token is returned separately from gateway credential', async () => {
   const calls = [];
   const ntfyAuth = {
