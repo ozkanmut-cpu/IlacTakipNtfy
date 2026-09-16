@@ -48,9 +48,15 @@ class DosefolkSyncWorker(appContext: Context, params: WorkerParameters) : Worker
 object DosefolkSyncScheduler {
     private const val PERIODIC = "dosefolk-periodic-sync"
     private const val KICK = "dosefolk-sync-kick"
+    private const val FULL_RECONCILIATION = "dosefolk-full-reconciliation"
 
     private fun network() = Constraints.Builder()
         .setRequiredNetworkType(NetworkType.CONNECTED)
+        .build()
+
+    private fun oneTimeRequest() = OneTimeWorkRequestBuilder<DosefolkSyncWorker>()
+        .setConstraints(network())
+        .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.SECONDS)
         .build()
 
     fun ensure(c: Context) {
@@ -64,11 +70,13 @@ object DosefolkSyncScheduler {
 
     fun kick(c: Context) {
         DosefolkQaLog.record(c, DosefolkQaLog.Category.WORKER, "sync_worker_kick")
-        val request = OneTimeWorkRequestBuilder<DosefolkSyncWorker>()
-            .setConstraints(network())
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.SECONDS)
-            .build()
         WorkManager.getInstance(c.applicationContext)
-            .enqueueUniqueWork(KICK, ExistingWorkPolicy.KEEP, request)
+            .enqueueUniqueWork(KICK, ExistingWorkPolicy.KEEP, oneTimeRequest())
+    }
+
+    fun fullReconciliation(c: Context) {
+        DosefolkQaLog.record(c, DosefolkQaLog.Category.WORKER, "sync_worker_full_reconciliation")
+        WorkManager.getInstance(c.applicationContext)
+            .enqueueUniqueWork(FULL_RECONCILIATION, ExistingWorkPolicy.REPLACE, oneTimeRequest())
     }
 }
