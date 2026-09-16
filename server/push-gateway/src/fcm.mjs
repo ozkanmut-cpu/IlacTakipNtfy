@@ -1,3 +1,4 @@
+import { createPrivateKey } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 
 const INVALID_TARGET_CODES = new Set([
@@ -26,9 +27,8 @@ async function defaultCredentialProbe(credentialPath) {
   const raw = await readFile(credentialPath, 'utf8');
   const json = JSON.parse(raw);
   if (!(json?.project_id && json?.client_email && json?.private_key)) return false;
-  const { cert } = await import('firebase-admin/app');
-  cert(json);
-  return true;
+  const key = createPrivateKey(json.private_key);
+  return key.asymmetricKeyType === 'rsa';
 }
 
 let defaultMessagingPromise;
