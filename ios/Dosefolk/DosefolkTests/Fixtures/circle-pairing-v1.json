@@ -1,0 +1,34 @@
+{
+  "cases": [
+    {
+      "id": "canonical_unicode",
+      "raw": "dosefolk://pair?topic=dosefolk-abc12345&name=%C3%96zkan%20Mut",
+      "valid": true,
+      "topic": "dosefolk-abc12345",
+      "name": "Özkan Mut",
+      "canonicalEncode": true
+    },
+    {
+      "id": "legacy_topic",
+      "raw": "  dosefolk-legacy123  ",
+      "valid": true,
+      "topic": "dosefolk-legacy123",
+      "name": ""
+    },
+    {
+      "id": "missing_topic",
+      "raw": "dosefolk://pair?name=Someone",
+      "valid": false
+    },
+    {
+      "id": "wrong_host_prefix_collision",
+      "raw": "dosefolk://pairing?topic=dosefolk-wrong123&name=Someone",
+      "valid": false
+    },
+    {
+      "id": "unrelated_url",
+      "raw": "https://example.com/?topic=dosefolk-abc12345",
+      "valid": false
+    }
+  ]
+}
