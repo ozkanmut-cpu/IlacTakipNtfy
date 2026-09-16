@@ -13,6 +13,7 @@ export async function buildProvisioningCredentials({
     if (requireNtfyToken) throw new Error('ntfy_auth_unavailable');
     return response;
   }
+  if (!requireNtfyToken && !localTopic) return response;
 
   const access = normalizeTopicAccess(localTopic, subscriptions);
   const native = await ntfyAuth.provision(
