@@ -83,8 +83,11 @@ object SyncEngine {
         thread { DosefolkSyncScheduler.ensure(context); pullBlocking(context) }
     }
 
+    fun pullBlocking(c: Context): Boolean =
+        SyncTransportRuntime.current.pullBlocking(c.applicationContext)
+
     @Synchronized
-    fun pullBlocking(c: Context): Boolean = pullTopicsBlocking(
+    internal fun pullNtfyBlocking(c: Context): Boolean = pullTopicsBlocking(
         c = c.applicationContext,
         topics = CircleTransport.subscriptionTopics(c.applicationContext),
         since = SyncCheckpointStore.since(c.applicationContext),
