@@ -11,6 +11,7 @@ services:
       APNS_TEAM_ID: ${APNS_TEAM_ID:-}
       APNS_KEY_ID: ${APNS_KEY_ID:-}
       APNS_KEY_PATH: /run/secrets/apns_key.p8
+      GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/firebase-service-account.json
       INSTALL_HMAC_KEY: ${INSTALL_HMAC_KEY:-}
       INTERNAL_WAKE_SECRET: ${INTERNAL_WAKE_SECRET:-}
     ports:
