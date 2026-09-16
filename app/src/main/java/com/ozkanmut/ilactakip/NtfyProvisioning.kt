@@ -93,6 +93,7 @@ object NtfyProvisioning {
             if (ok) {
                 NtfyLiveSync.ensure(context)
                 DosefolkSyncScheduler.ensure(context)
+                FcmRegistrationScheduler.refresh(context)
                 DosefolkSyncScheduler.kick(context)
                 SyncEngine.pullOnce(context)
             }
