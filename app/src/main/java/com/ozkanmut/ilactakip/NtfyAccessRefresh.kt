@@ -30,6 +30,7 @@ object NtfyAccessRefresh {
             .edit()
             .putBoolean(REPROVISION_REQUIRED, false)
             .commit()
+        NtfyReprovisionNotifier.dismiss(c)
     }
 
     @Synchronized
@@ -66,6 +67,7 @@ object NtfyAccessRefresh {
                 connection.errorStream?.close()
                 if (status == 409) {
                     prefs.edit().putBoolean(REPROVISION_REQUIRED, true).apply()
+                    NtfyReprovisionNotifier.show(context)
                 }
                 DosefolkQaLog.record(
                     context,
@@ -80,6 +82,7 @@ object NtfyAccessRefresh {
                     .putString(LAST_SUBSCRIPTIONS, fingerprint)
                     .putBoolean(REPROVISION_REQUIRED, false)
                     .apply()
+                NtfyReprovisionNotifier.dismiss(context)
                 DosefolkQaLog.record(
                     context,
                     DosefolkQaLog.Category.SYNC,
