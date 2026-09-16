@@ -1,5 +1,9 @@
 import Foundation
 
+extension Notification.Name {
+    static let ntfyReprovisionStateDidChange = Notification.Name("ntfyReprovisionStateDidChange")
+}
+
 final class AppSettings {
     private enum Key {
         static let displayName = "displayName"
@@ -69,7 +73,13 @@ final class AppSettings {
 
     var ntfyReprovisionRequired: Bool {
         get { defaults.bool(forKey: Key.ntfyReprovisionRequired) }
-        set { defaults.set(newValue, forKey: Key.ntfyReprovisionRequired) }
+        set {
+            let oldValue = defaults.bool(forKey: Key.ntfyReprovisionRequired)
+            defaults.set(newValue, forKey: Key.ntfyReprovisionRequired)
+            if oldValue != newValue {
+                NotificationCenter.default.post(name: .ntfyReprovisionStateDidChange, object: nil)
+            }
+        }
     }
 
     var ntfyAccessFingerprint: String {
