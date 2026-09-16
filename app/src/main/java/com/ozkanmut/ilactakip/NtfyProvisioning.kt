@@ -40,6 +40,16 @@ object NtfyProvisioning {
 
     internal fun validInstallId(value: String): Boolean = INSTALL_ID_PATTERN.matches(value)
 
+    internal fun shouldReuseExistingCredentials(
+        alreadyProvisioned: Boolean,
+        installIdMatches: Boolean,
+        gatewayCredentialPresent: Boolean,
+        reprovisionRequired: Boolean
+    ): Boolean = alreadyProvisioned &&
+        installIdMatches &&
+        gatewayCredentialPresent &&
+        !reprovisionRequired
+
     internal fun parseEnrollmentUrl(raw: String): NtfyEnrollment? = runCatching {
         val uri = URI(raw)
         if (!uri.scheme.equals("dosefolk", ignoreCase = true) || !uri.host.equals("enroll", ignoreCase = true)) return null
@@ -92,8 +102,19 @@ object NtfyProvisioning {
 
     @Synchronized
     private fun provisionBlocking(c: Context, enrollment: NtfyEnrollment): Boolean {
-        if (NtfyAuth.isProvisioned(c)) {
-            return NtfyInstallIdStore.load(c) == enrollment.installId && PushGatewayCredentialStore.load(c) != null
+        val alreadyProvisioned = NtfyAuth.isProvisioned(c)
+        if (alreadyProvisioned) {
+            val reprovisionRequired = NtfyAccessRefresh.isReprovisionRequired(c)
+            if (shouldReuseExistingCredentials(
+                    alreadyProvisioned = true,
+                    installIdMatches = NtfyInstallIdStore.load(c) == enrollment.installId,
+                    gatewayCredentialPresent = PushGatewayCredentialStore.load(c) != null,
+                    reprovisionRequired = reprovisionRequired
+                )
+            ) {
+                return true
+            }
+            if (!reprovisionRequired) return false
         }
         val connection = URL(PROVISION_URL).openConnection() as HttpURLConnection
         return try {
