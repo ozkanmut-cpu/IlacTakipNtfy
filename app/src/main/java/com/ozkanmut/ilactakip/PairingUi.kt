@@ -5,7 +5,6 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
-import android.net.Uri
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -44,29 +43,6 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.UUID
 
-private data class PairPayload(val topic: String, val name: String)
-
-private fun pairingPayload(c: Context): String = Uri.Builder()
-    .scheme("dosefolk")
-    .authority("pair")
-    .appendQueryParameter("topic", Store.topic(c))
-    .appendQueryParameter("name", Store.myName(c))
-    .build()
-    .toString()
-
-private fun parsePairPayload(raw: String): PairPayload? {
-    val value = raw.trim()
-    if (value.startsWith("dosefolk://pair")) {
-        val uri = runCatching { Uri.parse(value) }.getOrNull() ?: return null
-        val topic = uri.getQueryParameter("topic").orEmpty().trim()
-        val name = uri.getQueryParameter("name").orEmpty().trim()
-        if (topic.isBlank()) return null
-        return PairPayload(topic, name)
-    }
-    if (value.startsWith("dosefolk-") && value.length >= 12) return PairPayload(value, "")
-    return null
-}
-
 private fun qrBitmap(value: String, size: Int = 720): Bitmap {
     val matrix = MultiFormatWriter().encode(value, BarcodeFormat.QR_CODE, size, size)
     val pixels = IntArray(size * size)
@@ -85,7 +61,7 @@ fun PairingCard(c: Context, people: List<Person>, save: (List<Person>) -> Unit) 
     var rePairing by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val ownTopic = remember { Store.topic(c) }
-    val payload = remember(ownTopic) { pairingPayload(c) }
+    val payload = remember(ownTopic) { CirclePairingPayload.encode(ownTopic, Store.myName(c)) }
     val qr = remember(payload) { qrBitmap(payload) }
 
     fun finishPair(targetTopic: String) {
@@ -128,7 +104,7 @@ fun PairingCard(c: Context, people: List<Person>, save: (List<Person>) -> Unit) 
                 }
                 Button(onClick = {
                     scanner.startScan().addOnSuccessListener { barcode ->
-                        val parsed = barcode.rawValue?.let(::parsePairPayload)
+                        val parsed = barcode.rawValue?.let { CirclePairingPayload.parse(it) }
                         when {
                             parsed == null -> scanMessage = if (I18n.language() == "tr") "Bu Dosefolk eşleştirme QR’ı değil." else "This is not a Dosefolk pairing QR."
                             parsed.topic == ownTopic -> scanMessage = if (I18n.language() == "tr") "Bu QR bu telefona ait." else "This QR belongs to this phone."
