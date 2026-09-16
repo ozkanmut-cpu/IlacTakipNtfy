@@ -1,5 +1,6 @@
 package com.ozkanmut.ilactakip
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -115,5 +116,37 @@ class FcmRegistrationPolicyTest {
                 stale = true
             )
         )
+    }
+
+    @Test
+    fun lifecycleSchedulesOnlyWhenNtfyPrerequisitesExist() {
+        assertFalse(FcmRegistrationPolicy.shouldSchedule(false, true, true))
+        assertFalse(FcmRegistrationPolicy.shouldSchedule(true, false, true))
+        assertFalse(FcmRegistrationPolicy.shouldSchedule(true, true, false))
+        assertTrue(FcmRegistrationPolicy.shouldSchedule(true, true, true))
+    }
+
+    @Test
+    fun firebaseUnavailableRetriesWithoutInvalidatingNtfyProvisioning() {
+        val decision = FcmRegistrationPolicy.lifecycleDecision(
+            isProvisioned = true,
+            hasInstallId = true,
+            hasGatewayCredential = true,
+            firebaseTargetAvailable = false
+        )
+        assertEquals(FcmRegistrationLifecycleDecision.RETRY_FIREBASE, decision)
+        assertTrue(decision.preserveNtfyProvisioning)
+    }
+
+    @Test
+    fun missingNtfyPrerequisiteIsNoopNotFirebaseFailure() {
+        val decision = FcmRegistrationPolicy.lifecycleDecision(
+            isProvisioned = true,
+            hasInstallId = false,
+            hasGatewayCredential = true,
+            firebaseTargetAvailable = false
+        )
+        assertEquals(FcmRegistrationLifecycleDecision.NOOP, decision)
+        assertTrue(decision.preserveNtfyProvisioning)
     }
 }
