@@ -4,9 +4,11 @@ FROM node:22-alpine
 WORKDIR /app
 COPY --from=ntfy-cli /usr/bin/ntfy /usr/bin/ntfy
 COPY package.json ./
+RUN npm install --omit=dev --no-audit --no-fund
 COPY src ./src
 RUN node --check src/server.mjs \
     && node --check src/apns.mjs \
+    && node --check src/fcm.mjs \
     && test "$(ntfy --version)" = "ntfy version 2.28.0"
 USER node
 CMD ["node", "src/server.mjs"]
