@@ -25,7 +25,7 @@ class DosefolkSyncWorker(appContext: Context, params: WorkerParameters) : Worker
         PrescriptionNotifier.evaluate(applicationContext)
         DeliveryLedger.pruneCompleted(applicationContext)
 
-        val outboundOk = Ntfy.flushPendingBlocking(applicationContext)
+        val outboundOk = SyncTransportRuntime.current.flushPendingBlocking(applicationContext)
         val hasMoreOutbound = EventStore.pending(applicationContext).isNotEmpty()
         val alertsOk = AlertOutbox.flushBlocking(applicationContext)
         val inboundOk = SyncEngine.pullBlocking(applicationContext)
