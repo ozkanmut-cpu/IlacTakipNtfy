@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - ios-milestone-1
+      - encrypted-relay-migration
     paths:
       - 'app/**'
       - 'ios/**'
