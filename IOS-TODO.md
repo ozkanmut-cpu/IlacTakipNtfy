@@ -77,15 +77,15 @@ Amaç: Android Dosefolk ile aynı Circle protokolünü kullanan, native Swift/Sw
 
 ## Milestone 6 — ntfy production security
 
-- [ ] Anonymous/open ntfy kullanımını kaldıracak credential mimarisini oluştur.
+- [x] Anonymous/open ntfy kullanımını kaldıracak credential mimarisini oluştur.
 - [x] Install başına runtime-provisioned credential/token üret.
 - [x] iOS credential'ını Keychain'de sakla.
 - [x] Android credential'ını Android Keystore ile güvenli sakla.
 - [x] Public GitHub reposuna hiçbir static secret/token koyma.
 - [x] Server-side provisioning/bootstrap oluştur.
-- [ ] ntfy `auth-file`/uygun auth yapısını etkinleştir.
-- [ ] `auth-default-access: deny-all` geçişini Android + iOS auth hazır olduğunda aynı rollout içinde yap.
-- [ ] Topic bazlı minimum yetki/ACL modelini uygula.
+- [x] ntfy `auth-file`/uygun auth yapısını etkinleştir.
+- [x] `auth-default-access: deny-all` geçişini Android + iOS auth hazır olduğunda aynı rollout içinde yap.
+- [x] Topic bazlı minimum yetki/ACL modelini uygula.
 - [x] 429/backoff korumasını self-hosted sistemde de koru.
 
 ## Milestone 7 — QA ve observability
