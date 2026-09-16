@@ -19,7 +19,32 @@ import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
 
+internal enum class FcmRegistrationLifecycleDecision(val preserveNtfyProvisioning: Boolean = true) {
+    NOOP,
+    RETRY_FIREBASE,
+    CONTINUE
+}
+
 internal object FcmRegistrationPolicy {
+    fun shouldSchedule(
+        isProvisioned: Boolean,
+        hasInstallId: Boolean,
+        hasGatewayCredential: Boolean
+    ): Boolean = isProvisioned && hasInstallId && hasGatewayCredential
+
+    fun lifecycleDecision(
+        isProvisioned: Boolean,
+        hasInstallId: Boolean,
+        hasGatewayCredential: Boolean,
+        firebaseTargetAvailable: Boolean
+    ): FcmRegistrationLifecycleDecision {
+        if (!shouldSchedule(isProvisioned, hasInstallId, hasGatewayCredential)) {
+            return FcmRegistrationLifecycleDecision.NOOP
+        }
+        if (!firebaseTargetAvailable) return FcmRegistrationLifecycleDecision.RETRY_FIREBASE
+        return FcmRegistrationLifecycleDecision.CONTINUE
+    }
+
     fun shouldRegister(
         isProvisioned: Boolean,
         hasInstallId: Boolean,
@@ -76,17 +101,40 @@ class FcmRegistrationWorker(appContext: Context, params: WorkerParameters) : Wor
         val gatewayCredential = PushGatewayCredentialStore.load(context)
         val isProvisioned = NtfyAuth.isProvisioned(context)
 
-        if (!isProvisioned || installId == null || gatewayCredential == null) return Result.success()
+        if (!FcmRegistrationPolicy.shouldSchedule(
+                isProvisioned = isProvisioned,
+                hasInstallId = installId != null,
+                hasGatewayCredential = gatewayCredential != null
+            )
+        ) {
+            return Result.success()
+        }
 
-        val pushTarget = FirebaseInstallationTarget.currentBlocking() ?: return Result.retry()
-        val targetHash = sha256(pushTarget)
+        val pushTarget = FirebaseInstallationTarget.currentBlocking()
+        when (
+            FcmRegistrationPolicy.lifecycleDecision(
+                isProvisioned = isProvisioned,
+                hasInstallId = installId != null,
+                hasGatewayCredential = gatewayCredential != null,
+                firebaseTargetAvailable = pushTarget != null
+            )
+        ) {
+            FcmRegistrationLifecycleDecision.NOOP -> return Result.success()
+            FcmRegistrationLifecycleDecision.RETRY_FIREBASE -> return Result.retry()
+            FcmRegistrationLifecycleDecision.CONTINUE -> Unit
+        }
+
+        val safeInstallId = installId ?: return Result.success()
+        val safeGatewayCredential = gatewayCredential ?: return Result.success()
+        val safePushTarget = pushTarget ?: return Result.retry()
+        val targetHash = sha256(safePushTarget)
         val state = FcmRegistrationStateStore.load(context)
         val nowMs = System.currentTimeMillis()
         val shouldRegister = FcmRegistrationPolicy.shouldRegister(
-            isProvisioned = true,
+            isProvisioned = isProvisioned,
             hasInstallId = true,
             hasGatewayCredential = true,
-            tokenPresent = pushTarget.isNotEmpty(),
+            tokenPresent = safePushTarget.isNotEmpty(),
             tokenHashChanged = state.targetHash != targetHash,
             stale = state.isStale(nowMs)
         )
@@ -94,9 +142,9 @@ class FcmRegistrationWorker(appContext: Context, params: WorkerParameters) : Wor
 
         return registerBlocking(
             context = context,
-            installId = installId,
-            gatewayCredential = gatewayCredential,
-            pushTarget = pushTarget,
+            installId = safeInstallId,
+            gatewayCredential = safeGatewayCredential,
+            pushTarget = safePushTarget,
             targetHash = targetHash,
             nowMs = nowMs
         )
