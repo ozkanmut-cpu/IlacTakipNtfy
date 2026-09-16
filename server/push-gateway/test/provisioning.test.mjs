@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 
 const installKey = 'test-install-hmac-key';
 const internalSecret = 'test-internal-secret';
+const fakeNtfyToken = 'tk_12345678901234567890123456789';
 
 async function waitForServer(child) {
   await new Promise((resolve, reject) => {
@@ -56,9 +57,12 @@ async function writeStore(dataFile, store) {
   await writeFile(dataFile, JSON.stringify({ installs: {}, enrollments: {}, topicBindings: {}, ...store }));
 }
 
-async function makeFakeNtfyCli(dir) {
+async function makeFakeNtfyCli(dir, { token = false } = {}) {
   const path = join(dir, 'fake-ntfy.sh');
-  await writeFile(path, '#!/bin/sh\nexit 0\n');
+  const script = token
+    ? `#!/bin/sh\nif [ "$1" = "token" ] && [ "$2" = "add" ]; then\n  echo "${fakeNtfyToken}"\nelif [ "$1" = "token" ] && [ "$2" = "list" ]; then\n  echo "${fakeNtfyToken}"\nfi\nexit 0\n`
+    : '#!/bin/sh\nexit 0\n';
+  await writeFile(path, script);
   await chmod(path, 0o755);
   return path;
 }
@@ -159,7 +163,8 @@ test('enrollment ticket is install-bound and single-use', async t => {
 test('secure provisioning failure does not consume enrollment ticket', async t => {
   const dir = await mkdtemp(join(tmpdir(), 'dosefolk-secure-retry-'));
   t.after(() => rm(dir, { recursive: true, force: true }));
-  const base = await startServer(t, 25993, join(dir, 'registrations.json'));
+  const dataFile = join(dir, 'registrations.json');
+  const base = await startServer(t, 25993, dataFile);
   const installId = 'install-secure-1234';
 
   const issue = await fetch(`${base}/internal/enrollment`, {
@@ -183,6 +188,8 @@ test('secure provisioning failure does not consume enrollment ticket', async t =
   });
   assert.equal(secureAttempt.status, 503);
   assert.deepEqual(await secureAttempt.json(), { error: 'ntfy_auth_unavailable' });
+  const failedStore = JSON.parse(await readFile(dataFile, 'utf8'));
+  assert.equal(failedStore.topicBindings[installId], undefined);
 
   const legacyRetry = await fetch(`${base}/v1/provision`, {
     method: 'POST',
@@ -199,6 +206,48 @@ test('secure provisioning failure does not consume enrollment ticket', async t =
     body: JSON.stringify({ installId, ticket: issued.ticket })
   });
   assert.equal(replay.status, 401);
+});
+
+test('successful secure provisioning persists trusted topic binding', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'dosefolk-secure-binding-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const dataFile = join(dir, 'registrations.json');
+  const fakeCli = await makeFakeNtfyCli(dir, { token: true });
+  const installId = 'install-secure-binding-1234';
+  const localTopic = 'dosefolk-trusted-local';
+  const base = await startServer(t, 25997, dataFile, {
+    NTFY_AUTH_FILE: join(dir, 'auth.db'),
+    NTFY_CLI_PATH: fakeCli
+  });
+
+  const issue = await fetch(`${base}/internal/enrollment`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-internal-secret': internalSecret },
+    body: JSON.stringify({ installId })
+  });
+  assert.equal(issue.status, 200);
+  const issued = await issue.json();
+
+  const provision = await fetch(`${base}/v1/provision`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      installId,
+      ticket: issued.ticket,
+      requireNtfyToken: true,
+      localTopic,
+      subscriptions: [localTopic, 'dosefolk-peer']
+    })
+  });
+  assert.equal(provision.status, 200);
+  assert.deepEqual(await provision.json(), {
+    installId,
+    credential: gatewayCredential(installId),
+    ntfyToken: fakeNtfyToken
+  });
+
+  const persisted = JSON.parse(await readFile(dataFile, 'utf8'));
+  assert.equal(persisted.topicBindings[installId], localTopic);
 });
 
 test('bound access refresh requires gateway auth and an existing trusted binding', async t => {
