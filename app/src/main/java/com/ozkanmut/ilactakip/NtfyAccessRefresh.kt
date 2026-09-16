@@ -25,6 +25,13 @@ object NtfyAccessRefresh {
         c.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
             .getBoolean(REPROVISION_REQUIRED, false)
 
+    fun clearReprovisionRequired(c: Context) {
+        c.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(REPROVISION_REQUIRED, false)
+            .commit()
+    }
+
     @Synchronized
     fun refreshBlocking(c: Context, force: Boolean = false): Boolean {
         val context = c.applicationContext
