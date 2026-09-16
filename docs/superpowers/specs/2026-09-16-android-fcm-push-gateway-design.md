@@ -72,6 +72,7 @@ Rules:
 - `providers.apns.ready` and `providers.fcm.ready` are independent.
 - Top-level `ready` is true when provisioning is ready and at least one push provider is ready.
 - A provider being unavailable must not globally disable a ready provider.
+- Provider readiness gates only provider-dependent registration/wake operations. Enrollment, provisioning, access/ACL synchronization, and other provider-independent authenticated operations continue to use their existing provisioning readiness rules.
 
 ## Registration API
 
@@ -80,6 +81,8 @@ Keep one backward-compatible endpoint: `POST /v1/register`.
 ### Existing iOS compatibility
 
 Legacy requests that omit `platform` continue to mean iOS/APNs.
+
+Legacy clients may continue to send `deviceToken`. New clients send `pushToken`. Registration resolves the token as `pushToken` when present, otherwise `deviceToken`. Existing legacy payloads must remain valid without client changes.
 
 Legacy stored install records that omit `platform` are also interpreted as iOS/APNs.
 
@@ -117,8 +120,9 @@ All existing install authentication, topic binding, ntfy ACL synchronization, an
 Provider-specific validation:
 
 - iOS uses the existing APNs token validation rules.
-- Android accepts an FCM registration token as an opaque non-empty bounded string; do not apply the APNs hexadecimal token regex.
+- Android treats the FCM registration token as opaque. It must be a string from 1 to 4096 characters, contain no ASCII control characters, and have no leading/trailing whitespace. Do not apply the APNs hexadecimal token regex.
 - Unsupported platform values are rejected with HTTP 400.
+- If both `pushToken` and legacy `deviceToken` are supplied and differ, reject the request with HTTP 400 rather than guessing which target is authoritative.
 - If the requested provider is not ready, return HTTP 503 with:
 
 ```json
@@ -148,12 +152,13 @@ For iOS, `environment` and `bundleId` remain where applicable.
 Backward compatibility rules:
 
 - Read `pushToken` first.
-- If `pushToken` is absent, accept existing `deviceToken`.
+- If `pushToken` is absent, accept existing stored `deviceToken`.
 - Records without `platform` are treated as iOS.
 - New writes use `pushToken` and explicit `platform`.
 - No bulk production data migration is required.
 - Re-registering an install atomically replaces its prior push target.
 - One `installId` has one active push provider at a time.
+- A stored install with no usable push token remains part of its broader ntfy/pairing state but is skipped by push dispatch until re-registered.
 
 ## Wake Flow
 
@@ -165,7 +170,8 @@ Flow:
 2. Select subscribed installs using existing topic logic.
 3. Route each target through `PushDispatcher`.
 4. Send Android targets through FCM and iOS targets through APNs.
-5. Collect per-provider outcomes without allowing one provider's failure to abort the other provider's work.
+5. Skip installs that have no usable push token while preserving their non-push state.
+6. Collect per-provider outcomes without allowing one provider's failure to abort the other provider's work.
 
 Response must retain aggregate counts and add provider-level visibility, for example:
 
@@ -240,8 +246,8 @@ Classify provider errors into permanent and transient categories.
 
 When FCM reports an unregistered/invalid registration token:
 
-- remove only the stored push target for that install, or mark it unavailable for re-registration;
-- preserve install identity, ntfy credentials, pairing, ACL state, and user data;
+- clear only the stored push-token field(s) for that install or mark the push target unavailable for re-registration;
+- preserve install identity, subscriptions, ntfy credentials, pairing, ACL state, and user data;
 - do not delete an install's broader synchronization state.
 
 Equivalent APNs stale-token handling may be aligned later, but is not required to block the FCM rollout unless needed by shared dispatcher behavior.
@@ -290,16 +296,18 @@ Required gateway tests:
 2. FCM ready / APNs not ready.
 3. Neither provider ready.
 4. Both providers ready.
-5. Legacy iOS registration payload remains valid.
+5. Legacy iOS registration payload using `deviceToken` remains valid.
 6. Legacy stored `deviceToken` remains readable.
-7. Android registration succeeds with FCM ready.
-8. Android registration fails provider-locally with FCM unavailable.
-9. Unsupported platform is rejected.
-10. Mixed Android+iOS wake routing.
-11. FCM failure does not block APNs delivery.
-12. APNs failure does not block FCM delivery.
-13. Invalid/stale FCM token cleanup preserves non-push install state.
-14. No secret/token material is returned or logged by tested paths.
+7. Conflicting `pushToken` + `deviceToken` is rejected.
+8. Android registration succeeds with FCM ready.
+9. Android registration fails provider-locally with FCM unavailable.
+10. Unsupported platform is rejected.
+11. Mixed Android+iOS wake routing.
+12. FCM failure does not block APNs delivery.
+13. APNs failure does not block FCM delivery.
+14. Invalid/stale FCM token cleanup preserves non-push install state.
+15. Tokenless stale install is skipped without deleting ntfy/pairing state.
+16. No secret/token material is returned or logged by tested paths.
 
 Required Android tests:
 
