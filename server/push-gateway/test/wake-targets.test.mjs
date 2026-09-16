@@ -2,22 +2,30 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { selectWakeTargets } from '../src/wake-targets.mjs';
 
-test('selectWakeTargets returns only installs subscribed to requested topics', () => {
+const tokenA = 'a'.repeat(64);
+const tokenB = 'b'.repeat(64);
+const tokenC = 'c'.repeat(64);
+
+test('selectWakeTargets returns only registered installs subscribed to requested topics', () => {
   const installs = {
     alpha: {
-      deviceToken: 'aa',
+      deviceToken: tokenA,
       environment: 'production',
       subscriptions: ['dosefolk-local-a', 'dosefolk-peer-x']
     },
     beta: {
-      deviceToken: 'bb',
+      deviceToken: tokenB,
       environment: 'sandbox',
       subscriptions: ['dosefolk-local-b']
     },
     gamma: {
-      deviceToken: 'cc',
-      environment: 'production',
+      platform: 'android',
+      pushToken: 'fid-gamma',
       subscriptions: ['dosefolk-peer-x', 'dosefolk-peer-y']
+    },
+    stale: {
+      platform: 'android',
+      subscriptions: ['dosefolk-peer-x']
     }
   };
 
@@ -30,11 +38,12 @@ test('selectWakeTargets returns only installs subscribed to requested topics', (
   assert.deepEqual(selectWakeTargets(installs, []), []);
 });
 
-test('selectWakeTargets tolerates malformed stored subscriptions', () => {
+test('selectWakeTargets tolerates malformed stored subscriptions and targets', () => {
   const installs = {
-    valid: { subscriptions: ['dosefolk-peer-x'] },
-    missing: {},
-    invalid: { subscriptions: 'dosefolk-peer-x' }
+    valid: { deviceToken: tokenC, subscriptions: ['dosefolk-peer-x'] },
+    missingSubscriptions: { deviceToken: tokenA },
+    invalidSubscriptions: { deviceToken: tokenB, subscriptions: 'dosefolk-peer-x' },
+    missingTarget: { subscriptions: ['dosefolk-peer-x'] }
   };
 
   assert.deepEqual(selectWakeTargets(installs, ['dosefolk-peer-x']), [installs.valid]);
