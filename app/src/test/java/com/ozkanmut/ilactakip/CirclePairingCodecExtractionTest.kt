@@ -14,7 +14,7 @@ class CirclePairingCodecExtractionTest {
         }.getOrNull()
         assertNotNull("shared CirclePairingPayload codec must exist", codecClass)
 
-        val source = File("app/src/main/java/com/ozkanmut/ilactakip/PairingUi.kt").readText()
+        val source = File("src/main/java/com/ozkanmut/ilactakip/PairingUi.kt").readText()
         assertTrue(source.contains("CirclePairingPayload.encode("))
         assertTrue(source.contains("CirclePairingPayload.parse("))
         assertFalse(source.contains("private fun parsePairPayload"))
