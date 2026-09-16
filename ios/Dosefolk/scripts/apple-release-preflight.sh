@@ -79,7 +79,8 @@ if git -C "$ROOT" ls-files 'server/push-gateway/secrets/**' | grep -q .; then
   fail 'tracked-gateway-secret-directory'
 fi
 
-if git -C "$ROOT" grep -Il -- '-----BEGIN PRIVATE KEY-----' -- . >/dev/null 2>&1; then
+PRIVATE_KEY_MARKER='-----BEGIN PRIVATE'' KEY-----'
+if git -C "$ROOT" grep -Il -- "$PRIVATE_KEY_MARKER" -- . >/dev/null 2>&1; then
   fail 'tracked-private-key-material'
 fi
 
