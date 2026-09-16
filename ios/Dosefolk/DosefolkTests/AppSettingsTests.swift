@@ -17,6 +17,18 @@ final class AppSettingsTests: XCTestCase {
         XCTAssertFalse(AppSettings(defaults: defaults).ntfyReprovisionRequired)
     }
 
+    func testNtfyReprovisionStateChangePostsNotification() {
+        let suite = "AppSettingsTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults)
+        let expectation = expectation(forNotification: .ntfyReprovisionStateDidChange, object: nil)
+
+        settings.ntfyReprovisionRequired = true
+
+        wait(for: [expectation], timeout: 1)
+    }
+
     func testNtfyAccessFingerprintPersists() {
         let suite = "AppSettingsTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
