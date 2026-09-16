@@ -22,7 +22,14 @@ export class APNsClient {
   }
 
   async ready() {
-    return Boolean(this.teamId && this.keyId && this.keyPath && this.bundleId);
+    if (!(this.teamId && this.keyId && this.keyPath && this.bundleId)) return false;
+    try {
+      if (!this.key) this.key = createPrivateKey(await readFile(this.keyPath));
+      return this.key.asymmetricKeyType === 'ec'
+        && this.key.asymmetricKeyDetails?.namedCurve === 'prime256v1';
+    } catch {
+      return false;
+    }
   }
 
   async jwt() {
