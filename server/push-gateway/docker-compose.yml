@@ -7,6 +7,8 @@ services:
       HOST: 0.0.0.0
       PORT: 2587
       DATA_FILE: /data/registrations.json
+      RELAY_METADATA_DB: /data/metadata/relay-metadata.sqlite3
+      RELAY_QUEUE_DB: /data/queue/relay-queue.sqlite3
       APNS_BUNDLE_ID: com.ozkanmut.dosefolk
       APNS_TEAM_ID: ${APNS_TEAM_ID:-}
       APNS_KEY_ID: ${APNS_KEY_ID:-}
@@ -18,4 +20,6 @@ services:
       - "127.0.0.1:2587:2587"
     volumes:
       - ./data:/data
+      - ./relay-metadata:/data/metadata
+      - ./relay-queue:/data/queue
       - ./secrets:/run/secrets:ro
