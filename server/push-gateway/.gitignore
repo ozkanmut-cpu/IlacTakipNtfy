@@ -2,3 +2,5 @@ data/
 secrets/
 .env
 *.p8
+firebase-service-account.json
+*service-account*.json
