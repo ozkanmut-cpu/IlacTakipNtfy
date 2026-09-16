@@ -1,0 +1,85 @@
+name: Cross-Platform Protocol Gate
+
+on:
+  push:
+    branches:
+      - main
+      - ios-milestone-1
+    paths:
+      - 'app/**'
+      - 'ios/**'
+      - 'protocol-fixtures/**'
+      - 'PROTOCOL_SPEC.md'
+      - '.github/workflows/cross-platform-protocol-gate.yml'
+  pull_request:
+    paths:
+      - 'app/**'
+      - 'ios/**'
+      - 'protocol-fixtures/**'
+      - 'PROTOCOL_SPEC.md'
+      - '.github/workflows/cross-platform-protocol-gate.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: cross-platform-protocol-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android-protocol:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Run Android protocol and reliability tests
+        run: gradle testDebugUnitTest
+
+  ios-protocol:
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: ios/Dosefolk
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Materialize Dosefolk AppIcon
+        run: |
+          set -euo pipefail
+          SOURCE="../../release-assets/dosefolk-appicon-v2/source-192.jpg"
+          OUT="Dosefolk/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png"
+          RESIZED="$RUNNER_TEMP/dosefolk-appicon-1024.jpg"
+          test -f "$SOURCE"
+          test "$(shasum -a 256 "$SOURCE" | awk '{print $1}')" = "3fe8c299604f12e7b7b5325f0e6c2c8d434d32c39c0b869645650aefe9d37944"
+          sips -z 1024 1024 "$SOURCE" --out "$RESIZED" >/dev/null
+          sips -s format png "$RESIZED" --out "$OUT" >/dev/null
+          test -f "$OUT"
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Run iOS protocol and unit tests
+        timeout-minutes: 12
+        run: |
+          set -euo pipefail
+          RUNTIME_ID=$(xcrun simctl list runtimes -j | python3 -c 'import json,sys; rs=[r for r in json.load(sys.stdin)["runtimes"] if r.get("isAvailable") and r["identifier"].startswith("com.apple.CoreSimulator.SimRuntime.iOS-")]; rs.sort(key=lambda r: tuple(int(x) for x in r.get("version","0").split("."))); print(rs[-1]["identifier"])')
+          DEVICE_TYPE=$(xcrun simctl list devicetypes -j | python3 -c 'import json,sys; ds=[d for d in json.load(sys.stdin)["devicetypes"] if d["name"].startswith("iPhone")]; preferred=[d for d in ds if d["name"]=="iPhone 16 Pro"]; print((preferred or ds)[-1]["identifier"])')
+          UDID=$(xcrun simctl create 'Dosefolk Cross Platform CI' "$DEVICE_TYPE" "$RUNTIME_ID")
+          trap 'xcrun simctl shutdown "$UDID" >/dev/null 2>&1 || true; xcrun simctl delete "$UDID" >/dev/null 2>&1 || true' EXIT
+          xcodebuild \
+            -project Dosefolk.xcodeproj \
+            -scheme Dosefolk \
+            -destination "platform=iOS Simulator,id=$UDID" \
+            -destination-timeout 120 \
+            CODE_SIGNING_ALLOWED=NO \
+            test
