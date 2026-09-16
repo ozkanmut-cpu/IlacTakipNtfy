@@ -2,85 +2,74 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add Android FCM wake support to Dosefolk while keeping ntfy as the authenticated source of truth, preserving legacy iOS/APNs registrations, and allowing Android push to work when APNs is unavailable.
+**Goal:** Add Android FCM wake support while keeping ntfy as the authenticated source of truth, preserving legacy iOS/APNs registrations, and allowing Android push to work when APNs is unavailable.
 
-**Architecture:** Keep one push-gateway process. Add an `FCMClient` provider adapter and a provider-independent `PushDispatcher`; keep topic selection, provisioning, ntfy ACLs, and install authentication shared. Android receives wake-only FCM messages, schedules existing WorkManager reconciliation, and never mutates domain state directly from push payloads.
+**Architecture:** Keep one push-gateway process. Add an `FCMClient` adapter and provider-independent `PushDispatcher`; keep topic selection, provisioning, ntfy ACLs, and install authentication shared. Android push is wake-only: `FirebaseMessagingService` schedules WorkManager reconciliation and never applies domain data directly.
 
-**Tech Stack:** Node.js 22, `firebase-admin` 14.4.0, Android/Kotlin, Firebase Android BoM 34.19.0, Firebase Cloud Messaging, WorkManager 2.10.0, JUnit/Robolectric, Node test runner, Docker, GitHub Actions.
+**Tech Stack:** Node.js 22, `firebase-admin` 14.4.0, Android/Kotlin, Firebase Android BoM 34.19.0, Google Services Gradle plugin 4.5.0, Firebase Cloud Messaging, WorkManager 2.10.0, JUnit/Robolectric, Node test runner, Docker, GitHub Actions.
 
 **Spec:** `docs/superpowers/specs/2026-09-16-android-fcm-push-gateway-design.md`
 
 ## Global Constraints
 
-- Work only on branch `ios-milestone-1`; do not modify or merge `main`.
+- Work only on `ios-milestone-1`; do not modify or merge `main`.
 - ntfy remains the synchronization source of truth; APNs/FCM are wake-only transports.
-- Push payloads must not contain medication names, doses, patient/person names, schedule contents, event bodies, ntfy credentials, gateway credentials, topic secrets, or other health/application content.
+- Push payloads contain only `wakeType=sync` and `protocolVersion=1`; never medication, dose, person, schedule, event, credential, or topic-secret data.
 - APNs and FCM readiness are independent.
-- Legacy registration requests without `platform` and legacy stored installs without `platform` mean iOS/APNs.
+- Legacy request/stored records without `platform` mean iOS/APNs.
 - Legacy `deviceToken` remains readable; new writes use `pushToken`.
-- Firebase service-account JSON is never committed; production uses a read-only VDS secret referenced by `GOOGLE_APPLICATION_CREDENTIALS`.
+- Firebase service-account JSON is never committed. Production uses `/run/secrets/firebase-service-account.json` through `GOOGLE_APPLICATION_CREDENTIALS`.
 - Exact implementation SHA must have completed/successful required CI before being called GREEN.
-- No Apple Developer account, APNs credential acquisition, iPhone validation, TestFlight, or App Store work is part of this plan.
+- No Apple account, APNs credential acquisition, iPhone validation, TestFlight, or App Store work is part of this plan.
 
 ---
 
 ## File Structure
 
-### Gateway files
+### Gateway
 
-- Create `server/push-gateway/src/fcm.mjs`: FCM readiness, wake send, error classification, no application-data payload.
-- Create `server/push-gateway/src/push-dispatcher.mjs`: normalize legacy/new install records, select provider, dispatch wakes independently, return structured outcomes.
-- Create `server/push-gateway/src/push-registration.mjs`: platform/token normalization and validation for `/v1/register`.
-- Modify `server/push-gateway/src/server.mjs`: health contract, provider-local registration readiness, mixed-provider wake routing, stale-target cleanup.
-- Modify `server/push-gateway/package.json` and create/update `server/push-gateway/package-lock.json`: add `firebase-admin@14.4.0` and include new files in syntax checks.
-- Modify `server/push-gateway/Dockerfile`: install production Node dependencies before runtime syntax checks.
-- Modify `server/push-gateway/docker-compose.yml`: expose `GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/firebase-service-account.json`; reuse existing read-only secrets mount.
-- Modify `server/push-gateway/.gitignore`: ignore common Firebase service-account credential filenames in addition to the existing `secrets/` rule.
-- Create `server/push-gateway/test/fcm.test.mjs`, `push-dispatcher.test.mjs`, and `push-registration.test.mjs`.
-- Modify `server/push-gateway/test/provisioning.test.mjs`: regression coverage for legacy iOS registration plus Android provider-local readiness and mixed wake response.
+- Create `server/push-gateway/src/push-registration.mjs`: platform/token validation and legacy normalization.
+- Create `server/push-gateway/src/fcm.mjs`: FCM readiness, wake send, error classification.
+- Create `server/push-gateway/src/push-dispatcher.mjs`: provider routing, retries, provider-local outcomes.
+- Modify `server/push-gateway/src/server.mjs`: health, provider-local registration gate, mixed wake dispatch, stale target cleanup.
+- Modify `server/push-gateway/src/wake-targets.mjs`: skip records with no usable push target.
+- Create `server/push-gateway/test/push-registration.test.mjs`, `fcm.test.mjs`, `push-dispatcher.test.mjs`.
+- Modify `server/push-gateway/test/provisioning.test.mjs` and `wake-targets.test.mjs`.
+- Modify `server/push-gateway/package.json`, create/update `package-lock.json`, modify `Dockerfile`, `docker-compose.yml`, `.gitignore`.
 
-### Android files
+### Android
 
-- Create `app/src/main/java/com/ozkanmut/ilactakip/FcmRegistration.kt`: registration policy, WorkManager scheduling, current-token retrieval, authenticated gateway registration, freshness metadata.
-- Create `app/src/main/java/com/ozkanmut/ilactakip/DosefolkFirebaseMessagingService.kt`: `onNewToken`, `onMessageReceived`, `onDeletedMessages`; enqueue work only.
-- Modify `app/src/main/java/com/ozkanmut/ilactakip/SyncWorker.kt`: expose a dedicated full-reconciliation kick name used by FCM deletion recovery while preserving idempotency.
-- Modify `app/src/main/java/com/ozkanmut/ilactakip/NtfyProvisioning.kt`: schedule FCM registration after successful provisioning without coupling provisioning success to Firebase availability.
-- Modify `app/src/main/java/com/ozkanmut/ilactakip/MainActivity.kt`: best-effort startup FCM registration refresh.
-- Modify `app/src/main/AndroidManifest.xml`: register the FCM messaging service for `com.google.firebase.MESSAGING_EVENT`.
-- Modify `app/build.gradle.kts`: add Firebase Android BoM 34.19.0 and `firebase-messaging`; do not require `google-services.json` until the real Firebase project is connected.
-- Create `app/src/test/java/com/ozkanmut/ilactakip/FcmRegistrationPolicyTest.kt` and `FcmWakeRoutingTest.kt`.
+- Create `app/src/main/java/com/ozkanmut/ilactakip/FcmRegistration.kt`: registration policy, metadata, worker, authenticated `/v1/register` client.
+- Create `app/src/main/java/com/ozkanmut/ilactakip/DosefolkFirebaseMessagingService.kt`: wake and token callbacks.
+- Modify `SyncWorker.kt`, `NtfyProvisioning.kt`, `MainActivity.kt`, `AndroidManifest.xml`, `app/build.gradle.kts`.
+- Create `FcmRegistrationPolicyTest.kt` and `FcmWakeRoutingTest.kt`.
 
-### CI/release files
+### CI / production
 
-- Modify `.github/workflows/build-apk.yml`: run gateway syntax checks before tests and keep gateway tests + Android unit tests + APK build as the required implementation verification path.
-- Production VDS changes are performed only after deterministic code/CI is GREEN and a Firebase project/service-account credential exists.
+- Modify `.github/workflows/build-apk.yml` to run gateway syntax checks before gateway tests.
+- Production VDS changes happen only after deterministic exact-SHA CI is GREEN and Firebase credentials exist.
 
 ---
 
-### Task 1: Provider-independent install normalization and registration contract
+### Task 1: Registration normalization contract
 
 **Files:**
 - Create: `server/push-gateway/src/push-registration.mjs`
-- Create: `server/push-gateway/test/push-registration.test.mjs`
+- Test: `server/push-gateway/test/push-registration.test.mjs`
 
 **Interfaces:**
-- Produces: `normalizePlatform(value) -> 'ios' | 'android' | null`
-- Produces: `readPushToken(body) -> string`
-- Produces: `validatePushRegistration(body) -> { ok, platform, pushToken, provider, error }`
-- Produces: `readStoredPushTarget(install) -> { platform, provider, pushToken, environment } | null`
-- Legacy rule: absent request/stored `platform` means `ios`; stored `pushToken` takes precedence over `deviceToken`.
+- `normalizePlatform(value) -> 'ios' | 'android' | null`
+- `validatePushRegistration(body) -> { ok, platform, provider, pushToken, environment?, error? }`
+- `readStoredPushTarget(install) -> { platform, provider, pushToken, environment? } | null`
 
-- [ ] **Step 1: Write failing contract tests**
+- [ ] **Step 1: Write RED tests**
 
 ```js
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {
-  validatePushRegistration,
-  readStoredPushTarget
-} from '../src/push-registration.mjs';
+import { validatePushRegistration, readStoredPushTarget } from '../src/push-registration.mjs';
 
-test('legacy iOS request accepts deviceToken and defaults platform to ios', () => {
+test('legacy request defaults to iOS and accepts deviceToken', () => {
   const token = 'a'.repeat(64);
   const result = validatePushRegistration({ deviceToken: token, environment: 'sandbox' });
   assert.equal(result.ok, true);
@@ -89,44 +78,36 @@ test('legacy iOS request accepts deviceToken and defaults platform to ios', () =
   assert.equal(result.pushToken, token);
 });
 
-test('android accepts opaque bounded FCM token and rejects blank token', () => {
-  const good = validatePushRegistration({ platform: 'android', pushToken: 'fcm-token:abc_123-XYZ' });
-  assert.equal(good.ok, true);
-  assert.equal(good.provider, 'fcm');
-  assert.equal(validatePushRegistration({ platform: 'android', pushToken: '   ' }).ok, false);
+test('android accepts opaque bounded target', () => {
+  const result = validatePushRegistration({ platform: 'android', pushToken: 'fcm-token:abc_123-XYZ' });
+  assert.equal(result.ok, true);
+  assert.equal(result.provider, 'fcm');
 });
 
-test('legacy stored install reads deviceToken as ios target', () => {
-  const target = readStoredPushTarget({ deviceToken: 'b'.repeat(64), environment: 'production' });
-  assert.deepEqual(target, {
-    platform: 'ios', provider: 'apns', pushToken: 'b'.repeat(64), environment: 'production'
-  });
+test('legacy stored deviceToken remains readable', () => {
+  assert.equal(readStoredPushTarget({ deviceToken: 'b'.repeat(64) }).platform, 'ios');
 });
 ```
 
-Android FCM token validation rule: trim, non-empty, maximum 4096 UTF-16 code units. iOS keeps the existing `/^[0-9a-f]{64,256}$/i` rule.
+Validation: Android target is trimmed, non-empty, at most 4096 UTF-16 code units. iOS retains `/^[0-9a-f]{64,256}$/i`.
 
-- [ ] **Step 2: Run the focused test and verify RED**
+- [ ] **Step 2: Verify RED**
 
 Run: `cd server/push-gateway && node --test test/push-registration.test.mjs`
 
-Expected: FAIL because `src/push-registration.mjs` does not exist.
+Expected: module-not-found failure.
 
-- [ ] **Step 3: Implement the minimal normalization/validation module**
+- [ ] **Step 3: Implement minimal pure module**
 
-Implement exact legacy behavior above and return `error:'unsupported_platform'` or `error:'invalid_push_token'` for invalid inputs. Keep the module pure; it must not read environment variables or files.
+Return `unsupported_platform` or `invalid_push_token` without reading env/files.
 
-- [ ] **Step 4: Run focused and full gateway tests**
-
-Run:
+- [ ] **Step 4: Verify GREEN**
 
 ```bash
 cd server/push-gateway
 node --test test/push-registration.test.mjs
 npm test
 ```
-
-Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -137,66 +118,56 @@ git commit -m "Add multi-platform push registration contract"
 
 ---
 
-### Task 2: FCM provider adapter with fail-closed readiness
+### Task 2: FCM provider adapter
 
 **Files:**
 - Create: `server/push-gateway/src/fcm.mjs`
-- Create: `server/push-gateway/test/fcm.test.mjs`
+- Test: `server/push-gateway/test/fcm.test.mjs`
 - Modify: `server/push-gateway/package.json`
 - Create/update: `server/push-gateway/package-lock.json`
 - Modify: `server/push-gateway/Dockerfile`
 
 **Interfaces:**
-- Produces: `FCMClient.ready() -> Promise<boolean>`
-- Produces: `FCMClient.wake(pushToken) -> Promise<{ messageId: string }>`
-- Produces: `classifyFcmError(error) -> 'invalid_target' | 'transient' | 'permanent'`
-- FCM payload is data-only and exactly limited to `wakeType:'sync'` and `protocolVersion:'1'`.
+- `FCMClient.ready() -> Promise<boolean>`
+- `FCMClient.wake(pushToken) -> Promise<{ messageId:string }>`
+- `classifyFcmError(error) -> 'invalid_target' | 'transient' | 'permanent'`
 
-- [ ] **Step 1: Write failing FCM adapter tests**
-
-Test injected fakes so CI requires no Google credential:
+- [ ] **Step 1: Write RED tests with injected sender/probe**
 
 ```js
-test('ready is false when credential path is absent', async () => {
-  const client = new FCMClient({ credentialPath: '' });
-  assert.equal(await client.ready(), false);
+test('ready false without credential path', async () => {
+  assert.equal(await new FCMClient({ credentialPath: '' }).ready(), false);
 });
 
-test('wake sends only the minimal wake contract', async () => {
-  let message;
+test('wake sends only minimal wake data', async () => {
+  let sent;
   const client = new FCMClient({
-    credentialPath: '/fake/service-account.json',
+    credentialPath: '/fake/firebase-service-account.json',
     credentialProbe: async () => true,
-    sender: async value => { message = value; return 'message-1'; }
+    sender: async message => { sent = message; return 'm1'; }
   });
-  await client.wake('token-1');
-  assert.deepEqual(message, {
-    token: 'token-1',
+  await client.wake('target-1');
+  assert.deepEqual(sent, {
+    token: 'target-1',
     data: { wakeType: 'sync', protocolVersion: '1' },
     android: { priority: 'normal' }
   });
 });
 ```
 
-Also test Firebase Messaging error codes for unregistered token and retryable quota/server errors.
+Also test invalid-target codes and transient quota/5xx/network classification.
 
-- [ ] **Step 2: Run focused test and verify RED**
+- [ ] **Step 2: Verify RED**
 
 Run: `cd server/push-gateway && node --test test/fcm.test.mjs`
 
-Expected: FAIL because `src/fcm.mjs` does not exist.
-
-- [ ] **Step 3: Add Firebase Admin dependency and install path**
-
-Set exact dependency:
+- [ ] **Step 3: Add exact dependency and Docker install**
 
 ```json
-"dependencies": {
-  "firebase-admin": "14.4.0"
-}
+"dependencies": { "firebase-admin": "14.4.0" }
 ```
 
-Generate lock file with Node 22/npm and change Dockerfile from copying source directly to installing production dependencies before runtime:
+Dockerfile must include:
 
 ```dockerfile
 COPY package.json package-lock.json ./
@@ -204,25 +175,21 @@ RUN npm ci --omit=dev
 COPY src ./src
 ```
 
-Keep the existing ntfy CLI stage and Node 22 base.
+Keep Node 22 and bundled ntfy 2.28.0.
 
-- [ ] **Step 4: Implement `FCMClient`**
+- [ ] **Step 4: Implement adapter**
 
-Use Firebase Admin modular imports. Default production initialization reads Application Default Credentials through `GOOGLE_APPLICATION_CREDENTIALS`; injected `credentialProbe`/`sender` keep tests deterministic. Missing/unreadable/malformed credential configuration returns `ready:false` rather than throwing during server startup. Never log token or credential contents.
+Use Firebase Admin modular imports and Application Default Credentials. Missing/unreadable/malformed credential configuration returns `ready:false`, not process crash. No token/credential logging.
 
-- [ ] **Step 5: Run focused/full tests and container build**
-
-Run:
+- [ ] **Step 5: Verify GREEN and image**
 
 ```bash
 cd server/push-gateway
 node --test test/fcm.test.mjs
 npm test
-docker build --tag dosefolk-push-gateway:fcm-adapter .
+docker build -t dosefolk-push-gateway:fcm-adapter .
 docker run --rm --entrypoint ntfy dosefolk-push-gateway:fcm-adapter --version
 ```
-
-Expected: all tests PASS; image builds; ntfy remains version 2.28.0.
 
 - [ ] **Step 6: Commit**
 
@@ -233,46 +200,32 @@ git commit -m "Add fail-closed FCM provider adapter"
 
 ---
 
-### Task 3: Push dispatcher and independent provider outcomes
+### Task 3: Provider dispatcher
 
 **Files:**
 - Create: `server/push-gateway/src/push-dispatcher.mjs`
-- Create: `server/push-gateway/test/push-dispatcher.test.mjs`
+- Test: `server/push-gateway/test/push-dispatcher.test.mjs`
 
 **Interfaces:**
-- Consumes: `readStoredPushTarget(install)` from Task 1.
-- Consumes: `apns.ready()/wake()` and `fcm.ready()/wake()`.
-- Produces: `PushDispatcher.readiness() -> Promise<{ apns:boolean, fcm:boolean }>`
-- Produces: `PushDispatcher.dispatch(install) -> Promise<{ provider, status }>` where status is `sent | unavailable | invalid_target | transient_error | permanent_error | missing_target`.
+- `PushDispatcher.readiness() -> Promise<{apns:boolean,fcm:boolean}>`
+- `PushDispatcher.dispatch(install) -> Promise<{provider,status}>`
+- Status: `sent | unavailable | invalid_target | transient_error | permanent_error | missing_target`.
 
-- [ ] **Step 1: Write failing dispatcher tests**
+- [ ] **Step 1: Write RED tests**
 
-Cover:
+Cover legacy APNs routing, Android FCM routing, APNs false/FCM true readiness, FCM failure not blocking independent APNs dispatch, and no target leakage in returned results.
 
-```js
-test('legacy install routes to APNs', async () => { /* deviceToken, no platform */ });
-test('android install routes to FCM', async () => { /* platform android, pushToken */ });
-test('FCM failure does not prevent APNs dispatch in independent calls', async () => { /* fake providers */ });
-test('provider readiness is independent', async () => { /* apns false, fcm true */ });
-```
-
-Assert that dispatcher never includes push tokens in returned result objects.
-
-- [ ] **Step 2: Run and verify RED**
+- [ ] **Step 2: Verify RED**
 
 Run: `cd server/push-gateway && node --test test/push-dispatcher.test.mjs`
 
-Expected: FAIL because dispatcher is absent.
-
 - [ ] **Step 3: Implement dispatcher**
 
-Keep retry policy provider-local and bounded: initial attempt plus at most two transient retries, exponential delays with jitter supplied through an injectable sleeper/random source for deterministic unit tests. Permanent invalid-target failures are never retried.
+Transient policy: initial attempt + at most two retries; exponential delay + injectable jitter/sleeper. Invalid target is not retried.
 
-- [ ] **Step 4: Run gateway suite**
+- [ ] **Step 4: Verify GREEN**
 
 Run: `cd server/push-gateway && npm test`
-
-Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -283,52 +236,44 @@ git commit -m "Route push wakes through independent providers"
 
 ---
 
-### Task 4: Health, registration, mixed wake routing, and stale-target cleanup
+### Task 4: Gateway health, registration, wake routing, stale cleanup
 
 **Files:**
 - Modify: `server/push-gateway/src/server.mjs`
-- Modify: `server/push-gateway/test/provisioning.test.mjs`
 - Modify: `server/push-gateway/src/wake-targets.mjs`
+- Modify: `server/push-gateway/test/provisioning.test.mjs`
 - Modify: `server/push-gateway/test/wake-targets.test.mjs`
 
 **Interfaces:**
-- Health response exposes `ok`, `ready`, `provisioningReady`, `providers.apns.ready`, `providers.fcm.ready`.
-- `/v1/register` chooses provider from validated platform and gates only that provider.
-- `/internal/wake` returns aggregate plus per-provider counts.
-- `invalid_target` removes only push-target fields from the stored install record; subscriptions/install identity remain.
+- Health: `ok`, `ready`, `provisioningReady`, `providers.apns.ready`, `providers.fcm.ready`.
+- `/v1/register`: provider-local readiness only.
+- `/internal/wake`: aggregate + per-provider counts.
+- Invalid target clears only push-target fields; install identity/subscriptions remain.
 
-- [ ] **Step 1: Extend tests first**
+- [ ] **Step 1: Add RED regression cases**
 
-Add explicit RED cases for:
-
-```js
-// health: provisioning true + APNs false + FCM true => ready true
-// legacy iOS register still accepts deviceToken
-// android register persists { platform:'android', pushToken:'...' }
-// android register when FCM false => 503 push_provider_unavailable/fcm
-// iOS register when APNs false => 503 push_provider_unavailable/apns
-// internal wake with one ios + one android returns separate provider counts
-// invalid FCM target clears pushToken but keeps install record + subscriptions
+```text
+provisioning=true, APNs=false, FCM=true => health.ready=true
+legacy iOS deviceToken registration still works
+Android registration persists platform=android + pushToken
+Android register with FCM=false => 503 push_provider_unavailable/fcm
+iOS register with APNs=false => 503 push_provider_unavailable/apns
+mixed wake returns APNs and FCM provider counts
+invalid FCM target removes only push target
 ```
 
-Update wake target selection to skip installs with no readable push target so stale records are not repeatedly dispatched.
-
-- [ ] **Step 2: Run the focused tests and verify RED**
-
-Run:
+- [ ] **Step 2: Verify RED**
 
 ```bash
 cd server/push-gateway
 node --test test/provisioning.test.mjs test/wake-targets.test.mjs
 ```
 
-Expected: failures against current global APNs readiness gate and APNs-only register/wake behavior.
+- [ ] **Step 3: Implement minimal server refactor**
 
-- [ ] **Step 3: Refactor `server.mjs` minimally**
+Remove the current global APNs-only gate. Provisioning routes depend only on provisioning readiness. Register validates the requested provider. Wake dispatches all targets independently.
 
-Instantiate both providers and `PushDispatcher`. Replace the current `isReady()` APNs-only behavior with independent readiness. Remove the global provider gate before all routes; provisioning endpoints remain governed by provisioning readiness, register is provider-local, and internal wake dispatches every selected target independently.
-
-New writes use:
+New records:
 
 ```js
 store.installs[installId] = {
@@ -340,18 +285,16 @@ store.installs[installId] = {
 };
 ```
 
-- [ ] **Step 4: Run all gateway tests and container build**
+Wake target selection skips records with no readable target.
 
-Run:
+- [ ] **Step 4: Verify GREEN**
 
 ```bash
 cd server/push-gateway
 npm test
 npm run check
-docker build --tag dosefolk-push-gateway:multi-provider .
+docker build -t dosefolk-push-gateway:multi-provider .
 ```
-
-Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -362,7 +305,7 @@ git commit -m "Make push gateway provider independent"
 
 ---
 
-### Task 5: Gateway secret/config hardening for Firebase
+### Task 5: Firebase secret/config hardening and CI gate
 
 **Files:**
 - Modify: `server/push-gateway/docker-compose.yml`
@@ -370,36 +313,23 @@ git commit -m "Make push gateway provider independent"
 - Modify: `server/push-gateway/package.json`
 - Modify: `.github/workflows/build-apk.yml`
 
-**Interfaces:**
-- Container receives `GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/firebase-service-account.json`.
-- Missing file keeps only FCM provider unready.
-- CI runs syntax check, gateway tests, container build, Android tests, and APK build.
+- [ ] **Step 1: Extend FCM test for configured-but-missing secret**
 
-- [ ] **Step 1: Write/extend a gateway contract test for secret-path behavior**
+Expected: `ready:false`, no secret/token returned or logged.
 
-In `test/fcm.test.mjs`, assert that default credential path handling never reads credential content into logs/returned objects and missing configured file means `ready:false`.
-
-- [ ] **Step 2: Verify the contract test passes before config edits**
-
-Run: `cd server/push-gateway && node --test test/fcm.test.mjs`
-
-Expected: PASS; this protects runtime behavior before compose changes.
-
-- [ ] **Step 3: Add production-safe config**
-
-Add to gateway environment:
+- [ ] **Step 2: Add compose env**
 
 ```yaml
 GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/firebase-service-account.json
 ```
 
-The existing `./secrets:/run/secrets:ro` mount remains unchanged. Extend `.gitignore` with patterns such as `*service-account*.json` and `firebase-service-account.json`; retain `secrets/`, `.env`, and `*.p8`.
+Reuse existing `./secrets:/run/secrets:ro` mount.
 
-Update `npm run check` to syntax-check `fcm.mjs`, `push-dispatcher.mjs`, and `push-registration.mjs`. Add `npm run check` before `npm test` in Build APK CI.
+- [ ] **Step 3: Harden ignore/check rules**
 
-- [ ] **Step 4: Run local deterministic verification**
+Keep `secrets/`, `.env`, `*.p8`; add `firebase-service-account.json` and `*service-account*.json`. Extend `npm run check` to `fcm.mjs`, `push-dispatcher.mjs`, `push-registration.mjs`. Add `npm run check` before `npm test` in Build APK CI.
 
-Run:
+- [ ] **Step 4: Verify**
 
 ```bash
 cd server/push-gateway
@@ -407,8 +337,6 @@ npm run check
 npm test
 docker compose config >/tmp/dosefolk-compose-config.txt
 ```
-
-Expected: PASS; compose resolves without requiring the credential file to exist on the developer machine.
 
 - [ ] **Step 5: Commit**
 
@@ -419,48 +347,39 @@ git commit -m "Harden Firebase push gateway configuration"
 
 ---
 
-### Task 6: Android FCM registration policy and authenticated gateway client
+### Task 6: Android authenticated FCM registration
 
 **Files:**
 - Create: `app/src/main/java/com/ozkanmut/ilactakip/FcmRegistration.kt`
-- Create: `app/src/test/java/com/ozkanmut/ilactakip/FcmRegistrationPolicyTest.kt`
+- Test: `app/src/test/java/com/ozkanmut/ilactakip/FcmRegistrationPolicyTest.kt`
 - Modify: `app/build.gradle.kts`
 
 **Interfaces:**
-- Produces: `FcmRegistrationPolicy.shouldRegister(isProvisioned, hasInstallId, hasGatewayCredential, tokenPresent, tokenHashChanged, stale) -> Boolean`
-- Produces: `FcmRegistrationScheduler.ensure(context)` and `refresh(context)`.
-- Worker registers to `https://ntfy.field-maintenance-prod.com/dosefolk-push/v1/register` with gateway bearer credential and `{installId, platform:'android', pushToken, localTopic, subscriptions}`.
-- Persist only token SHA-256 + successful registration timestamp; do not persist/log the raw FCM token in app-owned preferences.
+- `FcmRegistrationPolicy.shouldRegister(isProvisioned, hasInstallId, hasGatewayCredential, tokenPresent, tokenHashChanged, stale) -> Boolean`
+- `FcmRegistrationScheduler.ensure(context)` / `refresh(context)`.
+- Registration endpoint: `https://ntfy.field-maintenance-prod.com/dosefolk-push/v1/register`.
+- Persist raw-token SHA-256 + successful registration timestamp only; never raw token in app-owned prefs/logs.
 
-- [ ] **Step 1: Add Firebase compile dependency and failing pure policy tests**
-
-Use:
+- [ ] **Step 1: Add dependencies and RED policy tests**
 
 ```kotlin
 implementation(platform("com.google.firebase:firebase-bom:34.19.0"))
 implementation("com.google.firebase:firebase-messaging")
 ```
 
-Do not apply the Google Services Gradle plugin yet; deterministic CI must remain independent of a real Firebase project.
+Do not apply Google Services plugin until Task 10 has the real Firebase config.
 
-Tests cover unprovisioned app, missing gateway credential, first token, unchanged fresh token, changed token, and stale registration.
+Tests: unprovisioned, missing install ID, missing gateway credential, first token, changed token, unchanged fresh token, stale registration.
 
-- [ ] **Step 2: Run focused test and verify RED**
+- [ ] **Step 2: Verify RED**
 
 Run: `gradle testDebugUnitTest --tests '*FcmRegistrationPolicyTest'`
 
-Expected: FAIL because `FcmRegistrationPolicy` is absent.
+- [ ] **Step 3: Implement worker/client**
 
-- [ ] **Step 3: Implement policy, metadata store, and WorkManager worker**
+Use unique work `dosefolk-fcm-registration`, network constraint, `ExistingWorkPolicy.REPLACE`, bounded backoff. Obtain current Firebase target on worker thread; Firebase initialization/token retrieval failure returns retry/no-op without changing ntfy provisioning state.
 
-Use a unique work name `dosefolk-fcm-registration`, network-connected constraint, `ExistingWorkPolicy.REPLACE`, and bounded WorkManager backoff. In the worker obtain the current Firebase token on a background thread, then call the gateway only when ntfy provisioning/install/gateway credential prerequisites exist.
-
-HTTP headers/body:
-
-```text
-Authorization: Bearer <gateway credential>
-Content-Type: application/json
-```
+Request:
 
 ```json
 {
@@ -472,13 +391,11 @@ Content-Type: application/json
 }
 ```
 
-Treat HTTP 204 as success. For 409 reprovision responses, set the existing Ntfy reprovision-required flag using the same policy as current gateway access refresh. Never print the raw token or Authorization value.
+Header: `Authorization: Bearer <gateway credential>`. HTTP 204 means success. HTTP 409 follows existing Ntfy reprovision-required behavior. Do not log token/header values.
 
-- [ ] **Step 4: Run Android unit suite**
+- [ ] **Step 4: Verify GREEN**
 
 Run: `gradle testDebugUnitTest`
-
-Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -489,33 +406,28 @@ git commit -m "Add authenticated Android FCM registration"
 
 ---
 
-### Task 7: FirebaseMessagingService wake-to-WorkManager routing
+### Task 7: FirebaseMessagingService -> WorkManager wake routing
 
 **Files:**
 - Create: `app/src/main/java/com/ozkanmut/ilactakip/DosefolkFirebaseMessagingService.kt`
-- Create: `app/src/test/java/com/ozkanmut/ilactakip/FcmWakeRoutingTest.kt`
+- Test: `app/src/test/java/com/ozkanmut/ilactakip/FcmWakeRoutingTest.kt`
 - Modify: `app/src/main/AndroidManifest.xml`
 - Modify: `app/src/main/java/com/ozkanmut/ilactakip/SyncWorker.kt`
 
 **Interfaces:**
-- Produces pure helper `FcmWakeRouter.action(data, deletedMessages) -> REGISTER_TOKEN | KICK_SYNC | FULL_RECONCILIATION | IGNORE` for testability.
-- `onNewToken()` schedules FCM registration; it does not perform network I/O directly.
-- Valid wake requires `wakeType=sync` and `protocolVersion=1`.
-- `onDeletedMessages()` enqueues full reconciliation.
+- Pure helper: `FcmWakeRouter.action(data, deletedMessages) -> KICK_SYNC | FULL_RECONCILIATION | IGNORE`.
+- `onNewToken()` separately calls `FcmRegistrationScheduler.refresh(applicationContext)`; it is not part of `FcmWakeRouter.action`.
+- Valid wake requires exactly `wakeType=sync` and `protocolVersion=1`.
 
-- [ ] **Step 1: Write failing routing tests**
+- [ ] **Step 1: Write RED tests**
 
-Cover valid wake, wrong protocol, arbitrary data payload, token-refresh action, and deleted-message full reconciliation. Assert no medication/event fields are consumed by the router.
+Test valid wake, wrong protocol, unrelated data, deleted-message recovery. Assert router ignores medication/event fields.
 
-- [ ] **Step 2: Run focused test and verify RED**
+- [ ] **Step 2: Verify RED**
 
 Run: `gradle testDebugUnitTest --tests '*FcmWakeRoutingTest'`
 
-Expected: FAIL because router/service is absent.
-
-- [ ] **Step 3: Implement service and manifest registration**
-
-Manifest entry:
+- [ ] **Step 3: Implement service + manifest**
 
 ```xml
 <service
@@ -527,18 +439,14 @@ Manifest entry:
 </service>
 ```
 
-For a valid wake call `DosefolkSyncScheduler.kick(applicationContext)`. For deleted messages call a dedicated `DosefolkSyncScheduler.fullReconciliation(applicationContext)` unique work entry that runs the same authoritative sync worker but uses `ExistingWorkPolicy.REPLACE` so a backlog-loss recovery cannot be suppressed by a pre-existing ordinary kick.
+Valid wake calls `DosefolkSyncScheduler.kick()`. Deleted messages call `DosefolkSyncScheduler.fullReconciliation()` using a dedicated unique work name and `ExistingWorkPolicy.REPLACE`.
 
-- [ ] **Step 4: Run Android tests and debug build**
-
-Run:
+- [ ] **Step 4: Verify GREEN**
 
 ```bash
 gradle testDebugUnitTest
 gradle assembleDebug
 ```
-
-Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
@@ -549,42 +457,33 @@ git commit -m "Wake Android sync from FCM safely"
 
 ---
 
-### Task 8: Registration lifecycle integration without coupling provisioning to Firebase
+### Task 8: Registration lifecycle integration
 
 **Files:**
 - Modify: `app/src/main/java/com/ozkanmut/ilactakip/NtfyProvisioning.kt`
 - Modify: `app/src/main/java/com/ozkanmut/ilactakip/MainActivity.kt`
 - Extend: `app/src/test/java/com/ozkanmut/ilactakip/FcmRegistrationPolicyTest.kt`
 
-**Interfaces:**
-- Successful ntfy provisioning schedules `FcmRegistrationScheduler.refresh(context)`.
-- App startup schedules `FcmRegistrationScheduler.ensure(context)` best-effort.
-- Failure to initialize Firebase or obtain an FCM token never rolls back ntfy provisioning and never blocks app startup.
+- [ ] **Step 1: Add RED lifecycle tests**
 
-- [ ] **Step 1: Add failing lifecycle contract tests**
+Prove FCM registration scheduling needs ntfy/install/gateway prerequisites and Firebase unavailability never rolls back provisioning.
 
-Add pure tests proving registration scheduling is allowed only when ntfy/install/gateway prerequisites are present and that Firebase-unavailable state returns a retry/no-op result rather than changing provisioning state.
-
-- [ ] **Step 2: Run focused test and verify RED**
+- [ ] **Step 2: Verify RED**
 
 Run: `gradle testDebugUnitTest --tests '*FcmRegistrationPolicyTest'`
 
-Expected: at least one new lifecycle assertion FAILS before integration helpers exist.
+- [ ] **Step 3: Integrate**
 
-- [ ] **Step 3: Wire successful provisioning and startup**
+After successful ntfy provisioning, call `FcmRegistrationScheduler.refresh(context)`. In `MainActivity.onCreate`, call `FcmRegistrationScheduler.ensure(this)` after current ntfy retry/pull startup calls. Never await Firebase on UI thread.
 
-After the existing successful provisioning block schedules ntfy live sync/current sync, also schedule FCM refresh. In `MainActivity.onCreate`, schedule `ensure(this)` after existing ntfy retry/pull calls. Do not await Firebase on the UI thread.
-
-- [ ] **Step 4: Run Android suite and APK build**
-
-Run:
+- [ ] **Step 4: Verify**
 
 ```bash
 gradle testDebugUnitTest
 gradle assembleDebug
 ```
 
-Expected: PASS even without `google-services.json` because project-specific Firebase activation has not been enabled yet.
+Expected: PASS without `google-services.json`; Firebase runtime unavailability is handled fail-soft until Task 10.
 
 - [ ] **Step 5: Commit**
 
@@ -595,22 +494,16 @@ git commit -m "Integrate FCM registration lifecycle"
 
 ---
 
-### Task 9: Exact-SHA deterministic CI gate
+### Task 9: Exact-SHA deterministic CI verification
 
 **Files:**
-- Modify if needed: `.github/workflows/build-apk.yml`
-- No production deployment in this task.
+- `.github/workflows/build-apk.yml` only if functional correction is required.
 
-**Interfaces:**
-- Exact branch SHA must complete `npm run check`, gateway tests, gateway container build, Android unit tests, and debug APK build.
+- [ ] **Step 1: Read exact branch HEAD**
 
-- [ ] **Step 1: Push the current branch commits and identify exact HEAD SHA**
+Record full SHA.
 
-Run/read branch state and record the full SHA.
-
-- [ ] **Step 2: Verify Build APK workflow includes every deterministic gate**
-
-Required order includes:
+- [ ] **Step 2: Confirm required pipeline**
 
 ```text
 npm run check
@@ -621,87 +514,93 @@ gradle testDebugUnitTest
 gradle assembleDebug
 ```
 
-If the workflow already matches after Task 5, make no cosmetic change.
+- [ ] **Step 3: Verify exact HEAD workflow reaches `completed/success`**
 
-- [ ] **Step 3: Wait for the workflow associated with the exact HEAD to reach `completed/success`**
+Queued/in-progress is not GREEN. On failure inspect first failing step/log, fix root cause, and repeat on the new exact SHA.
 
-Do not treat queued or in-progress as GREEN. On failure, inspect the first failing job/step/log and fix the root cause using systematic debugging, then verify the new exact SHA.
+- [ ] **Step 4: Do not create empty CI commits**
 
-- [ ] **Step 4: Commit only if CI workflow needed a functional correction**
-
-If no change was necessary, do not create an empty commit.
+Commit only if workflow behavior actually changes.
 
 ---
 
-### Task 10: Connect the real Firebase Android project without adding secrets
+### Task 10: Connect real Firebase Android project without server secrets
 
 **Files:**
-- Create when available: `app/google-services.json`
-- Modify when available: root/app Gradle plugin configuration required by the downloaded Firebase config.
-- Add/extend tests only if activation changes deterministic behavior.
+- Create: `app/google-services.json` from Firebase console for package `com.ozkanmut.ilactakip`.
+- Modify: root `build.gradle.kts`.
+- Modify: `app/build.gradle.kts`.
 
-**Precondition:** A Firebase project exists with Android app package `com.ozkanmut.ilactakip`, and its `google-services.json` has been downloaded. This file contains project identifiers/configuration, not the server service-account private key; inspect it before commit to confirm no private key material exists.
+**Precondition:** Real Firebase project and downloaded Android config exist. Do not invent identifiers.
 
-- [ ] **Step 1: Inspect the received `google-services.json`**
+- [ ] **Step 1: Inspect config**
 
-Confirm `package_name` exactly equals `com.ozkanmut.ilactakip`. Reject any file containing `private_key`, `private_key_id`, or service-account credential material.
+Require `package_name == "com.ozkanmut.ilactakip"`. Reject file containing `private_key` or `private_key_id`.
 
-- [ ] **Step 2: Add Google Services Gradle plugin and config**
+- [ ] **Step 2: Add exact Google Services plugin**
 
-Apply the current supported Google Services plugin only after the real config exists; do not manufacture placeholder Firebase identifiers.
+Root:
 
-- [ ] **Step 3: Run deterministic Android verification**
+```kotlin
+plugins {
+    id("com.google.gms.google-services") version "4.5.0" apply false
+}
+```
 
-Run:
+App:
+
+```kotlin
+plugins {
+    id("com.google.gms.google-services")
+}
+```
+
+- [ ] **Step 3: Verify Android build**
 
 ```bash
 gradle testDebugUnitTest
 gradle assembleDebug
 ```
 
-Expected: PASS with Firebase resource generation active.
-
-- [ ] **Step 4: Commit non-secret Firebase Android config**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add app/google-services.json build.gradle.kts app/build.gradle.kts
 git commit -m "Connect Dosefolk Android to Firebase"
 ```
 
-- [ ] **Step 5: Verify exact commit CI completed/success**
-
-Use the same exact-SHA rule as Task 9.
+- [ ] **Step 5: Verify exact commit CI `completed/success`**
 
 ---
 
 ### Task 11: Production gateway FCM credential canary
 
-**Files/Host:**
-- VDS project only: `/opt/dosefolk-push-gateway`
-- Secret target: `/opt/dosefolk-push-gateway/secrets/firebase-service-account.json` (container path `/run/secrets/firebase-service-account.json`)
-- Do not touch `/opt/field-maintenance/app`.
+**Host/files:**
+- `/opt/dosefolk-push-gateway`
+- Secret: `/opt/dosefolk-push-gateway/secrets/firebase-service-account.json`
+- Never touch `/opt/field-maintenance/app`.
 
-**Precondition:** A Firebase service-account JSON credential for the Dosefolk Firebase project is available. The private key must never be pasted into chat, GitHub, shell history, logs, or tracked files.
+**Precondition:** Dosefolk Firebase service-account JSON exists. Never paste private-key contents into chat, GitHub, shell history, or logs.
 
 - [ ] **Step 1: Read-only production baseline**
 
-Capture current gateway `/health`, container state, registrations count, and existing APNs `ready:false` state. Confirm production source matches the intended branch release artifact before changing anything.
+Capture `/health`, container state, registration count, and current APNs readiness. Confirm intended release source before writes.
 
-- [ ] **Step 2: Back up only files that will be changed**
+- [ ] **Step 2: Back up changed Dosefolk gateway files only**
 
-Create timestamped backups inside the Dosefolk gateway project, not the field-maintenance project.
+Use timestamped backup names inside `/opt/dosefolk-push-gateway`.
 
-- [ ] **Step 3: Install the service-account secret with restrictive permissions**
+- [ ] **Step 3: Install secret with restrictive permissions**
 
-Place the credential under the existing `secrets/` directory, readable by the container via the existing read-only mount. Do not print its content.
+Use existing read-only `secrets` mount; never print file content.
 
-- [ ] **Step 4: Deploy the already-CI-GREEN gateway source/config**
+- [ ] **Step 4: Deploy exact CI-GREEN gateway release only**
 
-Rebuild/restart only `dosefolk-push-gateway`; do not replace unrelated production compose additions wholesale.
+Rebuild/restart only `dosefolk-push-gateway`; preserve production-only compose additions.
 
 - [ ] **Step 5: Verify independent readiness**
 
-Expected `/health` shape:
+Expected while Apple credentials remain absent:
 
 ```json
 {
@@ -715,55 +614,53 @@ Expected `/health` shape:
 }
 ```
 
-If FCM is false, inspect configuration without exposing the credential and stop the canary; do not weaken readiness checks.
+If FCM is false, stop canary and diagnose without weakening checks.
 
-- [ ] **Step 6: Confirm baseline ntfy security remains intact**
+- [ ] **Step 6: Re-run ntfy security baseline**
 
-Anonymous publish/subscribe remains blocked, authenticated own-topic access remains valid, unrelated topics remain denied, and registration still requires the install bearer credential.
+Anonymous blocked; authenticated own topic works; unrelated topics denied; install bearer still required for register.
 
 ---
 
-### Task 12: Real Android end-to-end canary and background reliability
+### Task 12: Real Android end-to-end/background canary
 
-**Precondition:** Task 10 Firebase Android config is installed in the APK, Task 11 production FCM provider is ready, and a real Android device can install the CI-verified build.
+**Precondition:** Task 10 Firebase Android config is in the APK, Task 11 FCM provider is ready, and a real Android device can install the exact CI-verified build.
 
-- [ ] **Step 1: Provision one canary Android install through the existing enrollment flow**
+- [ ] **Step 1: Provision one Android canary**
 
-Verify ntfy provisioning succeeds first, then confirm the gateway store contains one Android install with `platform:'android'` and a push target. Do not print the raw token.
+Verify ntfy provisioning first; gateway store then has `platform:'android'` and a push target. Do not print raw target.
 
-- [ ] **Step 2: Trigger one internal wake for the canary subscription**
+- [ ] **Step 2: Trigger internal wake**
 
 Expected chain:
 
 ```text
-/internal/wake -> FCM sent -> FirebaseMessagingService -> WorkManager -> authenticated ntfy reconciliation
+/internal/wake -> FCM -> FirebaseMessagingService -> WorkManager -> authenticated ntfy reconciliation
 ```
 
-Confirm gateway response reports FCM `targeted:1` and `sent:1` and APNs remains unaffected/unready.
+Require FCM `targeted:1`, `sent:1`; APNs remains independently unready.
 
-- [ ] **Step 3: Verify functional reconciliation, not just push receipt**
+- [ ] **Step 3: Verify actual state reconciliation**
 
-Create a harmless synchronization state change from the paired/authorized flow and confirm the Android device reaches the authoritative ntfy state after wake. A push receipt alone is insufficient evidence.
+Create a harmless authorized sync change and confirm Android reaches ntfy-authoritative state after wake. Push receipt alone is insufficient.
 
 - [ ] **Step 4: Run reliability matrix**
 
-Test individually:
-
 ```text
 screen locked
-app backgrounded for a long interval
+long background
 Doze/device idle
-app process killed by the system
-network offline then restored
+process killed by system
+network offline -> online
 duplicate wake
 ```
 
-Expected: no duplicate domain events, no direct FCM state mutation, and eventual ntfy reconciliation after network availability.
+Expected: no duplicate domain events, no direct FCM domain mutation, eventual reconciliation.
 
-- [ ] **Step 5: Verify stale-token behavior on an invalidated canary target**
+- [ ] **Step 5: Verify invalid-target cleanup**
 
-After producing an actual provider invalid-target response, confirm only push-target fields are cleared/disabled while install identity, ntfy ACL state, subscriptions, and pairing remain intact.
+On a real provider invalid-target response, only push target is cleared/disabled; install identity, subscriptions, ntfy ACL, pairing remain.
 
-- [ ] **Step 6: Record final exact-SHA + production evidence**
+- [ ] **Step 6: Record final exact SHA and evidence**
 
-The Android/FCM phase is complete only when deterministic CI is `completed/success` for the exact shipped SHA and the real-device canary/background matrix above passes. Apple-blocked iOS physical/TestFlight items remain open and are not reclassified as complete.
+Android/FCM phase is complete only after exact shipped SHA CI is `completed/success` and the real-device matrix passes. Apple-blocked iOS physical/TestFlight items remain open.
