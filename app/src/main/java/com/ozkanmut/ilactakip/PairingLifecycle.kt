@@ -93,7 +93,7 @@ object PairingLifecycle {
         val context = c.applicationContext
         RevokedPeerFence.clear(context, topic)
         DosefolkQaLog.record(context, DosefolkQaLog.Category.PAIR, "repair_complete", mapOf("peerTopic" to topic))
-        NtfyAccessRefresh.schedule(context)
+        NtfyAccessRefresh.schedule(context, force = true)
     }
 
     private fun cleanupPeer(c: Context, topic: String, dropOutbox: Boolean) {
@@ -105,6 +105,6 @@ object PairingLifecycle {
         StockEngine.clearRemoteOwner(c, topic)
         CirclePresence.clear(c, topic)
         if (dropOutbox) AlertOutbox.dropTopic(c, topic)
-        NtfyAccessRefresh.schedule(c)
+        NtfyAccessRefresh.schedule(c, force = true)
     }
 }
