@@ -143,6 +143,7 @@ object NtfyProvisioning {
                 NtfyCredentialStore.save(c, credentials.ntfyToken)
                 PushGatewayCredentialStore.save(c, credentials.gatewayCredential)
                 NtfyInstallIdStore.save(c, enrollment.installId)
+                NtfyAccessRefresh.clearReprovisionRequired(c)
                 true
             }
         } catch (_: Exception) {
