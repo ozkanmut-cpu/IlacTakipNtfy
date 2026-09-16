@@ -3,10 +3,13 @@ import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypt
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { APNsClient } from './apns.mjs';
+import { FCMClient } from './fcm.mjs';
 import { loadGatewaySecrets } from './local-secrets.mjs';
 import { NtfyAuthManager } from './ntfy-auth.mjs';
+import { PushDispatcher } from './push-dispatcher.mjs';
+import { validatePushRegistration } from './push-registration.mjs';
 import { buildProvisioningCredentials } from './provisioning-credentials.mjs';
-import { selectWakeTargets } from './wake-targets.mjs';
+import { clearStoredPushTarget, selectWakeTargets } from './wake-targets.mjs';
 
 const cfg = {
   host: process.env.HOST || '127.0.0.1',
@@ -26,6 +29,8 @@ const apns = new APNsClient({
   keyPath: process.env.APNS_KEY_PATH || '',
   bundleId: cfg.bundleId
 });
+const fcm = new FCMClient();
+const pushDispatcher = new PushDispatcher({ apns, fcm });
 
 async function loadStore() {
   try {
@@ -62,11 +67,11 @@ function validInstallId(value) {
   return typeof value === 'string' && /^[A-Za-z0-9._-]{8,128}$/.test(value);
 }
 function hasInternalAccess(req) {
-  return safeEqual(String(req.headers['x-internal-secret'] || ''), cfg.internalSecret);
+  return Boolean(cfg.internalSecret) && safeEqual(String(req.headers['x-internal-secret'] || ''), cfg.internalSecret);
 }
 function hasInstallAccess(req, installId) {
   const auth = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '');
-  return validInstallId(installId) && safeEqual(auth, installToken(installId));
+  return Boolean(cfg.installHmacKey) && validInstallId(installId) && safeEqual(auth, installToken(installId));
 }
 function provisioningReady() {
   return Boolean(cfg.installHmacKey && cfg.internalSecret);
@@ -77,12 +82,13 @@ async function readJson(req) {
   return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
 }
 function json(res, status, body) {
+  if (status === 204) {
+    res.writeHead(status, { 'cache-control': 'no-store' });
+    return res.end();
+  }
   const data = JSON.stringify(body);
   res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data), 'cache-control': 'no-store' });
   res.end(data);
-}
-async function isReady() {
-  return Boolean(provisioningReady() && await apns.ready());
 }
 async function synchronizeBoundAccess(store, installId, subscriptions) {
   if (!ntfyAuth.ready) throw new Error('ntfy_auth_unavailable');
@@ -94,7 +100,19 @@ async function synchronizeBoundAccess(store, installId, subscriptions) {
 
 const server = http.createServer(async (req, res) => {
   try {
-    if (req.method === 'GET' && req.url === '/health') return json(res, 200, { ok: true, ready: await isReady() });
+    if (req.method === 'GET' && req.url === '/health') {
+      const providerReadiness = await pushDispatcher.readiness();
+      const provisioned = provisioningReady();
+      return json(res, 200, {
+        ok: true,
+        ready: Boolean(provisioned && (providerReadiness.apns || providerReadiness.fcm)),
+        provisioningReady: provisioned,
+        providers: {
+          apns: { ready: providerReadiness.apns },
+          fcm: { ready: providerReadiness.fcm }
+        }
+      });
+    }
 
     if (req.method === 'POST' && req.url === '/internal/enrollment') {
       if (!provisioningReady()) return json(res, 503, { error: 'not_provisioned' });
@@ -192,12 +210,17 @@ const server = http.createServer(async (req, res) => {
       return json(res, 204, {});
     }
 
-    if (!(await isReady())) return json(res, 503, { error: 'not_provisioned' });
-
     if (req.method === 'POST' && req.url === '/v1/register') {
+      if (!provisioningReady()) return json(res, 503, { error: 'not_provisioned' });
       const body = await readJson(req);
       if (!hasInstallAccess(req, body.installId)) return json(res, 401, { error: 'unauthorized' });
-      if (!/^[0-9a-f]{64,256}$/i.test(body.deviceToken || '')) return json(res, 400, { error: 'invalid_device_token' });
+
+      const registration = validatePushRegistration(body);
+      if (!registration.ok) {
+        if (registration.error === 'unsupported_platform') return json(res, 400, { error: 'unsupported_platform' });
+        return json(res, 400, { error: registration.platform === 'ios' ? 'invalid_device_token' : 'invalid_push_token' });
+      }
+
       const subscriptions = [...new Set((body.subscriptions || []).filter(x => typeof x === 'string' && /^dosefolk-[A-Za-z0-9_-]+$/.test(x)))];
       const store = await loadStore();
       if (ntfyAuth.ready) {
@@ -212,10 +235,19 @@ const server = http.createServer(async (req, res) => {
           return json(res, 503, { error: 'ntfy_access_sync_failed' });
         }
       }
+
+      const providerReadiness = await pushDispatcher.readiness();
+      if (!providerReadiness[registration.provider]) {
+        return json(res, 503, { error: 'push_provider_unavailable', provider: registration.provider });
+      }
+
       store.installs[body.installId] = {
-        deviceToken: body.deviceToken,
-        environment: body.environment === 'sandbox' ? 'sandbox' : 'production',
-        bundleId: cfg.bundleId,
+        platform: registration.platform,
+        pushToken: registration.pushToken,
+        ...(registration.platform === 'ios' ? {
+          environment: body.environment === 'sandbox' ? 'sandbox' : 'production',
+          bundleId: cfg.bundleId
+        } : {}),
         subscriptions,
         updatedAt: Date.now()
       };
@@ -224,12 +256,40 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && req.url === '/internal/wake') {
+      if (!provisioningReady()) return json(res, 503, { error: 'not_provisioned' });
       if (!hasInternalAccess(req)) return json(res, 401, { error: 'unauthorized' });
       const body = await readJson(req);
       const store = await loadStore();
       const targets = selectWakeTargets(store.installs, body.topics);
-      const results = await Promise.allSettled(targets.map(target => apns.wake(target.deviceToken, target.environment)));
-      return json(res, 200, { targeted: targets.length, sent: results.filter(x => x.status === 'fulfilled').length });
+      const outcomes = await Promise.all(targets.map(async target => ({
+        target,
+        result: await pushDispatcher.dispatch(target)
+      })));
+
+      let storeChanged = false;
+      for (const outcome of outcomes) {
+        if (outcome.result.status === 'invalid_target') {
+          clearStoredPushTarget(outcome.target);
+          storeChanged = true;
+        }
+      }
+      if (storeChanged) await saveStore(store);
+
+      const providerCounts = {
+        apns: { targeted: 0, sent: 0 },
+        fcm: { targeted: 0, sent: 0 }
+      };
+      for (const { result } of outcomes) {
+        if (result.provider === 'apns' || result.provider === 'fcm') {
+          providerCounts[result.provider].targeted += 1;
+          if (result.status === 'sent') providerCounts[result.provider].sent += 1;
+        }
+      }
+      return json(res, 200, {
+        targeted: targets.length,
+        sent: outcomes.filter(({ result }) => result.status === 'sent').length,
+        providers: providerCounts
+      });
     }
 
     return json(res, 404, { error: 'not_found' });
