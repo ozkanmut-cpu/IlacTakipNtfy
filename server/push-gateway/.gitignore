@@ -1,4 +1,6 @@
 data/
+relay-metadata/
+relay-queue/
 secrets/
 .env
 *.p8
