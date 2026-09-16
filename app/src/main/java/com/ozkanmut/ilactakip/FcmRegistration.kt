@@ -11,7 +11,6 @@ import androidx.work.Worker
 import androidx.work.WorkerParameters
 import com.google.android.gms.tasks.Tasks
 import com.google.firebase.installations.FirebaseInstallations
-import com.google.firebase.messaging.FirebaseMessaging
 import org.json.JSONArray
 import org.json.JSONObject
 import java.net.HttpURLConnection
@@ -64,7 +63,6 @@ private object FcmRegistrationStateStore {
 
 private object FirebaseInstallationTarget {
     fun currentBlocking(): String? = runCatching {
-        Tasks.await(FirebaseMessaging.getInstance().register(), 20, TimeUnit.SECONDS)
         Tasks.await(FirebaseInstallations.getInstance().id, 20, TimeUnit.SECONDS)
             ?.trim()
             ?.takeIf { it.isNotEmpty() }
