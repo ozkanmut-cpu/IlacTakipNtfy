@@ -25,7 +25,10 @@ struct DosefolkApp: App {
                         bundleId: Bundle.main.bundleIdentifier ?? "com.ozkanmut.dosefolk"
                     )
                     do {
-                        let registered = try await PushGatewayClient().register(payload)
+                        let registered = try await PushGatewayClient().register(
+                            payload,
+                            settings: createdRuntime.settings
+                        )
                         DosefolkAppDelegate.markAPNsRegistration(
                             registered ? .registered : .waitingForProvisioning
                         )

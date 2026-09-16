@@ -126,6 +126,17 @@ actor PushGatewayClient {
         return request
     }
 
+    static func applyRegistrationStatus(_ status: Int, settings: AppSettings) throws {
+        if (200..<300).contains(status) {
+            settings.ntfyReprovisionRequired = false
+            return
+        }
+        if status == 409 {
+            settings.ntfyReprovisionRequired = true
+        }
+        throw PushGatewayError.rejected(status)
+    }
+
     static func applyAccessStatus(_ status: Int, settings: AppSettings) throws {
         if (200..<300).contains(status) {
             settings.ntfyReprovisionRequired = false
@@ -137,7 +148,7 @@ actor PushGatewayClient {
         throw PushGatewayError.rejected(status)
     }
 
-    func register(_ payload: APNsRegistrationPayload) async throws -> Bool {
+    func register(_ payload: APNsRegistrationPayload, settings: AppSettings = AppSettings()) async throws -> Bool {
         guard let credential = try keychain.string(for: SecureCredentialKey.provisioningSecret),
               !credential.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return false
@@ -150,7 +161,7 @@ actor PushGatewayClient {
         )
         let (_, response) = try await session.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-        guard (200..<300).contains(status) else { throw PushGatewayError.rejected(status) }
+        try Self.applyRegistrationStatus(status, settings: settings)
         return true
     }
 
