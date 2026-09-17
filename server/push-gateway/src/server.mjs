@@ -12,6 +12,8 @@ import { validatePushRegistration } from './push-registration.mjs';
 import { buildProvisioningCredentials } from './provisioning-credentials.mjs';
 import { openMetadataStore } from './relay-metadata-store.mjs';
 import { acceptPairingOffer, confirmPairingOffer, createPairingOffer } from './relay-pairing.mjs';
+import { openRelayQueue } from './relay-queue-store.mjs';
+import { enqueueMessages, readInbox, acknowledgeMessages, MAX_RELAY_REQUEST_BYTES } from './relay-messages.mjs';
 import { listRoutesForSender } from './relay-routes.mjs';
 import { clearStoredPushTarget, selectWakeTargets } from './wake-targets.mjs';
 
@@ -19,6 +21,7 @@ const cfg = {
   host: process.env.HOST || '127.0.0.1',
   port: Number(process.env.PORT || 2587),
   dataFile: process.env.DATA_FILE || '/data/registrations.json',
+  relayQueueDb: process.env.RELAY_QUEUE_DB || '/data/queue/relay-queue.sqlite3',
   relayMetadataDb: process.env.RELAY_METADATA_DB || '/data/metadata/relay-metadata.sqlite3',
   installHmacKey: process.env.INSTALL_HMAC_KEY || '',
   internalSecret: process.env.INTERNAL_WAKE_SECRET || '',
@@ -106,9 +109,9 @@ function hasInstallAccess(req, installId) {
 function provisioningReady() {
   return Boolean(cfg.installHmacKey && cfg.internalSecret);
 }
-async function readJson(req) {
+async function readJson(req, maxBytes = 65536) {
   const chunks = []; let size = 0;
-  for await (const chunk of req) { size += chunk.length; if (size > 65536) throw new Error('body_too_large'); chunks.push(chunk); }
+  for await (const chunk of req) { size += chunk.length; if (size > maxBytes) throw new Error('body_too_large'); chunks.push(chunk); }
   return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
 }
 function json(res, status, body) {
@@ -173,6 +176,37 @@ const server = http.createServer(async (req, res) => {
           fcm: { ready: providerReadiness.fcm }
         }
       });
+    }
+
+    const relayPath = req.url?.split('?')[0];
+    if ((req.method === 'POST' && ['/v1/messages', '/v1/messages/ack'].includes(relayPath))
+      || (req.method === 'GET' && relayPath === '/v1/inbox')) {
+      let metadataStore;
+      let queue;
+      try {
+        metadataStore = openMetadataStore(cfg.relayMetadataDb);
+        const header = String(req.headers.authorization || '');
+        if (!authenticateInstall(header, metadataStore)) return json(res, 401, { error: 'unauthorized' });
+        const body = req.method === 'POST' ? await readJson(req, MAX_RELAY_REQUEST_BYTES) : null;
+        // Recheck after the asynchronous body read; revocation may have happened meanwhile.
+        const actor = authenticateInstall(header, metadataStore);
+        if (!actor) return json(res, 401, { error: 'unauthorized' });
+        queue = openRelayQueue(cfg.relayQueueDb);
+        if (relayPath === '/v1/messages') return json(res, 201, enqueueMessages(metadataStore, queue, actor, body));
+        if (relayPath === '/v1/messages/ack') return json(res, 200, acknowledgeMessages(metadataStore, queue, actor, body));
+        const query = new URL(req.url, 'http://localhost').searchParams;
+        const rawLimit = query.get('limit');
+        const limit = rawLimit === null ? 100 : (/^[0-9]+$/.test(rawLimit) ? Number(rawLimit) : NaN);
+        return json(res, 200, readInbox(metadataStore, queue, actor, limit));
+      } catch (error) {
+        // Never log parser exceptions, request data, credentials or ciphertext.
+        const status = error.message === 'body_too_large' ? 413
+          : error instanceof SyntaxError ? 400 : error.status || 503;
+        return json(res, status, { error: status === 503 ? 'relay_unavailable' : 'relay_request_rejected' });
+      } finally {
+        queue?.close();
+        metadataStore?.close();
+      }
     }
 
     if (req.method === 'GET' && req.url === '/v1/routes') {

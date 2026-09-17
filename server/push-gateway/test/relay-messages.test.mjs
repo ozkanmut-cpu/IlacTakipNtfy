@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, rm, rename, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawn } from 'node:child_process';
@@ -209,4 +209,17 @@ test('HTTP endpoints enforce bearer identities, body limits and durable inbox/AC
   assert.equal((await request('/v1/messages/ack', B, { acks: [{ messageId: 'http-large', outcome: 'processed' }] })).status, 200);
   assert.deepEqual(await (await request('/v1/inbox', B)).json(), { messages: [] });
   assert.equal((await request('/v1/messages', A, { messages: [], padding: 'x'.repeat(1048576) })).status, 413);
+  // A database outage must remain retryable, not be reported as bad client input.
+  const metadataPath = join(f.dir, 'metadata.db');
+  const savedPath = join(f.dir, 'saved-metadata.db');
+  await rename(metadataPath, savedPath);
+  await mkdir(metadataPath);
+  try {
+    const unavailable = await request('/v1/inbox', B);
+    assert.equal(unavailable.status, 503);
+    assert.deepEqual(await unavailable.json(), { error: 'relay_unavailable' });
+  } finally {
+    await rm(metadataPath, { recursive: true });
+    await rename(savedPath, metadataPath);
+  }
 });

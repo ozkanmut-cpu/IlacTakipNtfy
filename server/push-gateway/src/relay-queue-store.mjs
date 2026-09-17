@@ -8,6 +8,8 @@ function prepareDatabase(filePath) {
   const db = new Database(path);
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
+  db.pragma('synchronous = FULL');
+  db.pragma('secure_delete = ON');
   return { db, path };
 }
 
@@ -127,8 +129,48 @@ export function openRelayQueue(filePath) {
     return { inserted: true, relaySeq };
   });
 
+  // All checks and inserts share the write transaction: quotas and sequence
+  // allocation cannot race another queue connection or leave partial batches.
+  const enqueueBatchTransaction = db.transaction((messages, limits) => messages.map(message => {
+    const existing = mapMessage(findMessageStatement.get(message.messageId));
+    if (existing) {
+      const fields = ['routeId', 'senderInstallId', 'recipientInstallId', 'senderKeyVersion', 'recipientKeyVersion'];
+      if (fields.some(field => existing[field] !== message[field]) || !existing.ciphertext.equals(message.ciphertext)) {
+        throw Object.assign(new Error('message_conflict'), { status: 409 });
+      }
+      return { messageId: message.messageId, inserted: false, relaySeq: existing.relaySeq };
+    }
+    const usage = db.prepare(`SELECT count(*) AS count, coalesce(sum(length(ciphertext)), 0) AS bytes
+      FROM relay_messages WHERE recipient_install_id = ?`).get(message.recipientInstallId);
+    if (usage.count >= limits.maxCount || usage.bytes + message.ciphertext.length > limits.maxBytes) {
+      throw Object.assign(new Error('queue_quota_exceeded'), { status: 429 });
+    }
+    return { messageId: message.messageId, ...enqueueTransaction(message) };
+  }));
+  const ackBatchTransaction = db.transaction((recipientInstallId, acks) => {
+    for (const ack of acks) {
+      const row = findMessageStatement.get(ack.messageId);
+      if (row && row.recipient_install_id !== recipientInstallId) {
+        throw Object.assign(new Error('ack_forbidden'), { status: 403 });
+      }
+    }
+    // Missing IDs are successful no-ops: no ACK/domain history is retained.
+    for (const ack of acks) deleteMessageStatement.run(recipientInstallId, ack.messageId);
+  });
+  const inboxStatement = db.prepare(`SELECT * FROM relay_messages
+    WHERE recipient_install_id = ? AND expires_at > ? ORDER BY relay_seq ASC LIMIT ?`);
+
   return {
     path,
+    enqueueBatch(messages, limits) {
+      return enqueueBatchTransaction.immediate(messages, limits);
+    },
+    acknowledgeBatch(recipientInstallId, acks) {
+      return ackBatchTransaction.immediate(recipientInstallId, acks);
+    },
+    *pendingRecipient(recipientInstallId, now, limit) {
+      for (const row of inboxStatement.iterate(recipientInstallId, now, limit)) yield mapMessage(row);
+    },
     enqueue(message) {
       return enqueueTransaction(message);
     },
