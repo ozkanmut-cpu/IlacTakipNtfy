@@ -34,6 +34,7 @@ import org.robolectric.shadows.ShadowLog
 import java.io.ByteArrayOutputStream
 import java.io.PrintStream
 import java.lang.reflect.Modifier
+import java.math.BigDecimal
 import java.security.GeneralSecurityException
 import java.util.Base64
 import java.util.UUID
@@ -233,6 +234,106 @@ class RelayCryptoTest {
         }
     }
 
+    @Test
+    fun malformedNoncanonicalAndAmbiguousInnerJsonFailClosed() {
+        val invalid = listOf(
+            " $EXPECTED_INNER", "$EXPECTED_INNER\n", "$EXPECTED_INNER{}",
+            EXPECTED_INNER.replace("\"version\":1", "\"version\":1.0"),
+            EXPECTED_INNER.replace("\"version\":1", "\"version\":2"),
+            EXPECTED_INNER.replace("\"version\":1", "\"version\":1,\"version\":1"),
+            EXPECTED_INNER.replace("\"version\":1", "\"unexpected\":0,\"version\":1"),
+            EXPECTED_INNER.replace("\"eventId\":", "\"eventId\":\"duplicate\",\"eventId\":"),
+            EXPECTED_INNER.replace("\"senderKeyVersion\":7", "\"senderKeyVersion\":\"7\""),
+            EXPECTED_INNER.replace(EXPECTED_SIGNATURE, "$EXPECTED_SIGNATURE="),
+            EXPECTED_INNER.replace("İlaç 🧪", "\\ud800"),
+            EXPECTED_INNER.replace("\"payload\":$EXPECTED_PAYLOAD", "\"payload\":[]")
+        )
+        invalid.forEach { inner ->
+            assertThrows(GeneralSecurityException::class.java) {
+                recipient.codec.open(recipient.encryptForTest(inner.toByteArray(Charsets.UTF_8)), sender.identity, context)
+            }
+        }
+        assertThrows(GeneralSecurityException::class.java) {
+            recipient.codec.open(recipient.encryptForTest(byteArrayOf(0xc3.toByte(), 0x28)), sender.identity, context)
+        }
+    }
+
+    @Test
+    fun canonicalNumbersRetainExactDecimalValuesWithoutBinary64Roundoff() {
+        val payload = JSONObject().put("large", 9007199254740993L)
+            .put("decimal", BigDecimal("0.12345678901234567890123456789"))
+            .put("zero", -0.0).put("whole", BigDecimal("2.000"))
+        assertEquals(
+            """{"decimal":0.12345678901234567890123456789,"large":9007199254740993,"whole":2,"zero":0}""",
+            RelayEnvelopeFormat.canonical(payload)
+        )
+        val encrypted = sender.codec.seal(payload, recipient.identity, context)
+        val opened = recipient.codec.open(encrypted, sender.identity, context).domainPayload
+        assertEquals("9007199254740993", opened.get("large").toString())
+        assertEquals("0.12345678901234567890123456789", opened.get("decimal").toString())
+    }
+
+    @Test
+    fun canonicalUnicodeUsesUtf16OrderWithoutNormalizingKeysOrValues() {
+        val payload = JSONObject().put("\ue000", "private-use").put("🧪", "astral")
+            .put("é", "composed").put("e\u0301", "decomposed")
+        assertEquals("""{"é":"decomposed","é":"composed","🧪":"astral","":"private-use"}""",
+            RelayEnvelopeFormat.canonical(payload))
+    }
+
+    @Test
+    fun oversizedDeepAndInvalidContextInputFailClosed() {
+        assertThrows(GeneralSecurityException::class.java) {
+            sender.codec.seal(JSONObject().put("data", "x".repeat(512 * 1024)), recipient.identity, context)
+        }
+        var deep = JSONObject()
+        repeat(70) { deep = JSONObject().put("nested", deep) }
+        assertThrows(GeneralSecurityException::class.java) { sender.codec.seal(deep, recipient.identity, context) }
+        listOf(context.copy(messageId = ""), context.copy(routeId = "bad\nroute"),
+            context.copy(senderKeyVersion = 0), context.copy(recipientKeyVersion = -1)).forEach { invalid ->
+            assertThrows(GeneralSecurityException::class.java) {
+                sender.codec.seal(unorderedPayload(), recipient.identity, invalid)
+            }
+        }
+    }
+
+    @Test
+    fun sharedEnvelopeFixtureCommitsCanonicalBytesContextAndSigningContract() {
+        val fixture = fixture("relay-envelope-v1.json")
+        assertTrue(fixture.getBoolean("testOnly"))
+        assertEquals(EXPECTED_INNER, fixture.getString("canonicalInner"))
+        assertEquals(EXPECTED_SIGNING_BYTES, fixture.getString("signingInput"))
+        assertEquals(EXPECTED_HPKE_CONTEXT, fixture.getString("hpkeContextInfo"))
+        val encrypted = recipient.encryptForTest(fixture.getString("canonicalInner").toByteArray(Charsets.UTF_8))
+        assertVerifiedPayload(recipient.codec.open(encrypted, sender.identity, context).domainPayload)
+        val cases = fixture.getJSONArray("canonicalCases")
+        for (index in 0 until cases.length()) {
+            val case = cases.getJSONObject(index)
+            assertEquals(case.getString("canonical"), RelayEnvelopeFormat.canonical(
+                RelayEnvelopeFormat.parseCanonical(case.getString("canonical").toByteArray(Charsets.UTF_8))))
+        }
+    }
+
+    @Test
+    fun sharedPairingFixtureVerifiesSchemaAndSignatureButDoesNotActivateTrust() {
+        val fixture = fixture("relay-pairing-v2.json")
+        assertTrue(fixture.getBoolean("testOnly"))
+        val bytes = fixture.getString("canonicalOffer").toByteArray(Charsets.UTF_8)
+        val offer = RelayEnvelopeFormat.verifyPairing(bytes)
+        assertEquals("TEST-ONLY-offer-001", offer.getString("offerId"))
+        assertEquals(2, offer.getInt("version"))
+        assertEquals("TEST-ONLY-sender", offer.getString("installId"))
+        listOf(
+            fixture.getString("canonicalOffer").replace("TEST-ONLY-offer-001", "TEST-ONLY-offer-002"),
+            fixture.getString("canonicalOffer").replace("\"version\":2", "\"extra\":true,\"version\":2"),
+            fixture.getString("canonicalOffer").replace("\"version\":2", "\"version\":2,\"version\":2")
+        ).forEach { invalid ->
+            assertThrows(GeneralSecurityException::class.java) {
+                RelayEnvelopeFormat.verifyPairing(invalid.toByteArray(Charsets.UTF_8))
+            }
+        }
+    }
+
     // Security API contract, not private-field reflection: callers must never receive key containers
     // or raw secret bytes. Internal signing/decryption capabilities may return operation results;
     // their Kotlin-internal JVM names contain '$' and are not source-public export methods.
@@ -312,6 +413,9 @@ class RelayCryptoTest {
         .put("values", JSONObject(EXPECTED_PAYLOAD).getJSONArray("values"))
         .put("nested", JSONObject().put("z", JSONObject.NULL).put("a", "İlaç 🧪"))
         .put("eventId", "TEST-ONLY-event-001")
+
+    private fun fixture(name: String): JSONObject = requireNotNull(javaClass.classLoader?.getResourceAsStream(name))
+        .bufferedReader(Charsets.UTF_8).use { JSONObject(it.readText()) }
 
     private fun device(installId: String, version: Int, signing: KeysetHandle = KeysetHandle.generateNew(
         Ed25519Parameters.create(Ed25519Parameters.Variant.NO_PREFIX)

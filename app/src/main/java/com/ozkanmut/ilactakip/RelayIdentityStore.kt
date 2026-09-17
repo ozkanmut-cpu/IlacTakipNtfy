@@ -4,6 +4,8 @@ import android.content.Context
 import com.google.crypto.tink.AccessesPartialKey
 import com.google.crypto.tink.Aead
 import com.google.crypto.tink.KeysetHandle
+import com.google.crypto.tink.HybridDecrypt
+import com.google.crypto.tink.PublicKeySign
 import com.google.crypto.tink.RegistryConfiguration
 import com.google.crypto.tink.TinkProtoKeysetFormat
 import com.google.crypto.tink.hybrid.HpkeParameters
@@ -108,6 +110,19 @@ class RelayIdentityStore internal constructor(context: Context, private val mast
         val encryption = readEncryptedKeyset(stored[ENCRYPTION_KEYSET], master, version, "hpke")
         val signing = readEncryptedKeyset(stored[SIGNING_KEYSET], master, version, "ed25519")
         exportPublic(encryption, signing, version)
+    }
+
+    /** Operation-only capabilities. Private keysets remain inside this device-owned store. */
+    internal fun signRelay(message: ByteArray, keyVersion: Int): ByteArray = synchronized(identityLock) {
+        if (publicIdentity().keyVersion != keyVersion) throw GeneralSecurityException("Relay key version mismatch")
+        val handle = readEncryptedKeyset(preferences.all[SIGNING_KEYSET], masterAeadSource.getExisting(), keyVersion, "ed25519")
+        handle.getPrimitive(RegistryConfiguration.get(), PublicKeySign::class.java).sign(message)
+    }
+
+    internal fun decryptRelay(ciphertext: ByteArray, contextInfo: ByteArray, keyVersion: Int): ByteArray = synchronized(identityLock) {
+        if (publicIdentity().keyVersion != keyVersion) throw GeneralSecurityException("Relay key version mismatch")
+        val handle = readEncryptedKeyset(preferences.all[ENCRYPTION_KEYSET], masterAeadSource.getExisting(), keyVersion, "hpke")
+        handle.getPrimitive(RegistryConfiguration.get(), HybridDecrypt::class.java).decrypt(ciphertext, contextInfo)
     }
 
     @AccessesPartialKey

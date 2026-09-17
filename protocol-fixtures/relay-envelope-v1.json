@@ -1,0 +1,39 @@
+{
+  "fixtureVersion": 1,
+  "testOnly": true,
+  "warning": "TEST-ONLY: publicly known RFC 8032 signing seed and synthetic data. NEVER use these keys, offers or secrets for a real installation.",
+  "profile": "X25519-HKDF-SHA256/ChaCha20-Poly1305;Ed25519;RAW",
+  "senderSigningPublicKey": "11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo",
+  "testOnlySigningSeedHex": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+  "canonicalContext": "{\"messageId\":\"TEST-ONLY-message-001\",\"recipientInstallId\":\"TEST-ONLY-recipient\",\"recipientKeyVersion\":11,\"routeId\":\"TEST-ONLY-route-001\",\"senderInstallId\":\"TEST-ONLY-sender\",\"senderKeyVersion\":7}",
+  "canonicalPayload": "{\"eventId\":\"TEST-ONLY-event-001\",\"nested\":{\"a\":\"İlaç 🧪\",\"z\":null},\"values\":[true,2,\"line\\nquote\\\"slash\\\\\"]}",
+  "canonicalInner": "{\"context\":{\"messageId\":\"TEST-ONLY-message-001\",\"recipientInstallId\":\"TEST-ONLY-recipient\",\"recipientKeyVersion\":11,\"routeId\":\"TEST-ONLY-route-001\",\"senderInstallId\":\"TEST-ONLY-sender\",\"senderKeyVersion\":7},\"payload\":{\"eventId\":\"TEST-ONLY-event-001\",\"nested\":{\"a\":\"İlaç 🧪\",\"z\":null},\"values\":[true,2,\"line\\nquote\\\"slash\\\\\"]},\"signature\":\"qbC5mSL59q0fUdMX9JHUot5Xcuumo1tl4j8Z1z3R8ZSmGEtntMor-biur8fUoqHNx9vj4RZ0WNwFIEEyBRzhCg\",\"version\":1}",
+  "signingInput": "dosefolk-relay-signature-v1\u0000{\"context\":{\"messageId\":\"TEST-ONLY-message-001\",\"recipientInstallId\":\"TEST-ONLY-recipient\",\"recipientKeyVersion\":11,\"routeId\":\"TEST-ONLY-route-001\",\"senderInstallId\":\"TEST-ONLY-sender\",\"senderKeyVersion\":7},\"payload\":{\"eventId\":\"TEST-ONLY-event-001\",\"nested\":{\"a\":\"İlaç 🧪\",\"z\":null},\"values\":[true,2,\"line\\nquote\\\"slash\\\\\"]},\"version\":1}",
+  "hpkeContextInfo": "dosefolk-relay-hpke-v1\u0000{\"messageId\":\"TEST-ONLY-message-001\",\"recipientInstallId\":\"TEST-ONLY-recipient\",\"recipientKeyVersion\":11,\"routeId\":\"TEST-ONLY-route-001\",\"senderInstallId\":\"TEST-ONLY-sender\",\"senderKeyVersion\":7}",
+  "signature": "qbC5mSL59q0fUdMX9JHUot5Xcuumo1tl4j8Z1z3R8ZSmGEtntMor-biur8fUoqHNx9vj4RZ0WNwFIEEyBRzhCg",
+  "canonicalCases": [
+    {
+      "id": "nested-unicode-escapes",
+      "canonical": "{\"eventId\":\"TEST-ONLY-event-001\",\"nested\":{\"a\":\"İlaç 🧪\",\"z\":null},\"values\":[true,2,\"line\\nquote\\\"slash\\\\\"]}"
+    },
+    {
+      "id": "exact-decimal-and-large-integer",
+      "canonical": "{\"decimal\":0.12345678901234567890123456789,\"large\":9007199254740993,\"whole\":2,\"zero\":0}"
+    },
+    {
+      "id": "utf16-order-no-normalization",
+      "canonical": "{\"é\":\"decomposed\",\"é\":\"composed\",\"🧪\":\"astral\",\"\":\"private-use\"}"
+    },
+    {
+      "id": "control-escapes",
+      "canonical": "{\"controls\":\"\\u0000\\b\\t\\n\\f\\r\\u001f\",\"slash\":\"/\"}"
+    }
+  ],
+  "sha256": {
+    "canonicalContext": "1fa68d6ee8a2f7214d89e3a322214e043dc8a5be76f429ac56893f182f575b57",
+    "canonicalPayload": "32b5edd9c8156a6bfba2d91428ea47767af76f09f40a046be0b4986dc6217486",
+    "canonicalInner": "6a228004b5da1cd3de22aaca5b09aa94b8718e8957559b6cc844f584481ceaf8",
+    "signingInput": "3f54a65b5dd01a0544c85b6fdc78954a11c7e713b1b32ac1377a2da94148fba1",
+    "hpkeContextInfo": "0cbe65628f34a0419837a7b00a2fd375f45b413ff1766ffbf2fc6ea4ec0fe832"
+  }
+}

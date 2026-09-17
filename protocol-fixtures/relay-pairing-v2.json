@@ -1,0 +1,14 @@
+{
+  "fixtureVersion": 1,
+  "testOnly": true,
+  "warning": "TEST-ONLY: publicly known RFC 8032 signing seed and synthetic data. NEVER use these keys, offers or secrets for a real installation.",
+  "contractOnly": "No live pairing, expiry/replay handling, route enrollment or trust activation.",
+  "testOnlySigningSeedHex": "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
+  "canonicalOffer": "{\"encryptionPublicKey\":\"hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo\",\"expiresAt\":\"2030-01-01T00:10:00Z\",\"installId\":\"TEST-ONLY-sender\",\"keyVersion\":7,\"offerId\":\"TEST-ONLY-offer-001\",\"pairingSecret\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\",\"signature\":\"8mvYELRXlYXZh58LiSf6weciIh9lt8lQtpzUcwBlAVUvEGyPMh35KFi35fbYsuNxXhb0T_qV2pAjB2GxTyNtAQ\",\"signingPublicKey\":\"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo\",\"version\":2}",
+  "signingInput": "dosefolk-relay-pairing-v2\u0000{\"encryptionPublicKey\":\"hSDwCYkwp1R0i33ctD73Wg2_Og0mOBr066SpjqqbTmo\",\"expiresAt\":\"2030-01-01T00:10:00Z\",\"installId\":\"TEST-ONLY-sender\",\"keyVersion\":7,\"offerId\":\"TEST-ONLY-offer-001\",\"pairingSecret\":\"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8\",\"signingPublicKey\":\"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo\",\"version\":2}",
+  "signature": "8mvYELRXlYXZh58LiSf6weciIh9lt8lQtpzUcwBlAVUvEGyPMh35KFi35fbYsuNxXhb0T_qV2pAjB2GxTyNtAQ",
+  "sha256": {
+    "canonicalOffer": "f2b5d05fd43b18d5fc69119f1d47e91b477ff43850a6be36ba9a33a8d84922aa",
+    "signingInput": "31d79c81a23b2eada3b6a2c45ffd9d39b12bca8ec40efc1979872a75528e1e70"
+  }
+}

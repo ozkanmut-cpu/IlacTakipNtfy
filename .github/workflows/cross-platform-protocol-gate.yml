@@ -26,7 +26,83 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  shared-relay-fixtures:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate shared synthetic relay byte contracts
+        run: |
+          python3 - <<'PY'
+          import base64, decimal, hashlib, json, pathlib
+
+          def unique(pairs):
+              result = {}
+              for key, value in pairs:
+                  assert key not in result, 'Duplicate fixture JSON member'
+                  result[key] = value
+              return result
+
+          def decode(text):
+              return json.loads(text, object_pairs_hook=unique, parse_float=decimal.Decimal,
+                                parse_constant=lambda _: (_ for _ in ()).throw(ValueError('Nonfinite number')))
+
+          def canonical(value):
+              if value is None: return 'null'
+              if isinstance(value, bool): return 'true' if value else 'false'
+              if isinstance(value, str): return json.dumps(value, ensure_ascii=False)
+              if isinstance(value, (int, decimal.Decimal)):
+                  with decimal.localcontext() as context:
+                      context.prec = 256
+                      number = decimal.Decimal(value).normalize()
+                  assert len(number.as_tuple().digits) <= 100 and abs(number.as_tuple().exponent) <= 100
+                  return '0' if not number else format(number, 'f')
+              if isinstance(value, list): return '[' + ','.join(map(canonical, value)) + ']'
+              return '{' + ','.join(canonical(k) + ':' + canonical(value[k])
+                  for k in sorted(value, key=lambda k: k.encode('utf-16-be'))) + '}'
+
+          def raw(text, size):
+              value = base64.urlsafe_b64decode(text + '=' * (-len(text) % 4))
+              assert len(value) == size and base64.urlsafe_b64encode(value).decode().rstrip('=') == text
+
+          def load(name, fields):
+              value = decode(pathlib.Path('protocol-fixtures', name).read_text(encoding='utf-8'))
+              assert value['fixtureVersion'] == 1 and value['testOnly'] is True
+              assert 'TEST-ONLY' in value['warning']
+              assert value['testOnlySigningSeedHex'] == '9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60'
+              assert set(value['sha256']) == set(fields)
+              for field in fields:
+                  assert hashlib.sha256(value[field].encode('utf-8')).hexdigest() == value['sha256'][field]
+              return value
+
+          envelope = load('relay-envelope-v1.json', ['canonicalContext', 'canonicalPayload', 'canonicalInner', 'signingInput', 'hpkeContextInfo'])
+          inner = decode(envelope['canonicalInner'])
+          assert set(inner) == {'context', 'payload', 'signature', 'version'} and inner['version'] == 1
+          assert set(inner['context']) == {'messageId', 'routeId', 'senderInstallId', 'recipientInstallId', 'senderKeyVersion', 'recipientKeyVersion'}
+          assert canonical(inner) == envelope['canonicalInner']
+          assert canonical(inner['context']) == envelope['canonicalContext']
+          assert canonical(inner['payload']) == envelope['canonicalPayload']
+          assert envelope['hpkeContextInfo'] == 'dosefolk-relay-hpke-v1\0' + envelope['canonicalContext']
+          assert inner.pop('signature') == envelope['signature']
+          assert envelope['signingInput'] == 'dosefolk-relay-signature-v1\0' + canonical(inner)
+          raw(envelope['senderSigningPublicKey'], 32)
+          raw(envelope['signature'], 64)
+          assert len(envelope['canonicalCases']) >= 4
+          for case in envelope['canonicalCases']:
+              assert canonical(decode(case['canonical'])) == case['canonical']
+
+          pairing = load('relay-pairing-v2.json', ['canonicalOffer', 'signingInput'])
+          offer = decode(pairing['canonicalOffer'])
+          assert set(offer) == {'version', 'offerId', 'installId', 'encryptionPublicKey', 'signingPublicKey', 'keyVersion', 'pairingSecret', 'expiresAt', 'signature'}
+          assert offer['version'] == 2 and canonical(offer) == pairing['canonicalOffer']
+          for key in ['encryptionPublicKey', 'signingPublicKey', 'pairingSecret']: raw(offer[key], 32)
+          raw(offer['signature'], 64)
+          assert offer.pop('signature') == pairing['signature']
+          assert pairing['signingInput'] == 'dosefolk-relay-pairing-v2\0' + canonical(offer)
+          print('Validated shared relay fixture canonical bytes, schemas, hashes, and TEST-ONLY labels.')
+          PY
+
   android-protocol:
+    needs: shared-relay-fixtures
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,12 +117,20 @@ jobs:
         run: gradle testDebugUnitTest
 
   ios-protocol:
+    needs: shared-relay-fixtures
     runs-on: macos-15
     defaults:
       run:
         working-directory: ios/Dosefolk
     steps:
       - uses: actions/checkout@v4
+
+      - name: Package exact shared relay fixtures for iOS contract tests
+        run: |
+          cp ../../protocol-fixtures/relay-envelope-v1.json DosefolkTests/Fixtures/relay-envelope-v1.json
+          cp ../../protocol-fixtures/relay-pairing-v2.json DosefolkTests/Fixtures/relay-pairing-v2.json
+          cmp ../../protocol-fixtures/relay-envelope-v1.json DosefolkTests/Fixtures/relay-envelope-v1.json
+          cmp ../../protocol-fixtures/relay-pairing-v2.json DosefolkTests/Fixtures/relay-pairing-v2.json
 
       - name: Select Xcode
         run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
