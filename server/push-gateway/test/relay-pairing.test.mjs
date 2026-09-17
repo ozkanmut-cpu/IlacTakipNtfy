@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import Database from 'better-sqlite3';
 import { issueInstallCredential } from '../src/install-auth.mjs';
 import { openMetadataStore } from '../src/relay-metadata-store.mjs';
 import {
@@ -340,6 +341,139 @@ test('confirmed accept and confirm retry proofs expire at the exact offer bounda
     assert.deepEqual(metadataStore.listActiveRoutesForSender('relay-expiry-A'), routesFromA);
     assert.deepEqual(metadataStore.listActiveRoutesForSender('relay-expiry-B'), routesFromB);
     assert.equal(metadataStore.getPairingOffer(offerId).status, 'confirmed');
+  }
+});
+
+test('malformed confirmed expiry metadata rejects retry proofs without changing metadata or routes', async t => {
+  const { metadataFile, metadataStore } = await storeFixture(t);
+  const now = 1_700_000_000_000;
+  installation(metadataStore, { installId: 'relay-malformed-A', now });
+  installation(metadataStore, { installId: 'relay-malformed-B', now });
+  const pairingSecret = 'pairing-secret-malformed-expiry-0012';
+  const offerId = 'offer-malformed-expiry-0012';
+  createPairingOffer(metadataStore, {
+    offerId,
+    creatorInstallId: 'relay-malformed-A',
+    secretHash: hashPairingSecret(pairingSecret),
+    creatorProof: createPairingProof(pairingSecret, {
+      offerId,
+      role: 'creator',
+      installId: 'relay-malformed-A'
+    }),
+    now
+  });
+  const peerProof = createPairingProof(pairingSecret, {
+    offerId,
+    role: 'peer',
+    installId: 'relay-malformed-B'
+  });
+  assert.ok(acceptPairingOffer(metadataStore, {
+    offerId,
+    peerInstallId: 'relay-malformed-B',
+    pairingSecret,
+    peerProof,
+    now: now + 1
+  }));
+  assert.ok(confirmPairingOffer(metadataStore, {
+    offerId,
+    actorInstallId: 'relay-malformed-A',
+    pairingSecret,
+    now: now + 2
+  }));
+  const routesFromA = metadataStore.listActiveRoutesForSender('relay-malformed-A');
+  const routesFromB = metadataStore.listActiveRoutesForSender('relay-malformed-B');
+  const corruptionDb = new Database(metadataFile);
+  t.after(() => corruptionDb.close());
+  const malformedExpiries = [
+    { sql: '1e999', matches: value => value === Infinity },
+    { sql: "'1e309'", matches: value => value === Infinity || value === '1e309' },
+    { sql: '8640000000000001', matches: value => value === 8_640_000_000_000_001 }
+  ];
+
+  for (const malformed of malformedExpiries) {
+    corruptionDb.prepare(
+      `UPDATE pairing_offers SET expires_at = ${malformed.sql} WHERE offer_id = ?`
+    ).run(offerId);
+    const corruptedOffer = metadataStore.getPairingOffer(offerId);
+    assert.ok(malformed.matches(corruptedOffer.expiresAt));
+
+    assert.equal(acceptPairingOffer(metadataStore, {
+      offerId,
+      peerInstallId: 'relay-malformed-B',
+      pairingSecret,
+      peerProof,
+      now: now + 3
+    }), null);
+    assert.equal(confirmPairingOffer(metadataStore, {
+      offerId,
+      actorInstallId: 'relay-malformed-A',
+      pairingSecret,
+      now: now + 3
+    }), null);
+    assert.deepEqual(metadataStore.getPairingOffer(offerId), corruptedOffer);
+    assert.deepEqual(metadataStore.listActiveRoutesForSender('relay-malformed-A'), routesFromA);
+    assert.deepEqual(metadataStore.listActiveRoutesForSender('relay-malformed-B'), routesFromB);
+  }
+});
+
+test('malformed current timestamps fail before accepted metadata or routes can change', async t => {
+  const { metadataStore } = await storeFixture(t);
+  const createdAt = 1_700_000_000_000;
+  installation(metadataStore, { installId: 'relay-now-A', now: createdAt });
+  installation(metadataStore, { installId: 'relay-now-B', now: createdAt });
+  const malformedTimes = [
+    ['positive-infinity', Infinity],
+    ['negative-infinity', -Infinity],
+    ['coercible-overflow', '1e309'],
+    ['negative-time', -1],
+    ['unsafe-integer', Number.MAX_SAFE_INTEGER + 1],
+    ['outside-date-range', 8_640_000_000_000_001]
+  ];
+
+  for (const [label, malformedNow] of malformedTimes) {
+    const offerId = `offer-invalid-now-${label}`;
+    const pairingSecret = `pairing-secret-invalid-now-${label}`;
+    createPairingOffer(metadataStore, {
+      offerId,
+      creatorInstallId: 'relay-now-A',
+      secretHash: hashPairingSecret(pairingSecret),
+      creatorProof: createPairingProof(pairingSecret, {
+        offerId,
+        role: 'creator',
+        installId: 'relay-now-A'
+      }),
+      now: createdAt
+    });
+    const peerProof = createPairingProof(pairingSecret, {
+      offerId,
+      role: 'peer',
+      installId: 'relay-now-B'
+    });
+    assert.ok(acceptPairingOffer(metadataStore, {
+      offerId,
+      peerInstallId: 'relay-now-B',
+      pairingSecret,
+      peerProof,
+      now: createdAt + 1
+    }));
+    const acceptedOffer = metadataStore.getPairingOffer(offerId);
+
+    assert.equal(acceptPairingOffer(metadataStore, {
+      offerId,
+      peerInstallId: 'relay-now-B',
+      pairingSecret,
+      peerProof,
+      now: malformedNow
+    }), null);
+    assert.equal(confirmPairingOffer(metadataStore, {
+      offerId,
+      actorInstallId: 'relay-now-A',
+      pairingSecret,
+      now: malformedNow
+    }), null);
+    assert.deepEqual(metadataStore.getPairingOffer(offerId), acceptedOffer);
+    assert.deepEqual(metadataStore.listActiveRoutesForSender('relay-now-A'), []);
+    assert.deepEqual(metadataStore.listActiveRoutesForSender('relay-now-B'), []);
   }
 });
 

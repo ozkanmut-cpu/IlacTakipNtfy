@@ -1,6 +1,7 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
 const PAIRING_LIFETIME_MS = 10 * 60 * 1000;
+const MAX_TIMESTAMP_MS = 8_640_000_000_000_000;
 
 function safeEqualText(a, b) {
   const aa = Buffer.from(String(a || ''));
@@ -24,6 +25,11 @@ function validDigest(value) {
 
 function validPairingSecret(value) {
   return typeof value === 'string' && value.length >= 16 && value.length <= 1024;
+}
+
+function validTimestamp(value) {
+  return typeof value === 'number' && Number.isSafeInteger(value) &&
+    value >= 0 && value <= MAX_TIMESTAMP_MS;
 }
 
 export function hashPairingSecret(pairingSecret) {
@@ -72,12 +78,13 @@ export function acceptPairingOffer(metadataStore, {
   peerProof,
   now = Date.now()
 }) {
+  if (!validTimestamp(now)) return null;
   metadataStore.purgeExpiredPairingOffers(now);
   const peer = activeInstallation(metadataStore, peerInstallId);
   if (!peer || !validPairingSecret(pairingSecret) || !validDigest(peerProof)) return null;
 
   const offer = metadataStore.getPairingOffer(offerId);
-  if (!offer || !(Number(offer.expiresAt) > Number(now)) ||
+  if (!offer || !validTimestamp(offer.expiresAt) || offer.expiresAt <= now ||
       offer.creatorInstallId === peer.installId) return null;
   if (!['pending', 'accepted', 'confirmed'].includes(offer.status)) return null;
   if (!activeInstallation(metadataStore, offer.creatorInstallId)) return null;
@@ -111,12 +118,13 @@ export function confirmPairingOffer(metadataStore, {
   pairingSecret,
   now = Date.now()
 }) {
+  if (!validTimestamp(now)) return null;
   metadataStore.purgeExpiredPairingOffers(now);
   const actor = activeInstallation(metadataStore, actorInstallId);
   if (!actor || !validPairingSecret(pairingSecret)) return null;
 
   const offer = metadataStore.getPairingOffer(offerId);
-  if (!offer || !(Number(offer.expiresAt) > Number(now)) ||
+  if (!offer || !validTimestamp(offer.expiresAt) || offer.expiresAt <= now ||
       !['accepted', 'confirmed'].includes(offer.status) ||
       offer.creatorInstallId !== actor.installId) return null;
   if (!offer.peerInstallId || !offer.peerProof || !activeInstallation(metadataStore, offer.peerInstallId)) return null;
