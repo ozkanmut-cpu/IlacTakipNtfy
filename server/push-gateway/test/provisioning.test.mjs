@@ -90,8 +90,9 @@ test('internal provisioning is guarded and deterministic before APNs readiness',
     headers: { 'content-type': 'application/json', 'x-internal-secret': internalSecret },
     body: JSON.stringify({ installId: 'install-1234' })
   });
-  assert.equal(valid.status, 200);
-  const body = await valid.json();
+  const validText = await valid.text();
+  assert.equal(valid.status, 200, validText);
+  const body = JSON.parse(validText);
   const expected = gatewayCredential('install-1234');
   assert.deepEqual(body, { installId: 'install-1234', credential: expected });
 
