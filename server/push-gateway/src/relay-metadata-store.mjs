@@ -48,6 +48,23 @@ function mapRouteListing(row) {
   };
 }
 
+function mapPairingOffer(row) {
+  if (!row) return null;
+  return {
+    offerId: row.offer_id,
+    creatorInstallId: row.creator_install_id,
+    secretHash: row.secret_hash,
+    creatorProof: row.creator_proof,
+    peerInstallId: row.peer_install_id,
+    peerProof: row.peer_proof,
+    status: row.status,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
+    acceptedAt: row.accepted_at,
+    confirmedAt: row.confirmed_at
+  };
+}
+
 export function openMetadataStore(filePath) {
   const { db, path } = prepareDatabase(filePath);
   db.exec(`
@@ -72,12 +89,28 @@ export function openMetadataStore(filePath) {
       revoked_at INTEGER
     );
 
+    CREATE TABLE IF NOT EXISTS pairing_offers (
+      offer_id TEXT PRIMARY KEY,
+      creator_install_id TEXT NOT NULL,
+      secret_hash TEXT NOT NULL,
+      creator_proof TEXT NOT NULL,
+      peer_install_id TEXT,
+      peer_proof TEXT,
+      status TEXT NOT NULL CHECK(status IN ('pending','accepted','confirmed')),
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      accepted_at INTEGER,
+      confirmed_at INTEGER
+    );
+
     CREATE UNIQUE INDEX IF NOT EXISTS installations_credential_hash
       ON installations(credential_hash);
     CREATE INDEX IF NOT EXISTS routes_sender_status
       ON routes(sender_install_id, status);
     CREATE INDEX IF NOT EXISTS routes_recipient_status
       ON routes(recipient_install_id, status);
+    CREATE INDEX IF NOT EXISTS pairing_offers_expiry
+      ON pairing_offers(status, expires_at);
   `);
 
   const upsertInstallationStatement = db.prepare(`
@@ -131,6 +164,51 @@ export function openMetadataStore(filePath) {
     SET status = 'revoked', revoked_at = ?
     WHERE route_id = ? AND status = 'active'
   `);
+  const insertPairingOfferStatement = db.prepare(`
+    INSERT INTO pairing_offers (
+      offer_id, creator_install_id, secret_hash, creator_proof,
+      peer_install_id, peer_proof, status, created_at, expires_at,
+      accepted_at, confirmed_at
+    ) VALUES (
+      @offerId, @creatorInstallId, @secretHash, @creatorProof,
+      NULL, NULL, @status, @createdAt, @expiresAt,
+      NULL, NULL
+    )
+  `);
+  const getPairingOfferStatement = db.prepare(
+    'SELECT * FROM pairing_offers WHERE offer_id = ?'
+  );
+  const acceptPairingOfferStatement = db.prepare(`
+    UPDATE pairing_offers
+    SET peer_install_id = ?, peer_proof = ?, status = 'accepted', accepted_at = ?
+    WHERE offer_id = ? AND status = 'pending'
+  `);
+  const confirmPairingOfferStatement = db.prepare(`
+    UPDATE pairing_offers
+    SET status = 'confirmed', confirmed_at = ?
+    WHERE offer_id = ? AND status = 'accepted'
+  `);
+  const purgeExpiredPairingOffersStatement = db.prepare(`
+    DELETE FROM pairing_offers
+    WHERE status IN ('pending','accepted') AND expires_at <= ?
+  `);
+
+  const activatePairingTransaction = db.transaction(({ offerId, confirmedAt, routes }) => {
+    if (!Array.isArray(routes) || routes.length !== 2) return null;
+    const update = confirmPairingOfferStatement.run(Number(confirmedAt), offerId);
+    if (update.changes !== 1) return null;
+    for (const route of routes) {
+      insertRouteStatement.run({
+        routeId: route.routeId,
+        senderInstallId: route.senderInstallId,
+        recipientInstallId: route.recipientInstallId,
+        status: route.status,
+        createdAt: route.createdAt,
+        revokedAt: route.revokedAt ?? null
+      });
+    }
+    return mapPairingOffer(getPairingOfferStatement.get(offerId));
+  });
 
   return {
     path,
@@ -174,6 +252,23 @@ export function openMetadataStore(filePath) {
     },
     revokeRoute(routeId, revokedAt) {
       return revokeRouteStatement.run(Number(revokedAt), routeId).changes > 0;
+    },
+    insertPairingOffer(record) {
+      insertPairingOfferStatement.run(record);
+      return mapPairingOffer(getPairingOfferStatement.get(record.offerId));
+    },
+    getPairingOffer(offerId) {
+      return mapPairingOffer(getPairingOfferStatement.get(offerId));
+    },
+    acceptPairingOffer(offerId, peerInstallId, peerProof, acceptedAt) {
+      const result = acceptPairingOfferStatement.run(peerInstallId, peerProof, Number(acceptedAt), offerId);
+      return result.changes === 1 ? mapPairingOffer(getPairingOfferStatement.get(offerId)) : null;
+    },
+    activatePairingOffer(record) {
+      return activatePairingTransaction(record);
+    },
+    purgeExpiredPairingOffers(now) {
+      return purgeExpiredPairingOffersStatement.run(Number(now)).changes;
     },
     close() {
       db.close();

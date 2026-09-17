@@ -11,6 +11,7 @@ import { PushDispatcher } from './push-dispatcher.mjs';
 import { validatePushRegistration } from './push-registration.mjs';
 import { buildProvisioningCredentials } from './provisioning-credentials.mjs';
 import { openMetadataStore } from './relay-metadata-store.mjs';
+import { acceptPairingOffer, confirmPairingOffer, createPairingOffer } from './relay-pairing.mjs';
 import { listRoutesForSender } from './relay-routes.mjs';
 import { clearStoredPushTarget, selectWakeTargets } from './wake-targets.mjs';
 
@@ -35,6 +36,18 @@ const apns = new APNsClient({
 });
 const fcm = new FCMClient();
 const pushDispatcher = new PushDispatcher({ apns, fcm });
+
+const pairingCleanupTimer = setInterval(() => {
+  const metadataStore = openMetadataStore(cfg.relayMetadataDb);
+  try {
+    metadataStore.purgeExpiredPairingOffers(Date.now());
+  } catch {
+    console.error('pairing metadata cleanup failed');
+  } finally {
+    metadataStore.close();
+  }
+}, 60_000);
+pairingCleanupTimer.unref();
 
 async function loadStore() {
   try {
@@ -168,6 +181,85 @@ const server = http.createServer(async (req, res) => {
         const authenticated = authenticateInstall(String(req.headers.authorization || ''), metadataStore);
         if (!authenticated) return json(res, 401, { error: 'unauthorized' });
         return json(res, 200, { routes: listRoutesForSender(metadataStore, authenticated.installId) });
+      } finally {
+        metadataStore.close();
+      }
+    }
+
+    if (req.method === 'POST' && req.url === '/v1/pairing/offers') {
+      const metadataStore = openMetadataStore(cfg.relayMetadataDb);
+      try {
+        const authenticated = authenticateInstall(String(req.headers.authorization || ''), metadataStore);
+        if (!authenticated) return json(res, 401, { error: 'unauthorized' });
+        const body = await readJson(req);
+        const offer = createPairingOffer(metadataStore, {
+          offerId: body.offerId,
+          creatorInstallId: authenticated.installId,
+          secretHash: body.secretHash,
+          creatorProof: body.creatorProof,
+          now: Date.now()
+        });
+        if (!offer) return json(res, 409, { error: 'pairing_unavailable' });
+        return json(res, 201, {
+          offerId: offer.offerId,
+          creatorInstallId: offer.creatorInstallId,
+          expiresAt: offer.expiresAt,
+          status: offer.status
+        });
+      } finally {
+        metadataStore.close();
+      }
+    }
+
+    const pairingAcceptMatch = req.method === 'POST'
+      ? req.url?.match(/^\/v1\/pairing\/offers\/([A-Za-z0-9._-]{8,128})\/accept$/)
+      : null;
+    if (pairingAcceptMatch) {
+      const metadataStore = openMetadataStore(cfg.relayMetadataDb);
+      try {
+        const authenticated = authenticateInstall(String(req.headers.authorization || ''), metadataStore);
+        if (!authenticated) return json(res, 401, { error: 'unauthorized' });
+        const body = await readJson(req);
+        const offer = acceptPairingOffer(metadataStore, {
+          offerId: pairingAcceptMatch[1],
+          peerInstallId: authenticated.installId,
+          pairingSecret: body.pairingSecret,
+          peerProof: body.peerProof,
+          now: Date.now()
+        });
+        if (!offer) return json(res, 409, { error: 'pairing_unavailable' });
+        return json(res, 200, {
+          offerId: offer.offerId,
+          creatorInstallId: offer.creatorInstallId,
+          peerInstallId: offer.peerInstallId,
+          expiresAt: offer.expiresAt,
+          status: offer.status
+        });
+      } finally {
+        metadataStore.close();
+      }
+    }
+
+    const pairingConfirmMatch = req.method === 'POST'
+      ? req.url?.match(/^\/v1\/pairing\/offers\/([A-Za-z0-9._-]{8,128})\/confirm$/)
+      : null;
+    if (pairingConfirmMatch) {
+      const metadataStore = openMetadataStore(cfg.relayMetadataDb);
+      try {
+        const authenticated = authenticateInstall(String(req.headers.authorization || ''), metadataStore);
+        if (!authenticated) return json(res, 401, { error: 'unauthorized' });
+        const body = await readJson(req);
+        const offer = confirmPairingOffer(metadataStore, {
+          offerId: pairingConfirmMatch[1],
+          actorInstallId: authenticated.installId,
+          pairingSecret: body.pairingSecret,
+          now: Date.now()
+        });
+        if (!offer) return json(res, 409, { error: 'pairing_unavailable' });
+        return json(res, 200, {
+          offerId: offer.offerId,
+          status: offer.status
+        });
       } finally {
         metadataStore.close();
       }
