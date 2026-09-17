@@ -15,6 +15,8 @@ import { acceptPairingOffer, confirmPairingOffer, createPairingOffer } from './r
 import { openRelayQueue } from './relay-queue-store.mjs';
 import { enqueueMessages, readInbox, acknowledgeMessages, MAX_RELAY_REQUEST_BYTES } from './relay-messages.mjs';
 import { listRoutesForSender } from './relay-routes.mjs';
+import { relayMetrics } from './relay-metrics.mjs';
+import { createInstallRateLimiter, purgeExpired } from './relay-retention.mjs';
 import { clearStoredPushTarget, selectWakeTargets } from './wake-targets.mjs';
 
 const cfg = {
@@ -39,6 +41,7 @@ const apns = new APNsClient({
 });
 const fcm = new FCMClient();
 const pushDispatcher = new PushDispatcher({ apns, fcm });
+const relayRateLimiter = createInstallRateLimiter();
 
 const pairingCleanupTimer = setInterval(() => {
   const metadataStore = openMetadataStore(cfg.relayMetadataDb);
@@ -51,6 +54,19 @@ const pairingCleanupTimer = setInterval(() => {
   }
 }, 60_000);
 pairingCleanupTimer.unref();
+
+const relayCleanupTimer = setInterval(() => {
+  let queue;
+  try {
+    queue = openRelayQueue(cfg.relayQueueDb);
+    purgeExpired(queue, Date.now());
+  } catch {
+    console.error('relay queue cleanup failed');
+  } finally {
+    queue?.close();
+  }
+}, 60 * 60 * 1000);
+relayCleanupTimer.unref();
 
 async function loadStore() {
   try {
@@ -109,18 +125,31 @@ function hasInstallAccess(req, installId) {
 function provisioningReady() {
   return Boolean(cfg.installHmacKey && cfg.internalSecret);
 }
+function authenticateRateLimited(req, res, metadataStore) {
+  const authenticated = authenticateInstall(String(req.headers.authorization || ''), metadataStore);
+  if (!authenticated) {
+    json(res, 401, { error: 'unauthorized' });
+    return null;
+  }
+  const rate = relayRateLimiter.consume(authenticated.installId, Date.now());
+  if (!rate.allowed) {
+    json(res, 429, { error: 'rate_limited' }, { 'retry-after': String(rate.retryAfterSeconds) });
+    return null;
+  }
+  return authenticated;
+}
 async function readJson(req, maxBytes = 65536) {
   const chunks = []; let size = 0;
   for await (const chunk of req) { size += chunk.length; if (size > maxBytes) throw new Error('body_too_large'); chunks.push(chunk); }
   return JSON.parse(Buffer.concat(chunks).toString('utf8') || '{}');
 }
-function json(res, status, body) {
+function json(res, status, body, extraHeaders = {}) {
   if (status === 204) {
-    res.writeHead(status, { 'cache-control': 'no-store' });
+    res.writeHead(status, { 'cache-control': 'no-store', ...extraHeaders });
     return res.end();
   }
   const data = JSON.stringify(body);
-  res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data), 'cache-control': 'no-store' });
+  res.writeHead(status, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data), 'cache-control': 'no-store', ...extraHeaders });
   res.end(data);
 }
 async function synchronizeBoundAccess(store, installId, subscriptions) {
@@ -167,15 +196,22 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/health') {
       const providerReadiness = await pushDispatcher.readiness();
       const provisioned = provisioningReady();
-      return json(res, 200, {
-        ok: true,
-        ready: Boolean(provisioned && (providerReadiness.apns || providerReadiness.fcm)),
-        provisioningReady: provisioned,
-        providers: {
-          apns: { ready: providerReadiness.apns },
-          fcm: { ready: providerReadiness.fcm }
-        }
-      });
+      let queue;
+      try {
+        queue = openRelayQueue(cfg.relayQueueDb);
+        return json(res, 200, {
+          ok: true,
+          ready: Boolean(provisioned && (providerReadiness.apns || providerReadiness.fcm)),
+          provisioningReady: provisioned,
+          providers: {
+            apns: { ready: providerReadiness.apns },
+            fcm: { ready: providerReadiness.fcm }
+          },
+          relay: relayMetrics(queue, Date.now())
+        });
+      } finally {
+        queue?.close();
+      }
     }
 
     const relayPath = req.url?.split('?')[0];
@@ -186,11 +222,11 @@ const server = http.createServer(async (req, res) => {
       try {
         metadataStore = openMetadataStore(cfg.relayMetadataDb);
         const header = String(req.headers.authorization || '');
-        if (!authenticateInstall(header, metadataStore)) return json(res, 401, { error: 'unauthorized' });
+        const actor = authenticateRateLimited(req, res, metadataStore);
+        if (!actor) return;
         const body = req.method === 'POST' ? await readJson(req, MAX_RELAY_REQUEST_BYTES) : null;
         // Recheck after the asynchronous body read; revocation may have happened meanwhile.
-        const actor = authenticateInstall(header, metadataStore);
-        if (!actor) return json(res, 401, { error: 'unauthorized' });
+        if (!authenticateInstall(header, metadataStore)) return json(res, 401, { error: 'unauthorized' });
         queue = openRelayQueue(cfg.relayQueueDb);
         if (relayPath === '/v1/messages') return json(res, 201, enqueueMessages(metadataStore, queue, actor, body));
         if (relayPath === '/v1/messages/ack') return json(res, 200, acknowledgeMessages(metadataStore, queue, actor, body));
@@ -212,8 +248,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && req.url === '/v1/routes') {
       const metadataStore = openMetadataStore(cfg.relayMetadataDb);
       try {
-        const authenticated = authenticateInstall(String(req.headers.authorization || ''), metadataStore);
-        if (!authenticated) return json(res, 401, { error: 'unauthorized' });
+        const authenticated = authenticateRateLimited(req, res, metadataStore);
+        if (!authenticated) return;
         return json(res, 200, { routes: listRoutesForSender(metadataStore, authenticated.installId) });
       } finally {
         metadataStore.close();
@@ -223,8 +259,8 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'POST' && req.url === '/v1/pairing/offers') {
       const metadataStore = openMetadataStore(cfg.relayMetadataDb);
       try {
-        const authenticated = authenticateInstall(String(req.headers.authorization || ''), metadataStore);
-        if (!authenticated) return json(res, 401, { error: 'unauthorized' });
+        const authenticated = authenticateRateLimited(req, res, metadataStore);
+        if (!authenticated) return;
         const body = await readJson(req);
         const offer = createPairingOffer(metadataStore, {
           offerId: body.offerId,
@@ -251,8 +287,8 @@ const server = http.createServer(async (req, res) => {
     if (pairingAcceptMatch) {
       const metadataStore = openMetadataStore(cfg.relayMetadataDb);
       try {
-        const authenticated = authenticateInstall(String(req.headers.authorization || ''), metadataStore);
-        if (!authenticated) return json(res, 401, { error: 'unauthorized' });
+        const authenticated = authenticateRateLimited(req, res, metadataStore);
+        if (!authenticated) return;
         const body = await readJson(req);
         const offer = acceptPairingOffer(metadataStore, {
           offerId: pairingAcceptMatch[1],
@@ -280,8 +316,8 @@ const server = http.createServer(async (req, res) => {
     if (pairingConfirmMatch) {
       const metadataStore = openMetadataStore(cfg.relayMetadataDb);
       try {
-        const authenticated = authenticateInstall(String(req.headers.authorization || ''), metadataStore);
-        if (!authenticated) return json(res, 401, { error: 'unauthorized' });
+        const authenticated = authenticateRateLimited(req, res, metadataStore);
+        if (!authenticated) return;
         const body = await readJson(req);
         const offer = confirmPairingOffer(metadataStore, {
           offerId: pairingConfirmMatch[1],
@@ -484,7 +520,7 @@ const server = http.createServer(async (req, res) => {
 
     return json(res, 404, { error: 'not_found' });
   } catch (error) {
-    console.error(error);
+    console.error('gateway request failed');
     return json(res, error.message === 'body_too_large' ? 413 : 400, { error: 'bad_request' });
   }
 });

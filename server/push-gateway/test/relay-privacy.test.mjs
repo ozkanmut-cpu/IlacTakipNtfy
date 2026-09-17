@@ -74,8 +74,18 @@ test('HTTP relay rate limiting is per authenticated installation and health expo
   for (let i = 0; i < 120; i++) assert.equal((await getInbox('recipient-B')).status, 200);
   const limited = await getInbox('recipient-B');
   assert.equal(limited.status, 429);
-  assert.equal(limited.headers.get('retry-after'), '60');
+  const retryAfter = Number(limited.headers.get('retry-after'));
+  assert.ok(retryAfter >= 1 && retryAfter <= 60);
   assert.deepEqual(await limited.json(), { error: 'rate_limited' });
+  const limitedRoute = await fetch('http://127.0.0.1:26027/v1/routes', {
+    headers: { authorization: `Bearer ${credentials['recipient-B']}` }
+  });
+  assert.equal(limitedRoute.status, 429);
+  const malformedWhileLimited = await fetch('http://127.0.0.1:26027/v1/messages', {
+    method: 'POST', headers: { authorization: `Bearer ${credentials['recipient-B']}`,
+      'content-type': 'application/json' }, body: '{INVALID_PRIVATE_BODY'
+  });
+  assert.equal(malformedWhileLimited.status, 429);
   assert.equal((await getInbox('recipient-C')).status, 200);
 
   const health = await (await fetch('http://127.0.0.1:26027/health')).json();
@@ -103,10 +113,13 @@ test('malformed relay requests never log bearer credential, ciphertext or domain
   }, stdio: ['ignore', 'pipe', 'pipe'] });
   child.stdout.on('data', chunk => { stdout += chunk; }); child.stderr.on('data', chunk => { stderr += chunk; });
   await waitForServer(child);
-  const privateValues = ['CIPHERTEXT_PRIVATE_7781', 'MEDICATION_PRIVATE_7782', 'NOTE_PRIVATE_7783', issued.credential];
+  const privateValues = ['CIPHERTEXT_PRIVATE_7781', 'MEDICATION_PRIVATE_7782', 'NOTE_PRIVATE_7783', 'PAIRING_SE', issued.credential];
   await fetch('http://127.0.0.1:26028/v1/messages', { method: 'POST', headers: {
     authorization: `Bearer ${issued.credential}`, 'content-type': 'application/json'
   }, body: JSON.stringify({ messages: [{ ciphertext: privateValues[0], medication: privateValues[1], note: privateValues[2] }] }) });
+  await fetch('http://127.0.0.1:26028/v1/pairing/offers', { method: 'POST', headers: {
+    authorization: `Bearer ${issued.credential}`, 'content-type': 'application/json'
+  }, body: `{"pairingSecret":${privateValues[3]}}` });
   child.kill(); await once(child, 'exit');
   const logs = stdout + stderr;
   for (const value of privateValues) assert.equal(logs.includes(value), false);

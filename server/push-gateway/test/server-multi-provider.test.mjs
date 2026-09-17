@@ -88,7 +88,8 @@ test('health is ready with provisioning and FCM even when APNs is unavailable', 
     ok: true,
     ready: true,
     provisioningReady: true,
-    providers: { apns: { ready: false }, fcm: { ready: true } }
+    providers: { apns: { ready: false }, fcm: { ready: true } },
+    relay: { pendingCount: 0, pendingBytes: 0, oldestPendingAgeMs: 0 }
   });
 });
 

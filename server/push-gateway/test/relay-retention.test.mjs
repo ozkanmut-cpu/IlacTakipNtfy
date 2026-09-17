@@ -65,13 +65,23 @@ test('rate limiter permits 120 requests per fixed minute and resets at the bound
   assert.equal(limiter.consume('install-A', NOW + 60_000).allowed, true);
 });
 
-test('rate limiter bounds memory and drops stale installation counters', () => {
+test('rate limiter bounds memory without resetting an active installation allowance', () => {
   const limiter = createInstallRateLimiter({ limit: 2, windowMs: 60_000, maxEntries: 2 });
-  limiter.consume('install-A', NOW);
-  limiter.consume('install-B', NOW + 1);
-  limiter.consume('install-C', NOW + 2);
+  assert.equal(limiter.consume('install-A', NOW).allowed, true);
+  assert.equal(limiter.consume('install-B', NOW + 1).allowed, true);
+  assert.equal(limiter.consume('install-C', NOW + 2).allowed, false);
   assert.equal(limiter.size, 2);
   assert.equal(limiter.consume('install-A', NOW + 3).allowed, true);
-  limiter.consume('install-D', NOW + 60_003);
+  assert.equal(limiter.consume('install-A', NOW + 4).allowed, false);
+  assert.equal(limiter.consume('install-D', NOW + 60_003).allowed, true);
   assert.equal(limiter.size, 1);
+});
+
+test('expired ciphertext is removed inside enqueue transaction and no longer consumes quota', async t => {
+  const queue = await queueFixture(t);
+  queue.enqueueBatch([row('expired', 'recipient-B', NOW, 4)], { maxCount: 1, maxBytes: 4 });
+  const inserted = queue.enqueueBatch([{ ...row('fresh', 'recipient-B', NOW + 1000, 4), receivedAt: NOW + 1 }],
+    { maxCount: 1, maxBytes: 4 });
+  assert.equal(inserted[0].relaySeq, 2);
+  assert.deepEqual(queue.listRecipient('recipient-B').map(x => x.messageId), ['fresh']);
 });

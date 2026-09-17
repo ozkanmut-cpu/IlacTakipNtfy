@@ -84,7 +84,25 @@ SQLite row deletion. A terminal ACK removes the active queue record immediately;
 this is not a promise of forensic erasure from historical WAL/filesystem copies.
 The separate queue storage must remain excluded from long-term backups/PITR.
 
-Task 7 adds scheduled physical TTL cleanup, installation rate limits and aggregate
-metrics. Task 8 adds generic push wakes. Tasks 9 onward add device crypto, pinned
+Task 8 adds generic push wakes. Tasks 9 onward add device crypto, pinned
 pairing identity, durable domain processing and ACK timing. Those later gates
 are not claimed complete by this API implementation.
+
+## Retention, rate limits and observability (Task 7)
+
+Inbox reads exclude `expiresAt <= serverNow` even if scheduled cleanup has not
+run. The service physically purges expired ciphertext hourly, and enqueue also
+purges expired rows inside the same write transaction before evaluating pending
+count/byte quotas. Expired rows therefore cannot block fresh delivery.
+
+Authenticated relay, route and pairing APIs share a fixed-window limit of 120
+requests per minute per installation. Authentication and limit consumption
+precede request-body parsing. A rejected request returns `429 rate_limited` with
+a bounded `Retry-After` value. The single-node counter table is capped at 10,000
+installations and fails closed at capacity without resetting active counters.
+
+`GET /health` reports only aggregate relay transport state: pending ciphertext
+count, decoded ciphertext bytes and oldest pending age. Expired rows are omitted.
+Message, route and installation IDs, ciphertext, credentials, keys, push tokens
+and domain fields never appear in these metrics. Server error logs use fixed
+messages and do not serialize request bodies or parser exceptions.

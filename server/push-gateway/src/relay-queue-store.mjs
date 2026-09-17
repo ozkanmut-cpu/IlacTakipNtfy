@@ -129,9 +129,14 @@ export function openRelayQueue(filePath) {
     return { inserted: true, relaySeq };
   });
 
-  // All checks and inserts share the write transaction: quotas and sequence
-  // allocation cannot race another queue connection or leave partial batches.
-  const enqueueBatchTransaction = db.transaction((messages, limits) => messages.map(message => {
+  const purgeExpiredStatement = db.prepare('DELETE FROM relay_messages WHERE expires_at <= ?');
+
+  // Expiry cleanup, quota checks and inserts share one write transaction, so
+  // expired rows cannot block pending quota and failed batches stay atomic.
+  const enqueueBatchTransaction = db.transaction((messages, limits) => {
+    const batchNow = messages.reduce((oldest, message) => Math.min(oldest, message.receivedAt), Infinity);
+    if (Number.isFinite(batchNow)) purgeExpiredStatement.run(batchNow);
+    return messages.map(message => {
     const existing = mapMessage(findMessageStatement.get(message.messageId));
     if (existing) {
       const fields = ['routeId', 'senderInstallId', 'recipientInstallId', 'senderKeyVersion', 'recipientKeyVersion'];
@@ -141,12 +146,14 @@ export function openRelayQueue(filePath) {
       return { messageId: message.messageId, inserted: false, relaySeq: existing.relaySeq };
     }
     const usage = db.prepare(`SELECT count(*) AS count, coalesce(sum(length(ciphertext)), 0) AS bytes
-      FROM relay_messages WHERE recipient_install_id = ?`).get(message.recipientInstallId);
+      FROM relay_messages WHERE recipient_install_id = ? AND expires_at > ?`)
+      .get(message.recipientInstallId, batchNow);
     if (usage.count >= limits.maxCount || usage.bytes + message.ciphertext.length > limits.maxBytes) {
       throw Object.assign(new Error('queue_quota_exceeded'), { status: 429 });
     }
     return { messageId: message.messageId, ...enqueueTransaction(message) };
-  }));
+    });
+  });
   const ackBatchTransaction = db.transaction((recipientInstallId, acks) => {
     for (const ack of acks) {
       const row = findMessageStatement.get(ack.messageId);
@@ -159,6 +166,16 @@ export function openRelayQueue(filePath) {
   });
   const inboxStatement = db.prepare(`SELECT * FROM relay_messages
     WHERE recipient_install_id = ? AND expires_at > ? ORDER BY relay_seq ASC LIMIT ?`);
+  const expiredAggregateStatement = db.prepare(`SELECT count(*) AS count,
+    coalesce(sum(length(ciphertext)), 0) AS bytes FROM relay_messages WHERE expires_at <= ?`);
+  const activeAggregateStatement = db.prepare(`SELECT count(*) AS count,
+    coalesce(sum(length(ciphertext)), 0) AS bytes, min(received_at) AS oldest_received_at
+    FROM relay_messages WHERE expires_at > ?`);
+  const purgeExpiredTransaction = db.transaction(now => {
+    const aggregate = expiredAggregateStatement.get(now);
+    purgeExpiredStatement.run(now);
+    return { expiredCount: aggregate.count, expiredBytes: aggregate.bytes };
+  });
 
   return {
     path,
@@ -170,6 +187,13 @@ export function openRelayQueue(filePath) {
     },
     *pendingRecipient(recipientInstallId, now, limit) {
       for (const row of inboxStatement.iterate(recipientInstallId, now, limit)) yield mapMessage(row);
+    },
+    purgeExpired(now) {
+      return purgeExpiredTransaction.immediate(now);
+    },
+    activeAggregate(now) {
+      const row = activeAggregateStatement.get(now);
+      return { pendingCount: row.count, pendingBytes: row.bytes, oldestReceivedAt: row.oldest_received_at ?? null };
     },
     enqueue(message) {
       return enqueueTransaction(message);
