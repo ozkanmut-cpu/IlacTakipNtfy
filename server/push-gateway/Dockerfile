@@ -1,13 +1,17 @@
 FROM binwiederhier/ntfy:v2.28.0 AS ntfy-cli
 
+FROM node:22-alpine AS gateway-deps
+WORKDIR /app
+RUN apk add --no-cache python3 make g++
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --no-audit --no-fund
+
 FROM node:22-alpine
 WORKDIR /app
+RUN apk add --no-cache libstdc++
 COPY --from=ntfy-cli /usr/bin/ntfy /usr/bin/ntfy
+COPY --from=gateway-deps /app/node_modules ./node_modules
 COPY package.json package-lock.json ./
-RUN apk add --no-cache libstdc++ \
-    && apk add --no-cache --virtual .build-deps python3 make g++ \
-    && npm ci --omit=dev --no-audit --no-fund \
-    && apk del .build-deps
 RUN node -e "import('better-sqlite3').then(({default:Database})=>{const db=new Database(':memory:'); db.exec('CREATE TABLE smoke (id INTEGER)'); db.close();})"
 COPY src ./src
 RUN node --check src/server.mjs \
