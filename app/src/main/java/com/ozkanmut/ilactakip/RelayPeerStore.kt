@@ -12,7 +12,7 @@ class RelayPeerStore(context: Context) {
     private val preferences = context.applicationContext
         .getSharedPreferences("dosefolk_relay_peers", Context.MODE_PRIVATE)
 
-    /** Call only after authenticated pairing. Re-pair/rotation are deliberately not implemented here. */
+    /** Ordinary first pin/idempotent repeat; revoked or changed identities require the narrow re-pair path. */
     fun pin(installId: String, identity: RelayPublicIdentity): Boolean = synchronized(peerLock) {
         if (!validInstallId(installId) || !identity.isValid() || revoked(installId)) return@synchronized false
         val key = pinKey(installId)
@@ -45,6 +45,33 @@ class RelayPeerStore(context: Context) {
 
     fun isRevoked(installId: String): Boolean = synchronized(peerLock) {
         validInstallId(installId) && revoked(installId)
+    }
+
+    /**
+     * Narrow Task 11 boundary: call only after a fresh signed QR pairing transcript succeeds.
+     * The complete replacement pin and only its matching relay tombstone change in one commit.
+     */
+    internal fun pinAfterAuthenticatedPairing(
+        installId: String,
+        identity: RelayPublicIdentity
+    ): Boolean = synchronized(peerLock) {
+        if (!validInstallId(installId) || !identity.isValid()) return@synchronized false
+        val pin = pinKey(installId)
+        val revocation = revocationKey(installId)
+        val previousPin = preferences.getString(pin, null)
+        val wasRevoked = preferences.contains(revocation)
+        val committed = preferences.edit()
+            .putString(pin, identity.toJson().toString())
+            .remove(revocation)
+            .commit()
+        if (!committed) {
+            // SharedPreferences may update its in-memory map even when disk persistence fails.
+            val restore = preferences.edit()
+            if (previousPin == null) restore.remove(pin) else restore.putString(pin, previousPin)
+            if (wasRevoked) restore.putBoolean(revocation, true) else restore.remove(revocation)
+            restore.commit()
+        }
+        committed
     }
 
     private fun revoked(installId: String): Boolean = preferences.contains(revocationKey(installId))

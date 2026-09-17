@@ -151,6 +151,8 @@ internal object RelayEnvelopeFormat {
 
     fun hpkeContext(context: JSONObject): ByteArray = ("dosefolk-relay-hpke-v1\u0000" + canonical(context)).toByteArray(Charsets.UTF_8)
     fun signingInput(unsigned: JSONObject): ByteArray = ("dosefolk-relay-signature-v1\u0000" + canonical(unsigned)).toByteArray(Charsets.UTF_8)
+    fun pairingSigningInput(unsigned: JSONObject): ByteArray =
+        ("dosefolk-relay-pairing-v2\u0000" + canonical(unsigned)).toByteArray(Charsets.UTF_8)
     fun encode(bytes: ByteArray): String = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
     fun decode(text: String, size: Int): ByteArray {
         requireRelay(text.matches(Regex("[A-Za-z0-9_-]+")))
@@ -189,7 +191,7 @@ internal object RelayEnvelopeFormat {
         val signatureText = offer.opt("signature") as? String ?: rejectRelay()
         val signature = decode(signatureText, 64)
         offer.remove("signature")
-        verify(signingKey, signature, ("dosefolk-relay-pairing-v2\u0000" + canonical(offer)).toByteArray(Charsets.UTF_8))
+        verify(signingKey, signature, pairingSigningInput(offer))
         offer.put("signature", signatureText)
     } catch (_: Exception) { rejectRelay() }
 

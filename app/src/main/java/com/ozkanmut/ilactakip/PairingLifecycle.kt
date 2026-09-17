@@ -34,6 +34,13 @@ object RevokedPeerFence {
 }
 
 object PairingLifecycle {
+    /** Relay-v2 only: a verified pairing transcript may replace one pin and its matching tombstone. */
+    internal fun completeAuthenticatedRelayRePair(
+        peerStore: RelayPeerStore,
+        installId: String,
+        identity: RelayPublicIdentity
+    ): Boolean = peerStore.pinAfterAuthenticatedPairing(installId, identity)
+
     fun revoke(c: Context, person: Person) {
         val context = c.applicationContext
         if (person.topic.isBlank() || person.topic == Store.topic(context)) return

@@ -498,6 +498,33 @@ class RelayIdentityStoreTest {
         assertFalse(RelayPeerStore(coldContextFor("local")).isTrusted("peer-a", peer))
     }
 
+    // Mutation caught: exposing a memory-only replacement pin or cleared tombstone after the
+    // single authenticated re-pair commit fails to reach disk.
+    @Test
+    fun failedAuthenticatedRePairCommitRestoresTheOldPinAndTombstone() {
+        val original = fixtureIdentity()
+        val replacement = fixtureIdentity(ENCRYPTION_B, SIGNING_B, 8)
+        val store = RelayPeerStore(contextFor("local"))
+        assertTrue(store.pin("peer-a", original))
+        assertTrue(store.revoke("peer-a"))
+        val preferences = contextFor("local").getSharedPreferences("dosefolk_relay_peers", 0)
+        val restoreWrites = failDiskWrites(preferences)
+        try {
+            assertFalse(store.pinAfterAuthenticatedPairing("peer-a", replacement))
+            val reconstructed = RelayPeerStore(contextFor("local"))
+            assertEquals(original, reconstructed.pinnedIdentity("peer-a"))
+            assertTrue(reconstructed.isRevoked("peer-a"))
+            assertFalse(reconstructed.isTrusted("peer-a", replacement))
+        } finally {
+            restoreWrites()
+        }
+
+        val cold = RelayPeerStore(coldContextFor("local"))
+        assertEquals(original, cold.pinnedIdentity("peer-a"))
+        assertTrue(cold.isRevoked("peer-a"))
+        assertFalse(cold.isTrusted("peer-a", replacement))
+    }
+
     private fun identityStoreFor(install: String, cold: Boolean = false): RelayIdentityStore =
         RelayIdentityStore(if (cold) coldContextFor(install) else contextFor(install), object : RelayMasterAeadSource {
             override fun exists(): Boolean = install in createdMasters

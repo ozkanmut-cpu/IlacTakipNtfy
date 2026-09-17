@@ -96,6 +96,34 @@ class RelayPairingTest {
         assertEquals(EXPIRES_AT_TEXT, verified.getString("expiresAt"))
     }
 
+    // Mutations caught: regenerating an offer after a transient create failure, consuming fresh
+    // randomness on reconstruction, or reposting an already registered unexpired local offer.
+    @Test
+    fun createRetryReusesTheDurableOfferAndRegisteredQrAcrossReconstruction() {
+        var attempts = 0
+        val transport = RecordingTransport { _, _ ->
+            attempts++
+            if (attempts == 1) throw java.io.IOException("synthetic transport failure")
+            response(201, createdBody(CREATOR_ID))
+        }
+
+        assertThrows(GeneralSecurityException::class.java) { creator.pairing(transport).createOffer() }
+        val retried = creator.reconstructed().pairing(
+            transport,
+            clockAt(NOW.plusSeconds(1)),
+            ScriptedRandom()
+        ).createOffer()
+        val reused = creator.reconstructed().pairing(
+            transport,
+            clockAt(NOW.plusSeconds(2)),
+            ScriptedRandom()
+        ).createOffer()
+
+        assertEquals(2, attempts)
+        assertEquals(retried, reused)
+        assertEquals(OFFER_ID, RelayEnvelopeFormat.verifyPairing(reused.toByteArray()).getString("offerId"))
+    }
+
     // Mutations caught: using a different proof role/actor/transcript, sending client actor fields,
     // pinning server data instead of the QR, or creating an unsigned/unbound peer response QR.
     @Test
@@ -257,6 +285,33 @@ class RelayPairingTest {
         assertTrue("Pin must be durable before confirm HTTP can activate routes", observedPinnedBeforeConfirm)
         assertEquals(PEER_ID, paired.installId)
         assertEquals(peer.identity, paired.identity)
+        assertTrue(RelayPeerStore(creator.context).isTrusted(PEER_ID, peer.identity))
+    }
+
+    // Mutations caught: consuming/removing pending state on a rejected confirm, rolling back the
+    // required pre-confirm pin, or preventing a safe retry after a server-side rejection.
+    @Test
+    fun rejectedConfirmKeepsTheAuthenticatedPinAndPendingOfferRetryable() {
+        val creatorQr = createQr()
+        val peerQr = peer.pairing(successfulAcceptTransport(PEER_ID), clockAt(NOW.plusSeconds(1)))
+            .acceptOffer(creatorQr)
+        var attempts = 0
+        val transport = RecordingTransport { _, _ ->
+            attempts++
+            if (attempts == 1) response(409, JSONObject().put("error", "pairing_unavailable"))
+            else response(200, confirmedBody())
+        }
+
+        assertThrows(GeneralSecurityException::class.java) {
+            creator.pairing(transport, clockAt(NOW.plusSeconds(2))).confirmOffer(peerQr)
+        }
+        assertTrue(RelayPeerStore(creator.context).isTrusted(PEER_ID, peer.identity))
+
+        val paired = creator.reconstructed().pairing(transport, clockAt(NOW.plusSeconds(3)))
+            .confirmOffer(peerQr)
+
+        assertEquals(2, attempts)
+        assertEquals(PEER_ID, paired.installId)
         assertTrue(RelayPeerStore(creator.context).isTrusted(PEER_ID, peer.identity))
     }
 
