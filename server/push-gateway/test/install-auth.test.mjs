@@ -37,6 +37,7 @@ async function startServer(t, port, dir) {
       PORT: String(port),
       DATA_FILE: join(dir, 'registrations.json'),
       RELAY_METADATA_DB: join(dir, 'relay-metadata.sqlite3'),
+      RELAY_QUEUE_DB: join(dir, 'relay-queue.sqlite3'),
       INSTALL_HMAC_KEY: 'legacy-test-install-hmac-key',
       INTERNAL_WAKE_SECRET: 'legacy-test-internal-secret',
       APNS_TEAM_ID: '',

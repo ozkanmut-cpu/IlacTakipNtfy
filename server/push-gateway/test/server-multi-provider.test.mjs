@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHmac, generateKeyPairSync } from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const installKey = 'test-install-hmac-key';
@@ -37,6 +37,8 @@ async function startServer(t, port, dataFile, envOverrides = {}) {
       HOST: '127.0.0.1',
       PORT: String(port),
       DATA_FILE: dataFile,
+      RELAY_METADATA_DB: join(dirname(dataFile), 'relay-metadata.sqlite3'),
+      RELAY_QUEUE_DB: join(dirname(dataFile), 'relay-queue.sqlite3'),
       INSTALL_HMAC_KEY: installKey,
       INTERNAL_WAKE_SECRET: internalSecret,
       APNS_TEAM_ID: '',
