@@ -10,7 +10,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import org.robolectric.util.ReflectionHelpers
 import org.xmlpull.v1.XmlPullParser
 
 @RunWith(RobolectricTestRunner::class)
@@ -30,16 +29,17 @@ class RelayBackupRulesTest {
     fun manifestCloudAndDeviceTransferRulesExcludeOnlyRelayIdentityAndTrust() {
         assertEquals(
             mapOf("cloud-backup" to relayPreferenceFiles, "device-transfer" to relayPreferenceFiles),
-            exclusionsFromManifest("dataExtractionRulesRes", "data-extraction-rules")
+            exclusionsFromManifest("dataExtractionRules", "data-extraction-rules")
         )
     }
 
-    private fun exclusionsFromManifest(field: String, root: String): Map<String, Set<Pair<String, String>>> {
+    private fun exclusionsFromManifest(attribute: String, root: String): Map<String, Set<Pair<String, String>>> {
         val context = ApplicationProvider.getApplicationContext<Context>()
         val info = context.applicationInfo
         assertTrue(info.flags and ApplicationInfo.FLAG_ALLOW_BACKUP != 0)
-        // Read the installed/merged manifest's resource ID, not an assumed R.xml constant.
-        val resource = ReflectionHelpers.getField<Int>(info, field)
+        // Robolectric 4.14.1 uses legacy PackageParser, which ignores dataExtractionRules.
+        // Read the attribute from the compiled merged manifest, not that parser's ApplicationInfo.
+        val resource = manifestResource(context, attribute)
         assertTrue("The manifest must select backup rules", resource > 0)
         val result = linkedMapOf<String, MutableSet<Pair<String, String>>>()
         context.resources.getXml(resource).use { parser ->
@@ -61,6 +61,24 @@ class RelayBackupRulesTest {
             }
         }
         return result
+    }
+
+    private fun manifestResource(context: Context, attribute: String): Int {
+        context.assets.openXmlResourceParser("AndroidManifest.xml").use { parser ->
+            while (parser.eventType != XmlPullParser.END_DOCUMENT) {
+                if (parser.eventType == XmlPullParser.START_TAG) {
+                    if (parser.name == "manifest") {
+                        assertEquals(context.packageName, parser.getAttributeValue(null, "package"))
+                    }
+                    if (parser.name == "application") {
+                        return parser.getAttributeResourceValue("http://schemas.android.com/apk/res/android", attribute, 0)
+                    }
+                }
+                parser.next()
+            }
+        }
+        fail("Compiled manifest has no application element")
+        return 0
     }
 
     private val relayPreferenceFiles = setOf(

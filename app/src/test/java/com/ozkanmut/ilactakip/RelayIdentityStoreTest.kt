@@ -4,17 +4,25 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.content.SharedPreferences
 import androidx.test.core.app.ApplicationProvider
+import com.google.crypto.tink.Aead
+import com.google.crypto.tink.KeysetHandle
+import com.google.crypto.tink.RegistryConfiguration
+import com.google.crypto.tink.TinkProtoKeysetFormat
+import com.google.crypto.tink.aead.AeadConfig
+import com.google.crypto.tink.aead.PredefinedAeadParameters
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import java.security.MessageDigest
+import java.security.GeneralSecurityException
 import java.util.Base64
 import java.util.UUID
 
@@ -22,19 +30,22 @@ import java.util.UUID
 class RelayIdentityStoreTest {
     private lateinit var application: Context
     private lateinit var namespace: String
+    private lateinit var masterAead: Aead
 
     @Before
     fun setUp() {
         application = ApplicationProvider.getApplicationContext()
         namespace = "relay-test-${UUID.randomUUID()}"
+        AeadConfig.register()
+        masterAead = newTestMasterAead()
     }
 
     // Mutation caught: generating a fresh identity whenever the store is reconstructed.
     @Test
     fun localIdentityIsStableAcrossStoreAndContextReconstruction() {
-        val first = RelayIdentityStore(contextFor("local")).publicIdentity()
+        val first = identityStoreFor("local").publicIdentity()
 
-        val restarted = RelayIdentityStore(contextFor("local")).publicIdentity()
+        val restarted = identityStoreFor("local").publicIdentity()
 
         assertEquals(first, restarted)
         assertTrue(restarted.keyVersion > 0)
@@ -43,7 +54,7 @@ class RelayIdentityStoreTest {
     // Mutation caught: exporting a keyset/private field or substituting a serialized keyset for a public key.
     @Test
     fun publicExportContainsExactlyTheFourPublicIdentityFields() {
-        val identity = RelayIdentityStore(contextFor("local")).publicIdentity()
+        val identity = identityStoreFor("local").publicIdentity()
         val exported = JSONObject(identity.toJson().toString())
 
         assertEquals(
@@ -63,8 +74,8 @@ class RelayIdentityStoreTest {
     // Mutation caught: reusing one public key for encryption/signing or a process-global identity across installs.
     @Test
     fun localIdentityHasSeparateEncryptionAndSigningKeysUniqueToEachInstall() {
-        val first = RelayIdentityStore(contextFor("install-a")).publicIdentity()
-        val second = RelayIdentityStore(contextFor("install-b")).publicIdentity()
+        val first = identityStoreFor("install-a").publicIdentity()
+        val second = identityStoreFor("install-b").publicIdentity()
 
         listOf(first, second).forEach { identity ->
             assertCanonicalPublicKey(identity.encryptionPublicKey)
@@ -79,7 +90,7 @@ class RelayIdentityStoreTest {
     // Mutation caught: omitting/reordering a public field or dropping domain/version separation from the digest.
     @Test
     fun fingerprintIsSha256OfTheExplicitCanonicalPublicBundle() {
-        val identity = RelayIdentityStore(contextFor("local")).publicIdentity()
+        val identity = identityStoreFor("local").publicIdentity()
 
         assertEquals(
             expectedFingerprint(identity.encryptionPublicKey, identity.signingPublicKey, identity.keyVersion),
@@ -288,6 +299,102 @@ class RelayIdentityStoreTest {
         assertTrue(restarted.isTrusted("peer-a", original))
         malformed.indices.forEach { assertNull(restarted.pinnedIdentity("invalid-peer-$it")) }
     }
+
+    // Mutation caught: swallowing master-key creation failure and persisting an unprotected identity.
+    @Test
+    fun unavailableMasterCannotCreateIdentityOrPersistAnything() {
+        val unavailable = object : RelayMasterAeadSource {
+            override fun getOrCreate(): Aead = throw GeneralSecurityException("Test master unavailable")
+            override fun getExisting(): Aead = throw AssertionError("No identity exists yet")
+        }
+
+        assertThrows(GeneralSecurityException::class.java) {
+            RelayIdentityStore(contextFor("local"), unavailable).publicIdentity()
+        }
+
+        assertTrue(identityPreferences().all.isEmpty())
+    }
+
+    // Mutation caught: regenerating an existing identity or falling back when its wrapping key cannot be opened.
+    @Test
+    fun unavailableMasterOnRestartDoesNotReplaceThePersistentIdentity() {
+        val original = identityStoreFor("local").publicIdentity()
+        val before = identityPreferences().all
+        val unavailable = object : RelayMasterAeadSource {
+            override fun getOrCreate(): Aead = throw AssertionError("Restart must not generate a wrapping key")
+            override fun getExisting(): Aead = throw GeneralSecurityException("Test master unavailable")
+        }
+
+        assertThrows(GeneralSecurityException::class.java) {
+            RelayIdentityStore(contextFor("local"), unavailable).publicIdentity()
+        }
+
+        assertTrue("Encrypted persistent state must remain unchanged", before == identityPreferences().all)
+        assertEquals(original, identityStoreFor("local").publicIdentity())
+    }
+
+    // Mutation caught: accepting an encrypted keyset with the wrong master or silently generating a new identity.
+    @Test
+    fun wrongMasterCannotOpenOrReplaceThePersistentIdentity() {
+        val original = identityStoreFor("local").publicIdentity()
+        val before = identityPreferences().all
+
+        assertThrows(GeneralSecurityException::class.java) {
+            RelayIdentityStore(contextFor("local"), existingMasterOnly(newTestMasterAead())).publicIdentity()
+        }
+
+        assertTrue("Encrypted persistent state must remain unchanged", before == identityPreferences().all)
+        assertEquals(original, identityStoreFor("local").publicIdentity())
+    }
+
+    // Mutation caught: omitting the purpose/version AAD or persisting a cleartext private keyset.
+    @Test
+    fun persistedKeysetsAreEncryptedWithTheExplicitPurposeAndVersionContext() {
+        val identity = identityStoreFor("local").publicIdentity()
+        val preferences = identityPreferences()
+        listOf("encrypted_hpke_keyset" to "hpke", "encrypted_ed25519_keyset" to "ed25519").forEach { (key, purpose) ->
+            val ciphertext = Base64.getDecoder().decode(preferences.getString(key, null)!!)
+            val aad = "dosefolk-relay-keyset-v1\u0000${identity.keyVersion}\u0000$purpose".toByteArray(Charsets.UTF_8)
+            // Consumer-side encrypted parse proves the store wrote an encrypted Tink keyset with this exact AAD.
+            val handle = TinkProtoKeysetFormat.parseEncryptedKeyset(ciphertext, masterAead, aad, RegistryConfiguration.get())
+            assertEquals(1, handle.publicKeysetHandle.size())
+            assertThrows(GeneralSecurityException::class.java) {
+                TinkProtoKeysetFormat.parseEncryptedKeyset(ciphertext, masterAead, byteArrayOf(), RegistryConfiguration.get())
+            }
+        }
+    }
+
+    // Mutation caught: trusting a modified positive version without authenticating it against the stored keysets.
+    @Test
+    fun alteredKeyVersionFailsClosedWithoutReplacingStoredKeysets() {
+        identityStoreFor("local").publicIdentity()
+        val preferences = identityPreferences()
+        assertTrue(preferences.edit().putInt("key_version", 2).commit())
+        val tampered = preferences.all
+
+        assertThrows(GeneralSecurityException::class.java) { identityStoreFor("local").publicIdentity() }
+
+        assertTrue("Failed load must not rewrite persisted state", tampered == preferences.all)
+    }
+
+    private fun identityStoreFor(install: String): RelayIdentityStore =
+        RelayIdentityStore(contextFor(install), object : RelayMasterAeadSource {
+            override fun getOrCreate(): Aead = masterAead
+            override fun getExisting(): Aead = masterAead
+        })
+
+    private fun existingMasterOnly(aead: Aead): RelayMasterAeadSource = object : RelayMasterAeadSource {
+        override fun getOrCreate(): Aead = throw AssertionError("Existing identity must not be regenerated")
+        override fun getExisting(): Aead = aead
+    }
+
+    private fun identityPreferences(): SharedPreferences =
+        contextFor("local").getSharedPreferences("dosefolk_relay_identity", Context.MODE_PRIVATE)
+
+    // The JVM lacks AndroidKeyStore. Replace only that platform boundary with a real Tink AEAD;
+    // identity generation, encrypted keyset serialization/parsing, and Android persistence remain real.
+    private fun newTestMasterAead(): Aead = KeysetHandle.generateNew(PredefinedAeadParameters.AES256_GCM)
+        .getPrimitive(RegistryConfiguration.get(), Aead::class.java)
 
     private fun assertRejectedWithoutChangingPin(candidate: RelayPublicIdentity) {
         val original = fixtureIdentity()

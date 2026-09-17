@@ -72,7 +72,10 @@ data class RelayPublicIdentity(
 }
 
 /** Device-owned identity. Call off the UI thread: creation and loading perform durable disk I/O. */
-class RelayIdentityStore(context: Context) {
+class RelayIdentityStore internal constructor(context: Context, private val masterAeadSource: RelayMasterAeadSource) {
+    /** The public production entry point always requires Android Keystore protection. */
+    constructor(context: Context) : this(context, AndroidRelayMasterAeadSource)
+
     private val preferences = context.applicationContext
         .getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
 
@@ -91,7 +94,7 @@ class RelayIdentityStore(context: Context) {
         if (version <= 0) throw GeneralSecurityException("Invalid relay identity version")
 
         // Existing identities never regenerate their wrapping key after a restore or Keystore loss.
-        val master = AndroidKeystoreKmsClient().getAead(MASTER_KEY_URI)
+        val master = masterAeadSource.getExisting()
         val encryption = readEncryptedKeyset(stored[ENCRYPTION_KEYSET], master, version, "hpke")
         val signing = readEncryptedKeyset(stored[SIGNING_KEYSET], master, version, "ed25519")
         exportPublic(encryption, signing, version)
@@ -100,7 +103,7 @@ class RelayIdentityStore(context: Context) {
     @AccessesPartialKey
     private fun createIdentity(): RelayPublicIdentity {
         // Unlike AndroidKeysetManager, this API throws on Keystore failure and has no plaintext fallback.
-        val master = AndroidKeystoreKmsClient.getOrGenerateNewAeadKey(MASTER_KEY_URI)
+        val master = masterAeadSource.getOrCreate()
         val encryption = KeysetHandle.generateNew(encryptionParameters())
         val signing = KeysetHandle.generateNew(signingParameters())
         val version = 1
@@ -185,6 +188,18 @@ class RelayIdentityStore(context: Context) {
         const val ENCRYPTION_KEYSET = "encrypted_hpke_keyset"
         const val SIGNING_KEYSET = "encrypted_ed25519_keyset"
         const val KEY_VERSION = "key_version"
-        const val MASTER_KEY_URI = "android-keystore://dosefolk_relay_identity_master_v1"
     }
+}
+
+/** Internal platform boundary; provides only an AEAD primitive, never wrapping-key bytes. */
+internal interface RelayMasterAeadSource {
+    fun getOrCreate(): Aead
+    fun getExisting(): Aead
+}
+
+private object AndroidRelayMasterAeadSource : RelayMasterAeadSource {
+    private const val MASTER_KEY_URI = "android-keystore://dosefolk_relay_identity_master_v1"
+
+    override fun getOrCreate(): Aead = AndroidKeystoreKmsClient.getOrGenerateNewAeadKey(MASTER_KEY_URI)
+    override fun getExisting(): Aead = AndroidKeystoreKmsClient().getAead(MASTER_KEY_URI)
 }
