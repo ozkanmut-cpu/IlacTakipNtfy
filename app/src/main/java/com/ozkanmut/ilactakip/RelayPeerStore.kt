@@ -74,6 +74,41 @@ class RelayPeerStore(context: Context) {
         committed
     }
 
+    /**
+     * Confirm-side first phase: persist the QR-authenticated candidate before relay activation,
+     * while deliberately preserving an existing revoke fence.
+     */
+    internal fun stageAuthenticatedPairingCandidate(
+        installId: String,
+        identity: RelayPublicIdentity
+    ): Boolean = synchronized(peerLock) {
+        if (!validInstallId(installId) || !identity.isValid()) return@synchronized false
+        val pin = pinKey(installId)
+        val previousPin = preferences.getString(pin, null)
+        val committed = preferences.edit().putString(pin, identity.toJson().toString()).commit()
+        if (!committed) {
+            val restore = preferences.edit()
+            if (previousPin == null) restore.remove(pin) else restore.putString(pin, previousPin)
+            restore.commit()
+        }
+        committed
+    }
+
+    /** Confirm-side second phase: authorize only the exact candidate persisted before HTTP. */
+    internal fun activateAuthenticatedPairingCandidate(
+        installId: String,
+        identity: RelayPublicIdentity
+    ): Boolean = synchronized(peerLock) {
+        if (!validInstallId(installId) || !identity.isValid() || readPin(installId) != identity) {
+            return@synchronized false
+        }
+        val revocation = revocationKey(installId)
+        if (!preferences.contains(revocation)) return@synchronized true
+        val committed = preferences.edit().remove(revocation).commit()
+        if (!committed) preferences.edit().putBoolean(revocation, true).commit()
+        committed
+    }
+
     private fun revoked(installId: String): Boolean = preferences.contains(revocationKey(installId))
 
     private fun readPin(installId: String): RelayPublicIdentity? = try {

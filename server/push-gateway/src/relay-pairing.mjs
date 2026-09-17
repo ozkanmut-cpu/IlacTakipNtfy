@@ -45,7 +45,14 @@ export function createPairingOffer(metadataStore, {
   metadataStore.purgeExpiredPairingOffers(now);
   if (!activeInstallation(metadataStore, creatorInstallId)) return null;
   if (!validOfferId(offerId) || !validDigest(secretHash) || !validDigest(creatorProof)) return null;
-  if (metadataStore.getPairingOffer(offerId)) return null;
+  const existing = metadataStore.getPairingOffer(offerId);
+  if (existing) {
+    if (existing.status !== 'pending' || Number(existing.expiresAt) <= Number(now)) return null;
+    if (!safeEqualText(existing.creatorInstallId, creatorInstallId)) return null;
+    if (!safeEqualText(existing.secretHash, secretHash)) return null;
+    if (!safeEqualText(existing.creatorProof, creatorProof)) return null;
+    return existing;
+  }
 
   return metadataStore.insertPairingOffer({
     offerId,
@@ -70,7 +77,8 @@ export function acceptPairingOffer(metadataStore, {
   if (!peer || !validPairingSecret(pairingSecret) || !validDigest(peerProof)) return null;
 
   const offer = metadataStore.getPairingOffer(offerId);
-  if (!offer || offer.status !== 'pending' || offer.creatorInstallId === peer.installId) return null;
+  if (!offer || offer.creatorInstallId === peer.installId) return null;
+  if (!['pending', 'accepted', 'confirmed'].includes(offer.status)) return null;
   if (!activeInstallation(metadataStore, offer.creatorInstallId)) return null;
   if (!safeEqualText(hashPairingSecret(pairingSecret), offer.secretHash)) return null;
 
@@ -87,6 +95,12 @@ export function acceptPairingOffer(metadataStore, {
   if (!safeEqualText(expectedCreatorProof, offer.creatorProof)) return null;
   if (!safeEqualText(expectedPeerProof, peerProof)) return null;
 
+  if (offer.status === 'accepted' || offer.status === 'confirmed') {
+    if (!safeEqualText(offer.peerInstallId, peer.installId)) return null;
+    if (!safeEqualText(offer.peerProof, peerProof)) return null;
+    return offer;
+  }
+
   return metadataStore.acceptPairingOffer(offerId, peer.installId, peerProof, Number(now));
 }
 
@@ -101,7 +115,8 @@ export function confirmPairingOffer(metadataStore, {
   if (!actor || !validPairingSecret(pairingSecret)) return null;
 
   const offer = metadataStore.getPairingOffer(offerId);
-  if (!offer || offer.status !== 'accepted' || offer.creatorInstallId !== actor.installId) return null;
+  if (!offer || !['accepted', 'confirmed'].includes(offer.status) ||
+      offer.creatorInstallId !== actor.installId) return null;
   if (!offer.peerInstallId || !offer.peerProof || !activeInstallation(metadataStore, offer.peerInstallId)) return null;
   if (!safeEqualText(hashPairingSecret(pairingSecret), offer.secretHash)) return null;
 
@@ -117,6 +132,8 @@ export function confirmPairingOffer(metadataStore, {
   });
   if (!safeEqualText(expectedCreatorProof, offer.creatorProof)) return null;
   if (!safeEqualText(expectedPeerProof, offer.peerProof)) return null;
+
+  if (offer.status === 'confirmed') return offer;
 
   const createdAt = Number(now);
   return metadataStore.activatePairingOffer({

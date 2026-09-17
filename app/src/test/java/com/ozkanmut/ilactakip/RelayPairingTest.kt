@@ -41,7 +41,8 @@ import java.util.UUID
  * - acceptOffer(creatorQr): String verifies the creator QR, POSTs accept, pins only that QR identity,
  *   durably consumes the offer, and returns a canonical peer-signed QR for the creator's second scan.
  * - confirmOffer(peerQr): RelayPairedPeer requires that second signed QR to match the locally created
- *   offer, atomically pins/re-pins it before POST confirm can activate routes, and durably consumes it.
+ *   offer, durably stages its pin before POST confirm, activates a matching revoke fence only after
+ *   exact success, and durably consumes it.
  * - RelayPairingTransport.post(path, body) is an injected already-authenticated HTTPS boundary.
  * - RelayPairingRandom.bytes(count) and java.time.Clock are injected for deterministic tests.
  *
@@ -122,6 +123,30 @@ class RelayPairingTest {
         assertEquals(2, attempts)
         assertEquals(retried, reused)
         assertEquals(OFFER_ID, RelayEnvelopeFormat.verifyPairing(reused.toByteArray()).getString("offerId"))
+    }
+
+    // Mutation caught: treating a generic conflict as recovery instead of requiring the server's
+    // exact strict success schema after a create response was lost.
+    @Test
+    fun createResponseLossRetriesTheSameTranscriptButGenericConflictStillFails() {
+        var attempts = 0
+        val transport = RecordingTransport { _, _ ->
+            attempts++
+            when (attempts) {
+                1 -> throw java.io.IOException("synthetic response loss after server commit")
+                2 -> response(409, JSONObject().put("error", "pairing_unavailable"))
+                else -> response(201, createdBody(CREATOR_ID))
+            }
+        }
+
+        assertThrows(GeneralSecurityException::class.java) { creator.pairing(transport).createOffer() }
+        assertThrows(GeneralSecurityException::class.java) {
+            creator.reconstructed().pairing(transport, clockAt(NOW.plusSeconds(1))).createOffer()
+        }
+        val recovered = creator.reconstructed().pairing(transport, clockAt(NOW.plusSeconds(2))).createOffer()
+
+        assertEquals(3, attempts)
+        assertEquals(OFFER_ID, RelayEnvelopeFormat.verifyPairing(recovered.toByteArray()).getString("offerId"))
     }
 
     // Mutations caught: using a different proof role/actor/transcript, sending client actor fields,
@@ -208,6 +233,58 @@ class RelayPairingTest {
         assertNull(RelayPeerStore(atBoundary.context).pinnedIdentity(CREATOR_ID))
     }
 
+    // Mutations caught: accepting stale server state, accepting an unbounded server clock, or
+    // accidentally requiring the server timestamp to equal the QR timestamp exactly.
+    @Test
+    fun serverExpiryMustBeFreshAndWithinTheDocumentedClockSkewWindow() {
+        val responseExpiries = listOf(
+            NOW.toEpochMilli(),
+            NOW.plusSeconds(TEN_MINUTES_SECONDS + SERVER_EXPIRY_SKEW_SECONDS + 1).toEpochMilli()
+        )
+        responseExpiries.forEachIndexed { index, serverExpiry ->
+            val scanner = device("TEST-ONLY-server-expiry-$index")
+            val transport = RecordingTransport { _, _ ->
+                response(200, acceptedBody(CREATOR_ID, scanner.installId, expiresAt = serverExpiry))
+            }
+
+            assertThrows(GeneralSecurityException::class.java) {
+                scanner.pairing(transport).acceptOffer(createQr())
+            }
+            assertNull(RelayPeerStore(scanner.context).pinnedIdentity(CREATOR_ID))
+        }
+
+        val skewedButPlausible = device("TEST-ONLY-server-expiry-plausible")
+        val plausibleTransport = RecordingTransport { _, _ -> response(
+            200,
+            acceptedBody(
+                CREATOR_ID,
+                skewedButPlausible.installId,
+                expiresAt = NOW.plusSeconds(TEN_MINUTES_SECONDS + SERVER_EXPIRY_SKEW_SECONDS).toEpochMilli()
+            )
+        ) }
+        skewedButPlausible.pairing(plausibleTransport).acceptOffer(createQr())
+        assertTrue(RelayPeerStore(skewedButPlausible.context).isTrusted(CREATOR_ID, creator.identity))
+    }
+
+    // Mutation caught: applying timestamp bounds only to accept while allowing stale or implausibly
+    // distant create responses to register durable secret-bearing offers.
+    @Test
+    fun createAlsoRejectsExpiredAndImplausiblyDistantServerExpiry() {
+        var attempts = 0
+        val transport = RecordingTransport { _, _ ->
+            attempts++
+            val expiresAt = if (attempts == 1) NOW.toEpochMilli() else
+                NOW.plusSeconds(TEN_MINUTES_SECONDS + SERVER_EXPIRY_SKEW_SECONDS + 2).toEpochMilli()
+            response(201, createdBody(CREATOR_ID, expiresAt = expiresAt))
+        }
+
+        assertThrows(GeneralSecurityException::class.java) { creator.pairing(transport).createOffer() }
+        assertThrows(GeneralSecurityException::class.java) {
+            creator.reconstructed().pairing(transport, clockAt(NOW.plusSeconds(1))).createOffer()
+        }
+        assertEquals(2, attempts)
+    }
+
     // Mutations caught: process-memory replay tracking, marking only before restart, or allowing an
     // idempotent HTTP accept to reactivate a previously consumed signed QR.
     @Test
@@ -220,6 +297,29 @@ class RelayPairingTest {
 
         assertThrows(GeneralSecurityException::class.java) { restarted.acceptOffer(qr) }
         assertEquals("Replay must be rejected before a second HTTP request", 1, transport.posts.size)
+        assertTrue(RelayPeerStore(peer.context).isTrusted(CREATOR_ID, creator.identity))
+    }
+
+    // Mutation caught: consuming before a response arrives or rejecting the exact accepted/confirmed
+    // success schema returned by an idempotent retry after the server committed the first request.
+    @Test
+    fun acceptResponseLossRecoversFromAnExactConfirmedRetry() {
+        val qr = createQr()
+        var attempts = 0
+        val transport = RecordingTransport { _, _ ->
+            attempts++
+            if (attempts == 1) throw java.io.IOException("synthetic response loss after server commit")
+            response(200, acceptedBody(CREATOR_ID, PEER_ID, status = "confirmed"))
+        }
+
+        assertThrows(GeneralSecurityException::class.java) {
+            peer.pairing(transport, clockAt(NOW.plusSeconds(1))).acceptOffer(qr)
+        }
+        assertNull(RelayPeerStore(peer.context).pinnedIdentity(CREATOR_ID))
+
+        peer.reconstructed().pairing(transport, clockAt(NOW.plusSeconds(2))).acceptOffer(qr)
+
+        assertEquals(2, attempts)
         assertTrue(RelayPeerStore(peer.context).isTrusted(CREATOR_ID, creator.identity))
     }
 
@@ -315,6 +415,83 @@ class RelayPairingTest {
         assertTrue(RelayPeerStore(creator.context).isTrusted(PEER_ID, peer.identity))
     }
 
+    // Mutations caught: clearing the revoke fence before a rejected confirm, rolling the verified
+    // candidate pin back to the old key, or clearing an unrelated peer's fence on retry success.
+    @Test
+    fun rejectedConfirmPersistsCandidateButKeepsRevokedPeerUnauthorizedUntilRetrySuccess() {
+        val oldPeer = device("TEST-ONLY-rejected-confirm-old-peer")
+        val unrelated = device("TEST-ONLY-rejected-confirm-unrelated")
+        val store = RelayPeerStore(creator.context)
+        assertTrue(store.pin(PEER_ID, oldPeer.identity))
+        assertTrue(store.revoke(PEER_ID))
+        assertTrue(store.pin(UNRELATED_ID, unrelated.identity))
+        assertTrue(store.revoke(UNRELATED_ID))
+        val creatorQr = createQr()
+        val peerQr = peer.pairing(successfulAcceptTransport(PEER_ID), clockAt(NOW.plusSeconds(1)))
+            .acceptOffer(creatorQr)
+        var attempts = 0
+        val transport = RecordingTransport { _, _ ->
+            attempts++
+            if (attempts == 1) response(409, JSONObject().put("error", "pairing_unavailable"))
+            else response(200, confirmedBody())
+        }
+
+        assertThrows(GeneralSecurityException::class.java) {
+            creator.pairing(transport, clockAt(NOW.plusSeconds(2))).confirmOffer(peerQr)
+        }
+        val afterRejected = RelayPeerStore(creator.context)
+        assertEquals(peer.identity, afterRejected.pinnedIdentity(PEER_ID))
+        assertTrue(afterRejected.isRevoked(PEER_ID))
+        assertFalse(afterRejected.isTrusted(PEER_ID, peer.identity))
+        assertTrue(afterRejected.isRevoked(UNRELATED_ID))
+
+        creator.reconstructed().pairing(transport, clockAt(NOW.plusSeconds(3))).confirmOffer(peerQr)
+
+        val recovered = RelayPeerStore(creator.context)
+        assertEquals(2, attempts)
+        assertFalse(recovered.isRevoked(PEER_ID))
+        assertTrue(recovered.isTrusted(PEER_ID, peer.identity))
+        assertTrue(recovered.isRevoked(UNRELATED_ID))
+    }
+
+    // Mutations caught: treating a thrown/lost confirm response as authorization, failing to stage
+    // the candidate durably before HTTP, or rejecting an exact confirmed response on retry.
+    @Test
+    fun confirmResponseLossKeepsRevokeFenceThenExactRetryActivatesTheCandidate() {
+        val oldPeer = device("TEST-ONLY-lost-confirm-old-peer")
+        val unrelated = device("TEST-ONLY-lost-confirm-unrelated")
+        val store = RelayPeerStore(creator.context)
+        assertTrue(store.pin(PEER_ID, oldPeer.identity))
+        assertTrue(store.revoke(PEER_ID))
+        assertTrue(store.pin(UNRELATED_ID, unrelated.identity))
+        assertTrue(store.revoke(UNRELATED_ID))
+        val creatorQr = createQr()
+        val peerQr = peer.pairing(successfulAcceptTransport(PEER_ID), clockAt(NOW.plusSeconds(1)))
+            .acceptOffer(creatorQr)
+        var attempts = 0
+        val transport = RecordingTransport { _, _ ->
+            attempts++
+            if (attempts == 1) throw java.io.IOException("synthetic response loss after server commit")
+            response(200, confirmedBody())
+        }
+
+        assertThrows(GeneralSecurityException::class.java) {
+            creator.pairing(transport, clockAt(NOW.plusSeconds(2))).confirmOffer(peerQr)
+        }
+        val afterLoss = RelayPeerStore(creator.context)
+        assertEquals(peer.identity, afterLoss.pinnedIdentity(PEER_ID))
+        assertTrue(afterLoss.isRevoked(PEER_ID))
+        assertFalse(afterLoss.isTrusted(PEER_ID, peer.identity))
+        assertTrue(afterLoss.isRevoked(UNRELATED_ID))
+
+        creator.reconstructed().pairing(transport, clockAt(NOW.plusSeconds(3))).confirmOffer(peerQr)
+
+        assertEquals(2, attempts)
+        assertTrue(RelayPeerStore(creator.context).isTrusted(PEER_ID, peer.identity))
+        assertFalse(RelayPeerStore(creator.context).isRevoked(PEER_ID))
+        assertTrue(RelayPeerStore(creator.context).isRevoked(UNRELATED_ID))
+    }
+
     // Mutations caught: accepting one's own QR, trusting bearer-independent actor fields, or
     // confirming any validly signed peer offer instead of the locally pending offer/secret.
     @Test
@@ -404,17 +581,18 @@ class RelayPairingTest {
         val creatorQr = createQr()
         val peerQr = peer.pairing(successfulAcceptTransport(PEER_ID), clockAt(NOW.plusSeconds(1)))
             .acceptOffer(creatorQr)
-        var replacementObservedBeforeConfirm = false
+        var candidateFencedBeforeConfirm = false
         val confirmTransport = RecordingTransport { _, _ ->
             val durable = RelayPeerStore(creator.context)
-            replacementObservedBeforeConfirm = durable.isTrusted(PEER_ID, peer.identity) &&
-                !durable.isRevoked(PEER_ID) && durable.isRevoked(UNRELATED_ID)
+            candidateFencedBeforeConfirm = durable.pinnedIdentity(PEER_ID) == peer.identity &&
+                !durable.isTrusted(PEER_ID, peer.identity) && durable.isRevoked(PEER_ID) &&
+                durable.isRevoked(UNRELATED_ID)
             response(200, confirmedBody())
         }
 
         creator.pairing(confirmTransport, clockAt(NOW.plusSeconds(2))).confirmOffer(peerQr)
 
-        assertTrue(replacementObservedBeforeConfirm)
+        assertTrue(candidateFencedBeforeConfirm)
         val restarted = RelayPeerStore(creator.context)
         assertEquals(peer.identity, restarted.pinnedIdentity(PEER_ID))
         assertTrue(restarted.isTrusted(PEER_ID, peer.identity))
@@ -446,6 +624,32 @@ class RelayPairingTest {
         assertTrue(restarted.isRevoked(PEER_ID))
         assertFalse(restarted.isTrusted(PEER_ID, peer.identity))
         assertEquals(peer.identity, restarted.pinnedIdentity(PEER_ID))
+        assertTrue(noHttp.posts.isEmpty())
+    }
+
+    // Mutations caught: retaining secret-bearing expired pending QR state or expired replay markers
+    // forever instead of cleaning them opportunistically on any later pairing operation.
+    @Test
+    fun serviceOperationsCleanExpiredPendingSecretsAndConsumedMarkers() {
+        val creatorQr = createQr()
+        peer.pairing(successfulAcceptTransport(PEER_ID), clockAt(NOW.plusSeconds(1)))
+            .acceptOffer(creatorQr)
+        val creatorPrefs = creator.context.getSharedPreferences("dosefolk_relay_peers", Context.MODE_PRIVATE)
+        val peerPrefs = peer.context.getSharedPreferences("dosefolk_relay_peers", Context.MODE_PRIVATE)
+        assertTrue(creatorPrefs.contains("pairing:pending-offer-v2"))
+        assertTrue(peerPrefs.all.keys.any { it.startsWith("pairing:consumed-v2:") })
+
+        val noHttp = RecordingTransport { _, _ -> throw AssertionError("Invalid QR reached HTTP") }
+        assertThrows(GeneralSecurityException::class.java) {
+            creator.reconstructed().pairing(noHttp, clockAt(EXPIRES_AT)).acceptOffer("not-a-pairing-qr")
+        }
+        assertThrows(GeneralSecurityException::class.java) {
+            peer.reconstructed().pairing(noHttp, clockAt(EXPIRES_AT)).acceptOffer("not-a-pairing-qr")
+        }
+
+        assertFalse(creatorPrefs.contains("pairing:pending-offer-v2"))
+        assertFalse(peerPrefs.all.keys.any { it.startsWith("pairing:consumed-v2:") })
+        assertFalse(creatorPrefs.all.values.any { it.toString().contains(PAIRING_SECRET) })
         assertTrue(noHttp.posts.isEmpty())
     }
 
@@ -521,10 +725,15 @@ class RelayPairingTest {
     ) = JSONObject().put("offerId", offerId).put("creatorInstallId", creatorInstallId)
         .put("expiresAt", expiresAt).put("status", "pending")
 
-    private fun acceptedBody(creatorInstallId: String, peerInstallId: String) = JSONObject()
+    private fun acceptedBody(
+        creatorInstallId: String,
+        peerInstallId: String,
+        expiresAt: Long = EXPIRES_AT.toEpochMilli(),
+        status: String = "accepted"
+    ) = JSONObject()
         .put("offerId", OFFER_ID).put("creatorInstallId", creatorInstallId)
-        .put("peerInstallId", peerInstallId).put("expiresAt", EXPIRES_AT.toEpochMilli())
-        .put("status", "accepted")
+        .put("peerInstallId", peerInstallId).put("expiresAt", expiresAt)
+        .put("status", status)
 
     private fun confirmedBody() = JSONObject().put("offerId", OFFER_ID).put("status", "confirmed")
 
@@ -629,6 +838,7 @@ class RelayPairingTest {
         private const val PEER_ID = "TEST-ONLY-peer"
         private const val UNRELATED_ID = "TEST-ONLY-unrelated"
         private const val TEN_MINUTES_SECONDS = 600L
+        private const val SERVER_EXPIRY_SKEW_SECONDS = 120L
         private val NOW: Instant = Instant.parse("2030-01-01T00:00:00Z")
         private val EXPIRES_AT: Instant = NOW.plusSeconds(TEN_MINUTES_SECONDS)
         private const val EXPIRES_AT_TEXT = "2030-01-01T00:10:00Z"

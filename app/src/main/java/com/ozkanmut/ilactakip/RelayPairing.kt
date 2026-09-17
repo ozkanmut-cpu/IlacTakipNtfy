@@ -49,6 +49,7 @@ internal class RelayPairing(
     fun createOffer(): String = safely {
         synchronized(pairingLock) {
             val now = clock.instant()
+            cleanupExpiredState(now)
             val existing = readPendingOffer()
             val pending = if (existing == null || !now.isBefore(existing.payload.expiresAt)) {
                 if (existing != null) removePendingOffer()
@@ -75,7 +76,7 @@ internal class RelayPairing(
                             )
                         )
                 )
-                requireCreateResponse(response, pending.payload)
+                requireCreateResponse(response, pending.payload, clock.instant())
                 writePendingOffer(pending.copy(serverRegistered = true))
             }
             pending.qr
@@ -84,7 +85,9 @@ internal class RelayPairing(
 
     fun acceptOffer(creatorQr: String): String = safely {
         synchronized(pairingLock) {
-            val creator = verifiedActiveQr(creatorQr)
+            val now = clock.instant()
+            cleanupExpiredState(now)
+            val creator = verifiedActiveQr(creatorQr, now)
             requirePairing(creator.installId != localInstallId)
             val consumedKey = consumedKey(ROLE_PEER, creator.offerId, creator.installId)
             requirePairing(!preferences.contains(consumedKey))
@@ -113,8 +116,9 @@ internal class RelayPairing(
                         )
                     )
             )
-            requireAcceptResponse(response, creator)
-            requirePairing(clock.instant().isBefore(creator.expiresAt))
+            val responseNow = clock.instant()
+            requireAcceptResponse(response, creator, responseNow)
+            requirePairing(responseNow.isBefore(creator.expiresAt))
             requirePairing(PairingLifecycle.completeAuthenticatedRelayRePair(
                 peerStore, creator.installId, creator.identity
             ))
@@ -125,11 +129,13 @@ internal class RelayPairing(
 
     fun confirmOffer(peerQr: String): RelayPairedPeer = safely {
         synchronized(pairingLock) {
-            val peer = verifiedActiveQr(peerQr)
+            val now = clock.instant()
+            cleanupExpiredState(now)
+            val peer = verifiedActiveQr(peerQr, now)
             requirePairing(peer.installId != localInstallId)
             val pending = readPendingOffer() ?: rejectPairing()
             requirePairing(pending.serverRegistered)
-            requirePairing(clock.instant().isBefore(pending.payload.expiresAt))
+            requirePairing(now.isBefore(pending.payload.expiresAt))
             requirePairing(pending.payload.installId == localInstallId)
             requirePairing(pending.payload.identity == identityStore.publicIdentity())
             requirePairing(peer.offerId == pending.payload.offerId)
@@ -140,7 +146,7 @@ internal class RelayPairing(
 
             // The server may activate routes during this call, so the authenticated pin must be
             // durable before transport sees the confirm request.
-            requirePairing(PairingLifecycle.completeAuthenticatedRelayRePair(
+            requirePairing(PairingLifecycle.stageAuthenticatedRelayRePairCandidate(
                 peerStore, peer.installId, peer.identity
             ))
             val response = transport.post(
@@ -148,6 +154,9 @@ internal class RelayPairing(
                 JSONObject().put("pairingSecret", peer.pairingSecret)
             )
             requireConfirmResponse(response, peer.offerId)
+            requirePairing(PairingLifecycle.activateAuthenticatedRelayRePairCandidate(
+                peerStore, peer.installId, peer.identity
+            ))
             finishConfirmedOffer(consumedKey, peer.expiresAt)
             RelayPairedPeer(peer.installId, peer.identity)
         }
@@ -176,10 +185,33 @@ internal class RelayPairing(
         return pending
     }
 
-    private fun verifiedActiveQr(raw: String): RelayCirclePairingPayload =
+    private fun verifiedActiveQr(raw: String, now: Instant): RelayCirclePairingPayload =
         CirclePairingPayload.parseRelayV2(raw).also {
-            requirePairing(clock.instant().isBefore(it.expiresAt))
+            requirePairing(now.isBefore(it.expiresAt))
         }
+
+    private fun cleanupExpiredState(now: Instant) {
+        val staleKeys = mutableSetOf<String>()
+        preferences.all.forEach { (key, value) ->
+            when {
+                key == PENDING_OFFER -> {
+                    val expiresAt = runCatching {
+                        val record = JSONObject(value as String)
+                        RelayEnvelopeFormat.requireFields(record, setOf("qr", "serverRegistered"))
+                        CirclePairingPayload.parseRelayV2(record.getString("qr")).expiresAt
+                    }.getOrNull()
+                    if (expiresAt == null || !now.isBefore(expiresAt)) staleKeys += key
+                }
+                key.startsWith(CONSUMED_PREFIX) && value is Long && value <= now.toEpochMilli() -> {
+                    staleKeys += key
+                }
+            }
+        }
+        if (staleKeys.isEmpty()) return
+        val editor = preferences.edit()
+        staleKeys.forEach { editor.remove(it) }
+        requirePairing(editor.commit())
+    }
 
     private fun writePendingOffer(pending: PendingOffer) {
         val record = JSONObject()
@@ -232,7 +264,11 @@ internal class RelayPairing(
         restore.commit()
     }
 
-    private fun requireCreateResponse(response: RelayPairingHttpResponse, offer: RelayCirclePairingPayload) {
+    private fun requireCreateResponse(
+        response: RelayPairingHttpResponse,
+        offer: RelayCirclePairingPayload,
+        now: Instant
+    ) {
         requirePairing(response.status == 201)
         RelayEnvelopeFormat.requireFields(
             response.body, setOf("offerId", "creatorInstallId", "expiresAt", "status")
@@ -240,10 +276,14 @@ internal class RelayPairing(
         requirePairing(response.body.opt("offerId") == offer.offerId)
         requirePairing(response.body.opt("creatorInstallId") == localInstallId)
         requirePairing(response.body.opt("status") == "pending")
-        requirePairing(positiveLong(response.body, "expiresAt") > 0L)
+        requireServerExpiry(response.body, now)
     }
 
-    private fun requireAcceptResponse(response: RelayPairingHttpResponse, creator: RelayCirclePairingPayload) {
+    private fun requireAcceptResponse(
+        response: RelayPairingHttpResponse,
+        creator: RelayCirclePairingPayload,
+        now: Instant
+    ) {
         requirePairing(response.status == 200)
         RelayEnvelopeFormat.requireFields(
             response.body,
@@ -252,8 +292,8 @@ internal class RelayPairing(
         requirePairing(response.body.opt("offerId") == creator.offerId)
         requirePairing(response.body.opt("creatorInstallId") == creator.installId)
         requirePairing(response.body.opt("peerInstallId") == localInstallId)
-        requirePairing(response.body.opt("status") == "accepted")
-        requirePairing(positiveLong(response.body, "expiresAt") > 0L)
+        requirePairing(response.body.opt("status") in setOf("accepted", "confirmed"))
+        requireServerExpiry(response.body, now)
     }
 
     private fun requireConfirmResponse(response: RelayPairingHttpResponse, offerId: String) {
@@ -267,6 +307,12 @@ internal class RelayPairing(
         is Int -> value.toLong()
         is Long -> value
         else -> rejectPairing()
+    }
+
+    private fun requireServerExpiry(json: JSONObject, now: Instant) {
+        val expiresAt = Instant.ofEpochMilli(positiveLong(json, "expiresAt"))
+        requirePairing(expiresAt.isAfter(now))
+        requirePairing(!expiresAt.isAfter(now.plusSeconds(MAX_SERVER_EXPIRY_SECONDS)))
     }
 
     private fun consumedKey(role: String, offerId: String, installId: String): String {
@@ -310,6 +356,9 @@ internal class RelayPairing(
         const val OFFER_ID_BYTES = 18
         const val PAIRING_SECRET_BYTES = 32
         const val PAIRING_LIFETIME_SECONDS = 10L * 60L
+        // Relay expiry uses its own clock; allow at most two minutes of forward skew/response delay.
+        const val SERVER_EXPIRY_SKEW_SECONDS = 2L * 60L
+        const val MAX_SERVER_EXPIRY_SECONDS = PAIRING_LIFETIME_SECONDS + SERVER_EXPIRY_SKEW_SECONDS
         val pairingLock = Any()
     }
 }

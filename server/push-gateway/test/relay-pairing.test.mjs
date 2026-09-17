@@ -124,6 +124,168 @@ test('pairing offer stores only secret hash and proof metadata with a hard ten m
   assert.equal(rawDatabase.includes(Buffer.from(pairingSecret)), false);
 });
 
+test('create retry returns only the same unexpired pending transcript', async t => {
+  const { metadataStore } = await storeFixture(t);
+  const now = 1_700_000_000_000;
+  installation(metadataStore, { installId: 'relay-create-A', now });
+  installation(metadataStore, { installId: 'relay-create-B', now });
+  const pairingSecret = 'pairing-secret-create-retry-0008';
+  const offerId = 'offer-create-retry-0008';
+  const secretHash = hashPairingSecret(pairingSecret);
+  const creatorProof = createPairingProof(pairingSecret, {
+    offerId,
+    role: 'creator',
+    installId: 'relay-create-A'
+  });
+  const exact = { offerId, creatorInstallId: 'relay-create-A', secretHash, creatorProof };
+
+  const created = createPairingOffer(metadataStore, { ...exact, now });
+  const retried = createPairingOffer(metadataStore, { ...exact, now: now + 1 });
+
+  assert.deepEqual(retried, created);
+  assert.equal(createPairingOffer(metadataStore, {
+    ...exact,
+    creatorInstallId: 'relay-create-B',
+    now: now + 2
+  }), null);
+  assert.equal(createPairingOffer(metadataStore, {
+    ...exact,
+    secretHash: hashPairingSecret('pairing-secret-create-retry-mismatch'),
+    now: now + 3
+  }), null);
+  assert.equal(createPairingOffer(metadataStore, {
+    ...exact,
+    creatorProof: `${creatorProof.slice(0, -1)}${creatorProof.endsWith('A') ? 'B' : 'A'}`,
+    now: now + 4
+  }), null);
+
+  assert.ok(acceptPairingOffer(metadataStore, {
+    offerId,
+    peerInstallId: 'relay-create-B',
+    pairingSecret,
+    peerProof: createPairingProof(pairingSecret, {
+      offerId,
+      role: 'peer',
+      installId: 'relay-create-B'
+    }),
+    now: now + 5
+  }));
+  assert.equal(createPairingOffer(metadataStore, { ...exact, now: now + 6 }), null);
+});
+
+test('accept retry returns accepted or confirmed only for the exact authenticated peer transcript', async t => {
+  const { metadataStore } = await storeFixture(t);
+  const now = 1_700_000_000_000;
+  installation(metadataStore, { installId: 'relay-accept-A', now });
+  installation(metadataStore, { installId: 'relay-accept-B', now });
+  installation(metadataStore, { installId: 'relay-accept-C', now });
+  const pairingSecret = 'pairing-secret-accept-retry-0009';
+  const offerId = 'offer-accept-retry-0009';
+  const creatorProof = createPairingProof(pairingSecret, {
+    offerId,
+    role: 'creator',
+    installId: 'relay-accept-A'
+  });
+  const peerProof = createPairingProof(pairingSecret, {
+    offerId,
+    role: 'peer',
+    installId: 'relay-accept-B'
+  });
+  createPairingOffer(metadataStore, {
+    offerId,
+    creatorInstallId: 'relay-accept-A',
+    secretHash: hashPairingSecret(pairingSecret),
+    creatorProof,
+    now
+  });
+  const exact = { offerId, peerInstallId: 'relay-accept-B', pairingSecret, peerProof };
+
+  const accepted = acceptPairingOffer(metadataStore, { ...exact, now: now + 1 });
+  const acceptedRetry = acceptPairingOffer(metadataStore, { ...exact, now: now + 2 });
+  assert.deepEqual(acceptedRetry, accepted);
+
+  assert.equal(acceptPairingOffer(metadataStore, {
+    ...exact,
+    peerInstallId: 'relay-accept-C',
+    peerProof: createPairingProof(pairingSecret, {
+      offerId,
+      role: 'peer',
+      installId: 'relay-accept-C'
+    }),
+    now: now + 3
+  }), null);
+  assert.equal(acceptPairingOffer(metadataStore, {
+    ...exact,
+    pairingSecret: 'pairing-secret-accept-retry-wrong',
+    now: now + 4
+  }), null);
+  assert.equal(acceptPairingOffer(metadataStore, {
+    ...exact,
+    peerProof: `${peerProof.slice(0, -1)}${peerProof.endsWith('A') ? 'B' : 'A'}`,
+    now: now + 5
+  }), null);
+
+  assert.ok(confirmPairingOffer(metadataStore, {
+    offerId,
+    actorInstallId: 'relay-accept-A',
+    pairingSecret,
+    now: now + 6
+  }));
+  const confirmedRetry = acceptPairingOffer(metadataStore, { ...exact, now: now + 7 });
+  assert.equal(confirmedRetry.status, 'confirmed');
+  assert.equal(confirmedRetry.peerInstallId, 'relay-accept-B');
+});
+
+test('confirm retry returns the exact confirmed transcript without duplicate routes', async t => {
+  const { metadataStore } = await storeFixture(t);
+  const now = 1_700_000_000_000;
+  installation(metadataStore, { installId: 'relay-confirm-A', now });
+  installation(metadataStore, { installId: 'relay-confirm-B', now });
+  installation(metadataStore, { installId: 'relay-confirm-C', now });
+  const pairingSecret = 'pairing-secret-confirm-retry-0010';
+  const offerId = 'offer-confirm-retry-0010';
+  createPairingOffer(metadataStore, {
+    offerId,
+    creatorInstallId: 'relay-confirm-A',
+    secretHash: hashPairingSecret(pairingSecret),
+    creatorProof: createPairingProof(pairingSecret, {
+      offerId,
+      role: 'creator',
+      installId: 'relay-confirm-A'
+    }),
+    now
+  });
+  acceptPairingOffer(metadataStore, {
+    offerId,
+    peerInstallId: 'relay-confirm-B',
+    pairingSecret,
+    peerProof: createPairingProof(pairingSecret, {
+      offerId,
+      role: 'peer',
+      installId: 'relay-confirm-B'
+    }),
+    now: now + 1
+  });
+  const exact = { offerId, actorInstallId: 'relay-confirm-A', pairingSecret };
+
+  const confirmed = confirmPairingOffer(metadataStore, { ...exact, now: now + 2 });
+  const retried = confirmPairingOffer(metadataStore, { ...exact, now: now + 3 });
+
+  assert.deepEqual(retried, confirmed);
+  assert.equal(metadataStore.listActiveRoutesForSender('relay-confirm-A').length, 1);
+  assert.equal(metadataStore.listActiveRoutesForSender('relay-confirm-B').length, 1);
+  assert.equal(confirmPairingOffer(metadataStore, {
+    ...exact,
+    actorInstallId: 'relay-confirm-C',
+    now: now + 4
+  }), null);
+  assert.equal(confirmPairingOffer(metadataStore, {
+    ...exact,
+    pairingSecret: 'pairing-secret-confirm-retry-wrong',
+    now: now + 5
+  }), null);
+});
+
 test('offer cannot confirm until both authenticated devices prove pairing-secret knowledge', async t => {
   const { metadataStore } = await storeFixture(t);
   const now = 1_700_000_000_000;
@@ -184,7 +346,7 @@ test('offer cannot confirm until both authenticated devices prove pairing-secret
   assert.equal(fromB[0].recipientInstallId, 'relay-pair-A');
 });
 
-test('wrong secret, expired offer, and replayed confirmation all fail closed', async t => {
+test('wrong secret and expired offer fail closed while exact confirmation retry recovers', async t => {
   const { metadataStore } = await storeFixture(t);
   const now = 1_700_000_000_000;
   installation(metadataStore, { installId: 'relay-pair-A', now });
@@ -261,7 +423,7 @@ test('wrong secret, expired offer, and replayed confirmation all fail closed', a
     actorInstallId: 'relay-pair-A',
     pairingSecret: activeSecret,
     now: now + 4
-  }), null);
+  }).status, 'confirmed');
 });
 
 test('revoked creator or peer installation cannot silently re-pair', async t => {

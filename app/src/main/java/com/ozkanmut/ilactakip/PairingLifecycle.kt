@@ -34,12 +34,26 @@ object RevokedPeerFence {
 }
 
 object PairingLifecycle {
-    /** Relay-v2 only: a verified pairing transcript may replace one pin and its matching tombstone. */
+    /** Accept-side relay-v2 completion after the exact authenticated server response succeeds. */
     internal fun completeAuthenticatedRelayRePair(
         peerStore: RelayPeerStore,
         installId: String,
         identity: RelayPublicIdentity
     ): Boolean = peerStore.pinAfterAuthenticatedPairing(installId, identity)
+
+    /** Confirm-side pre-HTTP phase; the matching revoke fence deliberately remains authoritative. */
+    internal fun stageAuthenticatedRelayRePairCandidate(
+        peerStore: RelayPeerStore,
+        installId: String,
+        identity: RelayPublicIdentity
+    ): Boolean = peerStore.stageAuthenticatedPairingCandidate(installId, identity)
+
+    /** Confirm-side post-success phase; only the already-persisted exact candidate can be activated. */
+    internal fun activateAuthenticatedRelayRePairCandidate(
+        peerStore: RelayPeerStore,
+        installId: String,
+        identity: RelayPublicIdentity
+    ): Boolean = peerStore.activateAuthenticatedPairingCandidate(installId, identity)
 
     fun revoke(c: Context, person: Person) {
         val context = c.applicationContext
