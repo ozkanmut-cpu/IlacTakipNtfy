@@ -1,0 +1,359 @@
+package com.ozkanmut.ilactakip
+
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.SharedPreferences
+import androidx.test.core.app.ApplicationProvider
+import org.json.JSONObject
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import java.security.MessageDigest
+import java.util.Base64
+import java.util.UUID
+
+@RunWith(RobolectricTestRunner::class)
+class RelayIdentityStoreTest {
+    private lateinit var application: Context
+    private lateinit var namespace: String
+
+    @Before
+    fun setUp() {
+        application = ApplicationProvider.getApplicationContext()
+        namespace = "relay-test-${UUID.randomUUID()}"
+    }
+
+    // Mutation caught: generating a fresh identity whenever the store is reconstructed.
+    @Test
+    fun localIdentityIsStableAcrossStoreAndContextReconstruction() {
+        val first = RelayIdentityStore(contextFor("local")).publicIdentity()
+
+        val restarted = RelayIdentityStore(contextFor("local")).publicIdentity()
+
+        assertEquals(first, restarted)
+        assertTrue(restarted.keyVersion > 0)
+    }
+
+    // Mutation caught: exporting a keyset/private field or substituting a serialized keyset for a public key.
+    @Test
+    fun publicExportContainsExactlyTheFourPublicIdentityFields() {
+        val identity = RelayIdentityStore(contextFor("local")).publicIdentity()
+        val exported = JSONObject(identity.toJson().toString())
+
+        assertEquals(
+            setOf("encryptionPublicKey", "signingPublicKey", "keyVersion", "fingerprint"),
+            exported.keys().asSequence().toSet()
+        )
+        assertEquals(identity.encryptionPublicKey, exported.getString("encryptionPublicKey"))
+        assertEquals(identity.signingPublicKey, exported.getString("signingPublicKey"))
+        assertEquals(identity.keyVersion, exported.getInt("keyVersion"))
+        assertEquals(identity.fingerprint, exported.getString("fingerprint"))
+        assertCanonicalPublicKey(exported.getString("encryptionPublicKey"))
+        assertCanonicalPublicKey(exported.getString("signingPublicKey"))
+        assertTrue(identity.keyVersion > 0)
+        assertTrue(identity.fingerprint.matches(Regex("[0-9a-f]{64}")))
+    }
+
+    // Mutation caught: reusing one public key for encryption/signing or a process-global identity across installs.
+    @Test
+    fun localIdentityHasSeparateEncryptionAndSigningKeysUniqueToEachInstall() {
+        val first = RelayIdentityStore(contextFor("install-a")).publicIdentity()
+        val second = RelayIdentityStore(contextFor("install-b")).publicIdentity()
+
+        listOf(first, second).forEach { identity ->
+            assertCanonicalPublicKey(identity.encryptionPublicKey)
+            assertCanonicalPublicKey(identity.signingPublicKey)
+            assertNotEquals(identity.encryptionPublicKey, identity.signingPublicKey)
+        }
+        assertNotEquals(first.encryptionPublicKey, second.encryptionPublicKey)
+        assertNotEquals(first.signingPublicKey, second.signingPublicKey)
+        assertNotEquals(first.fingerprint, second.fingerprint)
+    }
+
+    // Mutation caught: omitting/reordering a public field or dropping domain/version separation from the digest.
+    @Test
+    fun fingerprintIsSha256OfTheExplicitCanonicalPublicBundle() {
+        val identity = RelayIdentityStore(contextFor("local")).publicIdentity()
+
+        assertEquals(
+            expectedFingerprint(identity.encryptionPublicKey, identity.signingPublicKey, identity.keyVersion),
+            identity.fingerprint
+        )
+    }
+
+    // Mutation caught: persisting only some identity fields or treating keyVersion as an ordering counter.
+    @Test
+    fun peerPinPersistsTheCompleteTupleAndAnOpaquePositiveVersion() {
+        val identity = fixtureIdentity(keyVersion = Int.MAX_VALUE)
+        val store = RelayPeerStore(contextFor("local"))
+
+        assertTrue(store.pin("peer-a", identity))
+
+        val restarted = RelayPeerStore(contextFor("local"))
+        assertEquals(identity, restarted.pinnedIdentity("peer-a"))
+        assertTrue(restarted.isTrusted("peer-a", identity))
+        assertFalse(restarted.isRevoked("peer-a"))
+        assertNull(restarted.pinnedIdentity("peer-b"))
+        assertFalse(restarted.isTrusted("peer-b", identity))
+    }
+
+    // Mutation caught: rejecting repeated authenticated pairing metadata or replacing the existing pin on repetition.
+    @Test
+    fun pinningTheSameIdentityIsIdempotentAcrossReconstruction() {
+        val identity = fixtureIdentity()
+        assertTrue(RelayPeerStore(contextFor("local")).pin("peer-a", identity))
+        val restarted = RelayPeerStore(contextFor("local"))
+
+        assertTrue(restarted.pin("peer-a", identity.copy()))
+        assertTrue(restarted.pin("peer-a", identity.copy()))
+
+        assertEquals(identity, RelayPeerStore(contextFor("local")).pinnedIdentity("peer-a"))
+        assertTrue(restarted.isTrusted("peer-a", identity))
+    }
+
+    // Mutation caught: trusting or automatically pinning server metadata for an install that has never paired.
+    @Test
+    fun unpinnedServerMetadataIsNotTrustedAndDoesNotCreateAPin() {
+        val store = RelayPeerStore(contextFor("local"))
+
+        assertFalse(store.isTrusted("unknown-peer", fixtureIdentity()))
+
+        assertNull(RelayPeerStore(contextFor("local")).pinnedIdentity("unknown-peer"))
+    }
+
+    // Mutation caught: silently accepting a substituted encryption key even with its correctly recomputed fingerprint.
+    @Test
+    fun encryptionKeyMismatchIsRejectedWithoutOverwritingThePin() {
+        assertRejectedWithoutChangingPin(fixtureIdentity(encryptionPublicKey = ENCRYPTION_B))
+    }
+
+    // Mutation caught: checking only the encryption key and ignoring a substituted signing key.
+    @Test
+    fun signingKeyMismatchIsRejectedWithoutOverwritingThePin() {
+        assertRejectedWithoutChangingPin(fixtureIdentity(signingPublicKey = SIGNING_B))
+    }
+
+    // Mutation caught: automatically adopting a server-advertised key version without signed rotation or re-pairing.
+    @Test
+    fun keyVersionMismatchIsRejectedWithoutOverwritingThePin() {
+        listOf(6, 8).forEach { version ->
+            assertRejectedWithoutChangingPin(fixtureIdentity(keyVersion = version))
+        }
+    }
+
+    // Mutation caught: ignoring the supplied fingerprint when keys and version still match the pin.
+    @Test
+    fun fingerprintMismatchIsRejectedWithoutOverwritingThePin() {
+        assertRejectedWithoutChangingPin(fixtureIdentity().copy(fingerprint = "0".repeat(64)))
+    }
+
+    // Mutation caught: looking up trust by key material rather than binding it to the paired install ID.
+    @Test
+    fun aPinnedIdentityCannotAuthenticateUnderADifferentInstallId() {
+        val identity = fixtureIdentity()
+        val store = RelayPeerStore(contextFor("local"))
+        assertTrue(store.pin("peer-a", identity))
+
+        assertFalse(store.isTrusted("peer-b", identity))
+
+        assertNull(store.pinnedIdentity("peer-b"))
+        assertEquals(identity, store.pinnedIdentity("peer-a"))
+        assertTrue(store.isTrusted("peer-a", identity))
+    }
+
+    // Mutation caught: dropping a revocation on reconstruction or continuing to trust an exact-but-revoked identity.
+    @Test
+    fun revokedPeerIsRejectedAndItsTombstoneSurvivesReconstruction() {
+        val identity = fixtureIdentity()
+        val store = RelayPeerStore(contextFor("local"))
+        assertTrue(store.pin("peer-a", identity))
+
+        assertTrue(store.revoke("peer-a"))
+        assertFalse(store.isTrusted("peer-a", identity))
+
+        val restarted = RelayPeerStore(contextFor("local"))
+        assertTrue(restarted.isRevoked("peer-a"))
+        assertFalse(restarted.isTrusted("peer-a", identity))
+        assertEquals(identity, restarted.pinnedIdentity("peer-a"))
+    }
+
+    // Mutation caught: clearing a tombstone when pin is called again with either the same or a replacement identity.
+    @Test
+    fun pinCannotSilentlyReactivateARevokedPeer() {
+        val original = fixtureIdentity()
+        val replacement = fixtureIdentity(ENCRYPTION_B, SIGNING_B, 8)
+        val store = RelayPeerStore(contextFor("local"))
+        assertTrue(store.pin("peer-a", original))
+        assertTrue(store.revoke("peer-a"))
+        val restarted = RelayPeerStore(contextFor("local"))
+
+        assertFalse(restarted.pin("peer-a", original))
+        assertFalse(restarted.pin("peer-a", replacement))
+
+        val afterRepin = RelayPeerStore(contextFor("local"))
+        assertTrue(afterRepin.isRevoked("peer-a"))
+        assertFalse(afterRepin.isTrusted("peer-a", original))
+        assertFalse(afterRepin.isTrusted("peer-a", replacement))
+        assertEquals(original, afterRepin.pinnedIdentity("peer-a"))
+    }
+
+    // Mutation caught: revoking every peer instead of the named install, or toggling revocation off on a repeat call.
+    @Test
+    fun revocationIsIdempotentAndDoesNotRevokeOtherPeers() {
+        val identityA = fixtureIdentity()
+        val identityB = fixtureIdentity(ENCRYPTION_B, SIGNING_B, 9)
+        val store = RelayPeerStore(contextFor("local"))
+        assertTrue(store.pin("peer-a", identityA))
+        assertTrue(store.pin("peer-b", identityB))
+
+        assertTrue(store.revoke("peer-a"))
+        assertTrue(store.revoke("peer-a"))
+
+        val restarted = RelayPeerStore(contextFor("local"))
+        assertTrue(restarted.isRevoked("peer-a"))
+        assertFalse(restarted.isTrusted("peer-a", identityA))
+        assertFalse(restarted.isRevoked("peer-b"))
+        assertTrue(restarted.isTrusted("peer-b", identityB))
+        assertEquals(identityB, restarted.pinnedIdentity("peer-b"))
+    }
+
+    // Mutation caught: discarding revocation for an unknown install and accepting a delayed pairing afterward.
+    @Test
+    fun revocationBeforePinningStillBlocksDelayedPinAfterReconstruction() {
+        assertTrue(RelayPeerStore(contextFor("local")).revoke("not-yet-pinned"))
+        val restarted = RelayPeerStore(contextFor("local"))
+
+        assertTrue(restarted.isRevoked("not-yet-pinned"))
+        assertFalse(restarted.pin("not-yet-pinned", fixtureIdentity()))
+        assertFalse(restarted.isTrusted("not-yet-pinned", fixtureIdentity()))
+        assertNull(restarted.pinnedIdentity("not-yet-pinned"))
+    }
+
+    // Mutation caught: accepting empty/control-character install IDs or normalizing malformed IDs into a valid pin.
+    @Test
+    fun emptyAndMalformedInstallIdsFailClosed() {
+        val identity = fixtureIdentity()
+        val store = RelayPeerStore(contextFor("local"))
+        assertTrue(store.pin("peer-a", identity))
+
+        listOf("", " ", "\t\n", "peer-a\u0000", "peer-a\n").forEach { invalid ->
+            assertFalse(store.pin(invalid, identity))
+            assertFalse(store.isTrusted(invalid, identity))
+            assertFalse(store.revoke(invalid))
+            assertFalse(store.isRevoked(invalid))
+            assertNull(store.pinnedIdentity(invalid))
+        }
+
+        assertEquals(identity, RelayPeerStore(contextFor("local")).pinnedIdentity("peer-a"))
+        assertTrue(store.isTrusted("peer-a", identity))
+    }
+
+    // Mutation caught: storing malformed keys/versions or an invalid/inconsistent fingerprint before validation.
+    @Test
+    fun malformedPublicIdentitiesCannotCreateOrOverwritePins() {
+        val original = fixtureIdentity()
+        val store = RelayPeerStore(contextFor("local"))
+        assertTrue(store.pin("peer-a", original))
+        val malformedKeys = listOf("", " ", "%%%", "A".repeat(43),
+            base64Url(ByteArray(31) { 1 }), base64Url(ByteArray(33) { 1 }), "$ENCRYPTION_A=")
+        val malformed = malformedKeys.flatMap { key ->
+            listOf(fixtureIdentity(encryptionPublicKey = key), fixtureIdentity(signingPublicKey = key))
+        } + listOf(
+            fixtureIdentity(keyVersion = 0),
+            fixtureIdentity(keyVersion = -1),
+            original.copy(fingerprint = ""),
+            original.copy(fingerprint = "z".repeat(64)),
+            original.copy(fingerprint = original.fingerprint.uppercase()),
+            original.copy(fingerprint = "0".repeat(64))
+        )
+
+        malformed.forEachIndexed { index, invalid ->
+            val unpinnedId = "invalid-peer-$index"
+            assertFalse("Malformed identity $index must not be pinned", store.pin(unpinnedId, invalid))
+            assertFalse(store.isTrusted(unpinnedId, invalid))
+            assertNull(store.pinnedIdentity(unpinnedId))
+            assertFalse(store.pin("peer-a", invalid))
+            assertFalse(store.isTrusted("peer-a", invalid))
+            assertEquals(original, store.pinnedIdentity("peer-a"))
+        }
+
+        val restarted = RelayPeerStore(contextFor("local"))
+        assertEquals(original, restarted.pinnedIdentity("peer-a"))
+        assertTrue(restarted.isTrusted("peer-a", original))
+        malformed.indices.forEach { assertNull(restarted.pinnedIdentity("invalid-peer-$it")) }
+    }
+
+    private fun assertRejectedWithoutChangingPin(candidate: RelayPublicIdentity) {
+        val original = fixtureIdentity()
+        val store = RelayPeerStore(contextFor("local"))
+        assertTrue(store.pin("peer-a", original))
+
+        assertFalse(store.isTrusted("peer-a", candidate))
+        assertEquals(original, store.pinnedIdentity("peer-a"))
+        assertFalse(store.pin("peer-a", candidate))
+
+        val restarted = RelayPeerStore(contextFor("local"))
+        assertEquals(original, restarted.pinnedIdentity("peer-a"))
+        assertTrue(restarted.isTrusted("peer-a", original))
+        assertFalse(restarted.isTrusted("peer-a", candidate))
+    }
+
+    private fun fixtureIdentity(
+        encryptionPublicKey: String = ENCRYPTION_A,
+        signingPublicKey: String = SIGNING_A,
+        keyVersion: Int = 7
+    ) = RelayPublicIdentity(
+        encryptionPublicKey = encryptionPublicKey,
+        signingPublicKey = signingPublicKey,
+        keyVersion = keyVersion,
+        fingerprint = expectedFingerprint(encryptionPublicKey, signingPublicKey, keyVersion)
+    )
+
+    // Wire contract: UTF-8(label NUL decimal-version NUL encryption-key NUL signing-key),
+    // with no trailing NUL. Keys are unpadded Base64URL raw 32-byte public values;
+    // fingerprint is lowercase SHA-256 hex. Install ID is separately bound by the peer pin.
+    // Deliberately independent: do not call a production canonicalization/fingerprint helper here.
+    private fun expectedFingerprint(encryptionPublicKey: String, signingPublicKey: String, keyVersion: Int): String {
+        val canonicalBytes = ("dosefolk-relay-identity-v1\u0000" +
+            keyVersion.toString() + "\u0000" + encryptionPublicKey + "\u0000" + signingPublicKey)
+            .toByteArray(Charsets.UTF_8)
+        return MessageDigest.getInstance("SHA-256").digest(canonicalBytes)
+            .joinToString("") { "%02x".format(it.toInt() and 0xff) }
+    }
+
+    private fun assertCanonicalPublicKey(encoded: String) {
+        assertTrue(encoded.matches(Regex("[A-Za-z0-9_-]{43}")))
+        val bytes = Base64.getUrlDecoder().decode(encoded)
+        assertEquals(32, bytes.size)
+        assertEquals(encoded, base64Url(bytes))
+        assertTrue(bytes.any { it != 0.toByte() })
+    }
+
+    // Only namespace real Android preferences: no fake or mocked SharedPreferences.
+    // Fresh wrappers simulate reconstructing a store; a different install gets isolated persistence.
+    private fun contextFor(install: String): Context = object : ContextWrapper(application) {
+        override fun getApplicationContext(): Context = this
+
+        override fun getSharedPreferences(name: String, mode: Int): SharedPreferences =
+            super.getSharedPreferences("$namespace-$install-$name", mode)
+    }
+
+    companion object {
+        // Public-only RFC 7748 X25519 and RFC 8032 Ed25519 test vectors; no private fixtures.
+        private val ENCRYPTION_A = publicHex("8520f0098930a754748b7ddcb43ef75a0dbf3a0d26381af4eba4a98eaa9b4e6a")
+        private val ENCRYPTION_B = publicHex("de9edb7d7b7dc1b4d35b61c2ece435373f8343c85b78674dadfc7e146f882b4f")
+        private val SIGNING_A = publicHex("d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a")
+        private val SIGNING_B = publicHex("3d4017c3e843895a92b70aa74d1b7ebc9c982ccf2ec4968cc0cd55f12af4660c")
+
+        private fun publicHex(hex: String): String =
+            base64Url(hex.chunked(2).map { it.toInt(16).toByte() }.toByteArray())
+
+        private fun base64Url(bytes: ByteArray): String = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+    }
+}
