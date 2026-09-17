@@ -4,7 +4,10 @@ import android.content.Context
 import org.json.JSONException
 import org.json.JSONObject
 
-/** Locally authenticated peer pins. Server metadata may be compared, never used to replace a pin. */
+/**
+ * Locally authenticated peer pins. Server metadata may be compared, never used to replace a pin.
+ * Call off the UI thread: pin/revoke perform synchronous disk commits, and initial reads may wait for disk.
+ */
 class RelayPeerStore(context: Context) {
     private val preferences = context.applicationContext
         .getSharedPreferences("dosefolk_relay_peers", Context.MODE_PRIVATE)

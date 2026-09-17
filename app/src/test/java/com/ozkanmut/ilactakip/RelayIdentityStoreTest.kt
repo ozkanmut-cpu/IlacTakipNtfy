@@ -14,6 +14,7 @@ import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -21,21 +22,28 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import org.robolectric.util.ReflectionHelpers
+import java.io.File
+import java.io.IOException
 import java.security.MessageDigest
 import java.security.GeneralSecurityException
 import java.util.Base64
 import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
+@Config(sdk = [35])
 class RelayIdentityStoreTest {
     private lateinit var application: Context
     private lateinit var namespace: String
     private lateinit var masterAead: Aead
+    private val createdMasters = mutableSetOf<String>()
 
     @Before
     fun setUp() {
         application = ApplicationProvider.getApplicationContext()
         namespace = "relay-test-${UUID.randomUUID()}"
+        createdMasters.clear()
         AeadConfig.register()
         masterAead = newTestMasterAead()
     }
@@ -304,7 +312,8 @@ class RelayIdentityStoreTest {
     @Test
     fun unavailableMasterCannotCreateIdentityOrPersistAnything() {
         val unavailable = object : RelayMasterAeadSource {
-            override fun getOrCreate(): Aead = throw GeneralSecurityException("Test master unavailable")
+            override fun exists(): Boolean = false
+            override fun createNew(): Aead = throw GeneralSecurityException("Test master unavailable")
             override fun getExisting(): Aead = throw AssertionError("No identity exists yet")
         }
 
@@ -321,7 +330,8 @@ class RelayIdentityStoreTest {
         val original = identityStoreFor("local").publicIdentity()
         val before = identityPreferences().all
         val unavailable = object : RelayMasterAeadSource {
-            override fun getOrCreate(): Aead = throw AssertionError("Restart must not generate a wrapping key")
+            override fun exists(): Boolean = true
+            override fun createNew(): Aead = throw AssertionError("Restart must not generate a wrapping key")
             override fun getExisting(): Aead = throw GeneralSecurityException("Test master unavailable")
         }
 
@@ -377,14 +387,161 @@ class RelayIdentityStoreTest {
         assertTrue("Failed load must not rewrite persisted state", tampered == preferences.all)
     }
 
-    private fun identityStoreFor(install: String): RelayIdentityStore =
-        RelayIdentityStore(contextFor(install), object : RelayMasterAeadSource {
-            override fun getOrCreate(): Aead = masterAead
+    // Mutation caught: silently generating replacement v1 keys when identity preferences disappear but the master survives.
+    @Test
+    fun lostIdentityPreferencesWithSurvivingMasterFailClosedWithoutWrites() {
+        identityStoreFor("local").publicIdentity()
+        assertTrue(identityPreferences().edit().clear().commit())
+
+        assertThrows(GeneralSecurityException::class.java) { identityStoreFor("local", cold = true).publicIdentity() }
+
+        assertTrue(coldContextFor("local").getSharedPreferences("dosefolk_relay_identity", 0).all.isEmpty())
+    }
+
+    // Mutation caught: bootstrapping a new identity into surviving peer trust when the local identity and master are gone.
+    @Test
+    fun survivingPeerTrustPreventsFreshIdentityBootstrap() {
+        assertTrue(RelayPeerStore(contextFor("local")).pin("peer-a", fixtureIdentity()))
+
+        assertThrows(GeneralSecurityException::class.java) { identityStoreFor("local", cold = true).publicIdentity() }
+
+        assertTrue(identityPreferences().all.isEmpty())
+        assertTrue(RelayPeerStore(coldContextFor("local")).isTrusted("peer-a", fixtureIdentity()))
+    }
+
+    // Mutation caught: keeping identity/pin state only in Android's SharedPreferences cache instead of durable files.
+    @Test
+    fun identityAndPeerPinSurviveFreshPreferencesInstancesLoadedFromDisk() {
+        val original = identityStoreFor("local").publicIdentity()
+        val peer = fixtureIdentity()
+        assertTrue(RelayPeerStore(contextFor("local")).pin("peer-a", peer))
+        val cold = coldContextFor("local")
+        assertNotSame(identityPreferences(), cold.getSharedPreferences("dosefolk_relay_identity", 0))
+        assertNotSame(contextFor("local").getSharedPreferences("dosefolk_relay_peers", 0),
+            cold.getSharedPreferences("dosefolk_relay_peers", 0))
+
+        assertEquals(original, RelayIdentityStore(cold, existingMasterOnly(masterAead)).publicIdentity())
+        assertEquals(peer, RelayPeerStore(cold).pinnedIdentity("peer-a"))
+        assertTrue(RelayPeerStore(cold).isTrusted("peer-a", peer))
+    }
+
+    // Mutation caught: retaining a revocation only in memory or allowing re-pin after a disk-only reconstruction.
+    @Test
+    fun revocationSurvivesFreshPreferencesInstancesLoadedFromDisk() {
+        val peer = fixtureIdentity()
+        val store = RelayPeerStore(contextFor("local"))
+        assertTrue(store.pin("peer-a", peer))
+        assertTrue(store.revoke("peer-a"))
+
+        val coldStore = RelayPeerStore(coldContextFor("local"))
+        assertTrue(coldStore.isRevoked("peer-a"))
+        assertFalse(coldStore.isTrusted("peer-a", peer))
+        assertFalse(coldStore.pin("peer-a", peer))
+    }
+
+    // Mutation caught: exporting an uncommitted identity or silently retrying a half-completed bootstrap under its orphan master.
+    @Test
+    fun failedIdentityCommitCannotExportUncommittedOrReplacementIdentity() {
+        val preferences = identityPreferences()
+        val restoreWrites = failDiskWrites(preferences)
+        try {
+            assertThrows(IOException::class.java) { identityStoreFor("local").publicIdentity() }
+            assertTrue("Failed commit must not expose its in-memory identity", preferences.all.isEmpty())
+        } finally {
+            restoreWrites()
+        }
+
+        assertThrows(GeneralSecurityException::class.java) { identityStoreFor("local").publicIdentity() }
+        assertThrows(GeneralSecurityException::class.java) { identityStoreFor("local", cold = true).publicIdentity() }
+        assertTrue(coldContextFor("local").getSharedPreferences("dosefolk_relay_identity", 0).all.isEmpty())
+    }
+
+    // Mutation caught: returning false for a failed pin while its memory-only record still authenticates the peer.
+    @Test
+    fun failedPinCommitNeverGrantsTrustInMemoryOrAfterColdReload() {
+        val peer = fixtureIdentity()
+        val preferences = contextFor("local").getSharedPreferences("dosefolk_relay_peers", 0)
+        val restoreWrites = failDiskWrites(preferences)
+        try {
+            assertFalse(RelayPeerStore(contextFor("local")).pin("peer-a", peer))
+            assertFalse(RelayPeerStore(contextFor("local")).isTrusted("peer-a", peer))
+            assertNull(RelayPeerStore(contextFor("local")).pinnedIdentity("peer-a"))
+        } finally {
+            restoreWrites()
+        }
+
+        assertFalse(RelayPeerStore(coldContextFor("local")).isTrusted("peer-a", peer))
+        assertNull(RelayPeerStore(coldContextFor("local")).pinnedIdentity("peer-a"))
+    }
+
+    // Mutation caught: trusting a peer after a failed revoke, or treating a memory-only repeated revoke as durably committed.
+    @Test
+    fun failedRevokeReportsNondurabilityButFencesTrustUntilADurableRetry() {
+        val peer = fixtureIdentity()
+        val store = RelayPeerStore(contextFor("local"))
+        assertTrue(store.pin("peer-a", peer))
+        val preferences = contextFor("local").getSharedPreferences("dosefolk_relay_peers", 0)
+        val restoreWrites = failDiskWrites(preferences)
+        try {
+            assertFalse(store.revoke("peer-a"))
+            val reconstructed = RelayPeerStore(contextFor("local"))
+            assertTrue(reconstructed.isRevoked("peer-a"))
+            assertFalse(reconstructed.isTrusted("peer-a", peer))
+            assertFalse(reconstructed.pin("peer-a", peer))
+            assertFalse(reconstructed.revoke("peer-a"))
+        } finally {
+            restoreWrites()
+        }
+
+        assertTrue(store.revoke("peer-a"))
+        assertTrue(RelayPeerStore(coldContextFor("local")).isRevoked("peer-a"))
+        assertFalse(RelayPeerStore(coldContextFor("local")).isTrusted("peer-a", peer))
+    }
+
+    private fun identityStoreFor(install: String, cold: Boolean = false): RelayIdentityStore =
+        RelayIdentityStore(if (cold) coldContextFor(install) else contextFor(install), object : RelayMasterAeadSource {
+            override fun exists(): Boolean = install in createdMasters
+            override fun createNew(): Aead {
+                check(createdMasters.add(install)) { "Test master must not be replaced" }
+                return masterAead
+            }
             override fun getExisting(): Aead = masterAead
         })
 
+    // Real Android SharedPreferencesImpl, constructed from the same file with no Context cache/map reuse.
+    // The constructor and backing-file fields are verified against Android 15, matching @Config above.
+    private fun coldContextFor(install: String): Context = object : ContextWrapper(contextFor(install)) {
+        private val opened = mutableMapOf<String, SharedPreferences>()
+        override fun getApplicationContext(): Context = this
+        override fun getSharedPreferences(name: String, mode: Int): SharedPreferences = opened.getOrPut(name) {
+            val warm = baseContext.getSharedPreferences(name, mode)
+            val file = ReflectionHelpers.getField<File>(warm, "mFile")
+            val constructor = Class.forName("android.app.SharedPreferencesImpl")
+                .getDeclaredConstructor(File::class.java, Int::class.javaPrimitiveType!!)
+            constructor.isAccessible = true
+            constructor.newInstance(file, mode) as SharedPreferences
+        }
+    }
+
+    // Fault only the real disk destination. Android still performs commitToMemory and returns its
+    // real commit() failure, unlike a mock returning false without the relevant memory side effects.
+    private fun failDiskWrites(preferences: SharedPreferences): () -> Unit {
+        preferences.all // Finish its asynchronous initial disk load before changing the destination.
+        val file = ReflectionHelpers.getField<File>(preferences, "mFile")
+        val backup = ReflectionHelpers.getField<File>(preferences, "mBackupFile")
+        val nonDirectory = File(application.cacheDir, "relay-write-fault-${UUID.randomUUID()}")
+        check(nonDirectory.createNewFile())
+        ReflectionHelpers.setField(preferences, "mFile", File(nonDirectory, "prefs.xml"))
+        ReflectionHelpers.setField(preferences, "mBackupFile", File(nonDirectory, "prefs.xml.bak"))
+        return {
+            ReflectionHelpers.setField(preferences, "mFile", file)
+            ReflectionHelpers.setField(preferences, "mBackupFile", backup)
+        }
+    }
+
     private fun existingMasterOnly(aead: Aead): RelayMasterAeadSource = object : RelayMasterAeadSource {
-        override fun getOrCreate(): Aead = throw AssertionError("Existing identity must not be regenerated")
+        override fun exists(): Boolean = true
+        override fun createNew(): Aead = throw AssertionError("Existing identity must not be regenerated")
         override fun getExisting(): Aead = aead
     }
 

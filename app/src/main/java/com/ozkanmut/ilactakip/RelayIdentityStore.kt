@@ -9,6 +9,7 @@ import com.google.crypto.tink.TinkProtoKeysetFormat
 import com.google.crypto.tink.hybrid.HpkeParameters
 import com.google.crypto.tink.hybrid.HpkePublicKey
 import com.google.crypto.tink.hybrid.HybridConfig
+import com.google.crypto.tink.integration.android.AndroidKeystore
 import com.google.crypto.tink.integration.android.AndroidKeystoreKmsClient
 import com.google.crypto.tink.signature.Ed25519Parameters
 import com.google.crypto.tink.signature.Ed25519PublicKey
@@ -78,6 +79,8 @@ class RelayIdentityStore internal constructor(context: Context, private val mast
 
     private val preferences = context.applicationContext
         .getSharedPreferences(PREFERENCES, Context.MODE_PRIVATE)
+    private val peerPreferences = context.applicationContext
+        .getSharedPreferences("dosefolk_relay_peers", Context.MODE_PRIVATE)
 
     /** Reopens encrypted persistent keysets; no process-global identity or private export exists. */
     @AccessesPartialKey
@@ -85,7 +88,14 @@ class RelayIdentityStore internal constructor(context: Context, private val mast
         HybridConfig.register()
         SignatureConfig.register()
         val stored = preferences.all
-        if (stored.isEmpty()) return@synchronized createIdentity()
+        if (stored.isEmpty()) {
+            // Empty preferences are not proof of a new installation: the identity may have been
+            // deleted, or bootstrap interrupted after its master was created. Never replace it.
+            if (masterAeadSource.exists() || peerPreferences.all.isNotEmpty()) {
+                throw GeneralSecurityException("Relay identity is missing but prior identity or trust state remains")
+            }
+            return@synchronized createIdentity()
+        }
         if (stored.keys != setOf(ENCRYPTION_KEYSET, SIGNING_KEYSET, KEY_VERSION)) {
             throw GeneralSecurityException("Incomplete relay identity storage")
         }
@@ -103,7 +113,7 @@ class RelayIdentityStore internal constructor(context: Context, private val mast
     @AccessesPartialKey
     private fun createIdentity(): RelayPublicIdentity {
         // Unlike AndroidKeysetManager, this API throws on Keystore failure and has no plaintext fallback.
-        val master = masterAeadSource.getOrCreate()
+        val master = masterAeadSource.createNew()
         val encryption = KeysetHandle.generateNew(encryptionParameters())
         val signing = KeysetHandle.generateNew(signingParameters())
         val version = 1
@@ -193,13 +203,20 @@ class RelayIdentityStore internal constructor(context: Context, private val mast
 
 /** Internal platform boundary; provides only an AEAD primitive, never wrapping-key bytes. */
 internal interface RelayMasterAeadSource {
-    fun getOrCreate(): Aead
+    fun exists(): Boolean
+    fun createNew(): Aead
     fun getExisting(): Aead
 }
 
 private object AndroidRelayMasterAeadSource : RelayMasterAeadSource {
-    private const val MASTER_KEY_URI = "android-keystore://dosefolk_relay_identity_master_v1"
+    private const val MASTER_KEY_ALIAS = "dosefolk_relay_identity_master_v1"
+    private const val MASTER_KEY_URI = "android-keystore://$MASTER_KEY_ALIAS"
 
-    override fun getOrCreate(): Aead = AndroidKeystoreKmsClient.getOrGenerateNewAeadKey(MASTER_KEY_URI)
+    override fun exists(): Boolean = AndroidKeystore.hasKey(MASTER_KEY_ALIAS)
+    override fun createNew(): Aead {
+        // Tink atomically refuses an existing alias; never reuse/overwrite a surviving master.
+        AndroidKeystoreKmsClient.generateNewAeadKey(MASTER_KEY_URI)
+        return getExisting()
+    }
     override fun getExisting(): Aead = AndroidKeystoreKmsClient().getAead(MASTER_KEY_URI)
 }
