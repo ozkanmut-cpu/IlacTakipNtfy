@@ -286,6 +286,63 @@ test('confirm retry returns the exact confirmed transcript without duplicate rou
   }), null);
 });
 
+test('confirmed accept and confirm retry proofs expire at the exact offer boundary without changing routes', async t => {
+  const { metadataStore } = await storeFixture(t);
+  const now = 1_700_000_000_000;
+  const expiresAt = now + TEN_MINUTES;
+  installation(metadataStore, { installId: 'relay-expiry-A', now });
+  installation(metadataStore, { installId: 'relay-expiry-B', now });
+  const pairingSecret = 'pairing-secret-confirmed-expiry-0011';
+  const offerId = 'offer-confirmed-expiry-0011';
+  createPairingOffer(metadataStore, {
+    offerId,
+    creatorInstallId: 'relay-expiry-A',
+    secretHash: hashPairingSecret(pairingSecret),
+    creatorProof: createPairingProof(pairingSecret, {
+      offerId,
+      role: 'creator',
+      installId: 'relay-expiry-A'
+    }),
+    now
+  });
+  const acceptRetry = {
+    offerId,
+    peerInstallId: 'relay-expiry-B',
+    pairingSecret,
+    peerProof: createPairingProof(pairingSecret, {
+      offerId,
+      role: 'peer',
+      installId: 'relay-expiry-B'
+    })
+  };
+  const confirmRetry = { offerId, actorInstallId: 'relay-expiry-A', pairingSecret };
+  assert.ok(acceptPairingOffer(metadataStore, { ...acceptRetry, now: now + 1 }));
+  assert.ok(confirmPairingOffer(metadataStore, { ...confirmRetry, now: now + 2 }));
+  const routesFromA = metadataStore.listActiveRoutesForSender('relay-expiry-A');
+  const routesFromB = metadataStore.listActiveRoutesForSender('relay-expiry-B');
+  assert.equal(routesFromA.length, 1);
+  assert.equal(routesFromB.length, 1);
+
+  assert.equal(acceptPairingOffer(metadataStore, {
+    ...acceptRetry,
+    now: expiresAt - 1
+  }).status, 'confirmed');
+  assert.equal(confirmPairingOffer(metadataStore, {
+    ...confirmRetry,
+    now: expiresAt - 1
+  }).status, 'confirmed');
+  assert.deepEqual(metadataStore.listActiveRoutesForSender('relay-expiry-A'), routesFromA);
+  assert.deepEqual(metadataStore.listActiveRoutesForSender('relay-expiry-B'), routesFromB);
+
+  for (const retryAt of [expiresAt, expiresAt + 1]) {
+    assert.equal(acceptPairingOffer(metadataStore, { ...acceptRetry, now: retryAt }), null);
+    assert.equal(confirmPairingOffer(metadataStore, { ...confirmRetry, now: retryAt }), null);
+    assert.deepEqual(metadataStore.listActiveRoutesForSender('relay-expiry-A'), routesFromA);
+    assert.deepEqual(metadataStore.listActiveRoutesForSender('relay-expiry-B'), routesFromB);
+    assert.equal(metadataStore.getPairingOffer(offerId).status, 'confirmed');
+  }
+});
+
 test('offer cannot confirm until both authenticated devices prove pairing-secret knowledge', async t => {
   const { metadataStore } = await storeFixture(t);
   const now = 1_700_000_000_000;
