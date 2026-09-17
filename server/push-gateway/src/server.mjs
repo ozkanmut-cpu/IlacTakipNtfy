@@ -4,17 +4,20 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { APNsClient } from './apns.mjs';
 import { FCMClient } from './fcm.mjs';
+import { authenticateInstall, issueInstallCredential } from './install-auth.mjs';
 import { loadGatewaySecrets } from './local-secrets.mjs';
 import { NtfyAuthManager } from './ntfy-auth.mjs';
 import { PushDispatcher } from './push-dispatcher.mjs';
 import { validatePushRegistration } from './push-registration.mjs';
 import { buildProvisioningCredentials } from './provisioning-credentials.mjs';
+import { openMetadataStore } from './relay-metadata-store.mjs';
 import { clearStoredPushTarget, selectWakeTargets } from './wake-targets.mjs';
 
 const cfg = {
   host: process.env.HOST || '127.0.0.1',
   port: Number(process.env.PORT || 2587),
   dataFile: process.env.DATA_FILE || '/data/registrations.json',
+  relayMetadataDb: process.env.RELAY_METADATA_DB || '/data/metadata/relay-metadata.sqlite3',
   installHmacKey: process.env.INSTALL_HMAC_KEY || '',
   internalSecret: process.env.INTERNAL_WAKE_SECRET || '',
   bundleId: process.env.APNS_BUNDLE_ID || 'com.ozkanmut.dosefolk'
@@ -66,6 +69,19 @@ function enrollmentLink(installId, ticket) {
 function validInstallId(value) {
   return typeof value === 'string' && /^[A-Za-z0-9._-]{8,128}$/.test(value);
 }
+function validIdentityKey(value) {
+  return typeof value === 'string'
+    && value.length >= 8
+    && value.length <= 8192
+    && value === value.trim()
+    && !/[\x00-\x1F\x7F]/.test(value);
+}
+function nativeProvisionRequest(body) {
+  return body?.platform !== undefined
+    || body?.encryptionPublicKey !== undefined
+    || body?.signingPublicKey !== undefined
+    || body?.keyVersion !== undefined;
+}
 function hasInternalAccess(req) {
   return Boolean(cfg.internalSecret) && safeEqual(String(req.headers['x-internal-secret'] || ''), cfg.internalSecret);
 }
@@ -96,6 +112,37 @@ async function synchronizeBoundAccess(store, installId, subscriptions) {
   if (typeof boundLocalTopic !== 'string' || !boundLocalTopic) throw new Error('ntfy_reprovision_required');
   await ntfyAuth.setAccess(installId, boundLocalTopic, subscriptions);
   return boundLocalTopic;
+}
+function provisionNativeInstall(body) {
+  if (body.platform !== 'android' && body.platform !== 'ios') return { status: 400, body: { error: 'unsupported_platform' } };
+  if (!validIdentityKey(body.encryptionPublicKey) || !validIdentityKey(body.signingPublicKey)) {
+    return { status: 400, body: { error: 'invalid_identity_key' } };
+  }
+  const keyVersion = body.keyVersion === undefined ? 1 : body.keyVersion;
+  if (!Number.isSafeInteger(keyVersion) || keyVersion < 1) return { status: 400, body: { error: 'invalid_key_version' } };
+
+  const metadataStore = openMetadataStore(cfg.relayMetadataDb);
+  try {
+    let installId;
+    do {
+      installId = `relay-${randomBytes(18).toString('base64url')}`;
+    } while (metadataStore.getInstallation(installId));
+
+    const issued = issueInstallCredential();
+    const now = Date.now();
+    metadataStore.upsertInstallation({
+      installId,
+      platform: body.platform,
+      credentialHash: issued.credentialHash,
+      encryptionPublicKey: body.encryptionPublicKey,
+      signingPublicKey: body.signingPublicKey,
+      keyVersion,
+      now
+    });
+    return { status: 200, body: { installId, credential: issued.credential } };
+  } finally {
+    metadataStore.close();
+  }
 }
 
 const server = http.createServer(async (req, res) => {
@@ -133,8 +180,13 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === 'POST' && req.url === '/v1/provision') {
-      if (!provisioningReady()) return json(res, 503, { error: 'not_provisioned' });
       const body = await readJson(req);
+      if (nativeProvisionRequest(body)) {
+        const result = provisionNativeInstall(body);
+        return json(res, result.status, result.body);
+      }
+
+      if (!provisioningReady()) return json(res, 503, { error: 'not_provisioned' });
       if (!validInstallId(body.installId) || typeof body.ticket !== 'string') return json(res, 400, { error: 'invalid_request' });
       const store = await loadStore();
       const hash = ticketHash(body.ticket);

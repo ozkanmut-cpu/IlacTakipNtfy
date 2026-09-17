@@ -62,6 +62,8 @@ export function openMetadataStore(filePath) {
       revoked_at INTEGER
     );
 
+    CREATE UNIQUE INDEX IF NOT EXISTS installations_credential_hash
+      ON installations(credential_hash);
     CREATE INDEX IF NOT EXISTS routes_sender_status
       ON routes(sender_install_id, status);
     CREATE INDEX IF NOT EXISTS routes_recipient_status
@@ -87,6 +89,9 @@ export function openMetadataStore(filePath) {
   `);
   const getInstallationStatement = db.prepare(
     'SELECT * FROM installations WHERE install_id = ?'
+  );
+  const getInstallationByCredentialHashStatement = db.prepare(
+    'SELECT * FROM installations WHERE credential_hash = ?'
   );
   const insertRouteStatement = db.prepare(`
     INSERT INTO routes (
@@ -116,6 +121,9 @@ export function openMetadataStore(filePath) {
     },
     getInstallation(installId) {
       return mapInstallation(getInstallationStatement.get(installId));
+    },
+    getInstallationByCredentialHash(credentialHash) {
+      return mapInstallation(getInstallationByCredentialHashStatement.get(credentialHash));
     },
     insertRoute(route) {
       insertRouteStatement.run({

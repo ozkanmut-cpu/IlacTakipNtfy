@@ -17,6 +17,7 @@ COPY src ./src
 RUN node --check src/server.mjs \
     && node --check src/apns.mjs \
     && node --check src/fcm.mjs \
+    && node --check src/install-auth.mjs \
     && node --check src/relay-metadata-store.mjs \
     && node --check src/relay-queue-store.mjs \
     && test "$(ntfy --version)" = "ntfy version 2.28.0"
