@@ -13,6 +13,7 @@ import { buildProvisioningCredentials } from './provisioning-credentials.mjs';
 import { openMetadataStore } from './relay-metadata-store.mjs';
 import { acceptPairingOffer, confirmPairingOffer, createPairingOffer } from './relay-pairing.mjs';
 import { openRelayQueue } from './relay-queue-store.mjs';
+import { RelayWakeScheduler } from './relay-wake-scheduler.mjs';
 import { enqueueMessages, readInbox, acknowledgeMessages, MAX_RELAY_REQUEST_BYTES } from './relay-messages.mjs';
 import { listRoutesForSender } from './relay-routes.mjs';
 import { relayMetrics } from './relay-metrics.mjs';
@@ -86,6 +87,32 @@ async function saveStore(store) {
   await writeFile(tmp, JSON.stringify(store), { mode: 0o600 });
   await rename(tmp, cfg.dataFile);
 }
+let relayWakeRun = Promise.resolve();
+function triggerRelayWakes() {
+  const run = relayWakeRun.then(async () => {
+    let queue;
+    try {
+      const store = await loadStore();
+      queue = openRelayQueue(cfg.relayQueueDb);
+      const scheduler = new RelayWakeScheduler({
+        queue,
+        dispatcher: pushDispatcher,
+        resolveInstall: installId => store.installs[installId] || null
+      });
+      return await scheduler.runDue(Date.now());
+    } finally {
+      queue?.close();
+    }
+  });
+  relayWakeRun = run.catch(() => {});
+  return run;
+}
+function runRelayWakesInBackground() {
+  void triggerRelayWakes().catch(() => console.error('relay wake dispatch failed'));
+}
+const relayWakeTimer = setInterval(runRelayWakesInBackground, 30_000);
+relayWakeTimer.unref();
+runRelayWakesInBackground();
 function safeEqual(a, b) {
   const aa = Buffer.from(a || ''); const bb = Buffer.from(b || '');
   return aa.length === bb.length && timingSafeEqual(aa, bb);
@@ -228,7 +255,11 @@ const server = http.createServer(async (req, res) => {
         // Recheck after the asynchronous body read; revocation may have happened meanwhile.
         if (!authenticateInstall(header, metadataStore)) return json(res, 401, { error: 'unauthorized' });
         queue = openRelayQueue(cfg.relayQueueDb);
-        if (relayPath === '/v1/messages') return json(res, 201, enqueueMessages(metadataStore, queue, actor, body));
+        if (relayPath === '/v1/messages') {
+          const result = enqueueMessages(metadataStore, queue, actor, body);
+          runRelayWakesInBackground();
+          return json(res, 201, result);
+        }
         if (relayPath === '/v1/messages/ack') return json(res, 200, acknowledgeMessages(metadataStore, queue, actor, body));
         const query = new URL(req.url, 'http://localhost').searchParams;
         const rawLimit = query.get('limit');

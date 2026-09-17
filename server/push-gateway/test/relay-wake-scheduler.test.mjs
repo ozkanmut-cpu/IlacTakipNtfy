@@ -1,16 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { spawn } from 'node:child_process';
+import { once } from 'node:events';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FCMClient } from '../src/fcm.mjs';
+import { issueInstallCredential } from '../src/install-auth.mjs';
 import { PushDispatcher } from '../src/push-dispatcher.mjs';
+import { openMetadataStore } from '../src/relay-metadata-store.mjs';
 import { openRelayQueue } from '../src/relay-queue-store.mjs';
 import { RelayWakeScheduler } from '../src/relay-wake-scheduler.mjs';
 
 const NOW = 1_800_000_000_000;
 const RECIPIENT = 'recipient-B';
 const LIMITS = { maxCount: 10_000, maxBytes: 100 * 1024 * 1024 };
+
+function deferred() {
+  let resolve;
+  const promise = new Promise(done => { resolve = done; });
+  return { promise, resolve };
+}
 
 function relayMessage(messageId, extra = {}) {
   return {
@@ -27,7 +37,12 @@ function relayMessage(messageId, extra = {}) {
   };
 }
 
-async function fixture(t, { send = async () => 'provider-message-id' } = {}) {
+async function fixture(t, {
+  send = async () => 'provider-message-id',
+  resolveInstall = installId => installId === RECIPIENT
+    ? { platform: 'android', pushToken: 'fid-opaque-recipient-target' }
+    : null
+} = {}) {
   const dir = await mkdtemp(join(tmpdir(), 'dosefolk-relay-wake-'));
   let queue = openRelayQueue(join(dir, 'queue.sqlite3'));
   const providerMessages = [];
@@ -48,9 +63,7 @@ async function fixture(t, { send = async () => 'provider-message-id' } = {}) {
   let scheduler = new RelayWakeScheduler({
     queue,
     dispatcher,
-    resolveInstall: installId => installId === RECIPIENT
-      ? { platform: 'android', pushToken: 'fid-opaque-recipient-target' }
-      : null
+    resolveInstall
   });
 
   t.after(async () => {
@@ -69,9 +82,7 @@ async function fixture(t, { send = async () => 'provider-message-id' } = {}) {
       scheduler = new RelayWakeScheduler({
         queue,
         dispatcher,
-        resolveInstall: installId => installId === RECIPIENT
-          ? { platform: 'android', pushToken: 'fid-opaque-recipient-target' }
-          : null
+        resolveInstall
       });
     }
   };
@@ -123,6 +134,34 @@ test('provider success is not delivery confirmation', async t => {
     f.queue.listRecipient(RECIPIENT).map(row => row.messageId),
     ['still-awaiting-dosefolk-ack']
   );
+});
+
+// Mutation caught: advance rows enqueued after a due recipient was selected for dispatch.
+test('an in-flight wake leaves newly enqueued recipient work immediately due', async t => {
+  const dispatchStarted = deferred();
+  const releaseDispatch = deferred();
+  const f = await fixture(t, {
+    send: async () => {
+      dispatchStarted.resolve();
+      await releaseDispatch.promise;
+      return 'provider-message-id';
+    }
+  });
+  f.enqueue([relayMessage('selected-before-dispatch')]);
+
+  const firstRun = f.scheduler.runDue(NOW);
+  await dispatchStarted.promise;
+  f.enqueue([relayMessage('enqueued-during-dispatch', { receivedAt: NOW + 1 })]);
+  releaseDispatch.resolve();
+  await firstRun;
+
+  const rows = f.queue.listRecipient(RECIPIENT);
+  assert.deepEqual(rows.map(row => ({ id: row.messageId, attempts: row.wakeAttempts, next: row.nextWakeAt })), [
+    { id: 'selected-before-dispatch', attempts: 1, next: NOW + 120_000 },
+    { id: 'enqueued-during-dispatch', attempts: 0, next: null }
+  ]);
+  await f.scheduler.runDue(NOW + 1);
+  assert.equal(f.providerMessages.length, 2);
 });
 
 // Mutation caught: use relative backoff, omit a retry, or stop retrying after the 24-hour wake.
@@ -197,4 +236,148 @@ test('ACK-drained inbox cancels every future wake attempt', async t => {
 
   assert.deepEqual(f.queue.listRecipient(RECIPIENT), []);
   assert.equal(f.providerMessages.length, 1);
+});
+
+// Mutation caught: dispatch a recipient captured in a due batch after ACK has drained its inbox.
+test('ACK draining a later selected recipient prevents its stale in-batch wake', async t => {
+  const firstDispatchStarted = deferred();
+  const releaseFirstDispatch = deferred();
+  const f = await fixture(t, {
+    resolveInstall: installId => ({
+      platform: 'android',
+      pushToken: installId === 'recipient-A' ? 'fid-recipient-a' : 'fid-recipient-b'
+    }),
+    send: async message => {
+      if (message.fid === 'fid-recipient-a') {
+        firstDispatchStarted.resolve();
+        await releaseFirstDispatch.promise;
+      }
+      return 'provider-message-id';
+    }
+  });
+  f.enqueue([
+    relayMessage('message-for-A', { recipientInstallId: 'recipient-A' }),
+    relayMessage('message-for-B')
+  ]);
+
+  const run = f.scheduler.runDue(NOW);
+  await firstDispatchStarted.promise;
+  f.queue.acknowledgeBatch(RECIPIENT, [
+    { messageId: 'message-for-B', outcome: 'processed' }
+  ]);
+  releaseFirstDispatch.resolve();
+  await run;
+
+  assert.deepEqual(f.providerMessages.map(message => message.fid), ['fid-recipient-a']);
+  assert.deepEqual(f.queue.listRecipient(RECIPIENT), []);
+});
+
+// Mutation caught: await provider availability before returning 201, or omit the post-commit wake trigger.
+test('HTTP enqueue remains durable while an unavailable provider schedules a retry', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'dosefolk-relay-wake-http-'));
+  const metadataPath = join(dir, 'metadata.sqlite3');
+  const queuePath = join(dir, 'queue.sqlite3');
+  const dataFile = join(dir, 'registrations.json');
+  const metadata = openMetadataStore(metadataPath);
+  const sender = issueInstallCredential();
+  const recipient = issueInstallCredential();
+  metadata.upsertInstallation({
+    installId: 'sender-http', platform: 'android', credentialHash: sender.credentialHash,
+    encryptionPublicKey: 'synthetic-encryption-key', signingPublicKey: 'synthetic-signing-key',
+    keyVersion: 1, now: NOW
+  });
+  metadata.upsertInstallation({
+    installId: 'recipient-http', platform: 'android', credentialHash: recipient.credentialHash,
+    encryptionPublicKey: 'synthetic-encryption-key', signingPublicKey: 'synthetic-signing-key',
+    keyVersion: 1, now: NOW
+  });
+  metadata.insertRoute({
+    routeId: 'route-http', senderInstallId: 'sender-http', recipientInstallId: 'recipient-http',
+    status: 'active', createdAt: NOW
+  });
+  metadata.close();
+  await writeFile(dataFile, JSON.stringify({
+    installs: {
+      'recipient-http': {
+        platform: 'android',
+        pushToken: 'fid-unavailable-provider',
+        subscriptions: []
+      }
+    },
+    enrollments: {},
+    topicBindings: {}
+  }));
+
+  const child = spawn(process.execPath, ['src/server.mjs'], {
+    cwd: new URL('..', import.meta.url),
+    env: {
+      ...process.env,
+      HOST: '127.0.0.1',
+      PORT: '26038',
+      DATA_FILE: dataFile,
+      RELAY_METADATA_DB: metadataPath,
+      RELAY_QUEUE_DB: queuePath,
+      INSTALL_HMAC_KEY: 'test-legacy-key',
+      INTERNAL_WAKE_SECRET: 'test-internal-key',
+      APNS_TEAM_ID: '',
+      APNS_KEY_ID: '',
+      APNS_KEY_PATH: '',
+      GOOGLE_APPLICATION_CREDENTIALS: '',
+      NTFY_AUTH_FILE: ''
+    },
+    stdio: ['ignore', 'pipe', 'pipe']
+  });
+  t.after(async () => {
+    if (child.exitCode === null) {
+      child.kill();
+      await once(child, 'exit');
+    }
+    await rm(dir, { recursive: true, force: true });
+  });
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('startup timeout')), 5000);
+    child.stdout.on('data', data => {
+      if (data.toString().includes('listening')) {
+        clearTimeout(timer);
+        resolve();
+      }
+    });
+    child.once('exit', () => {
+      clearTimeout(timer);
+      reject(new Error('startup failure'));
+    });
+  });
+
+  const response = await fetch('http://127.0.0.1:26038/v1/messages', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${sender.credential}`,
+      'content-type': 'application/json'
+    },
+    body: JSON.stringify({
+      messages: [{
+        messageId: 'http-provider-outage',
+        routeId: 'route-http',
+        recipientInstallId: 'recipient-http',
+        senderKeyVersion: 1,
+        recipientKeyVersion: 1,
+        ciphertext: Buffer.from('synthetic encrypted envelope').toString('base64')
+      }]
+    })
+  });
+  assert.equal(response.status, 201);
+
+  let queued;
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const queue = openRelayQueue(queuePath);
+    [queued] = queue.listRecipient('recipient-http');
+    queue.close();
+    if (queued?.wakeAttempts === 1) break;
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+
+  assert.equal(queued.messageId, 'http-provider-outage');
+  assert.equal(queued.ciphertext.toString(), 'synthetic encrypted envelope');
+  assert.equal(queued.wakeAttempts, 1);
+  assert.equal(queued.nextWakeAt, queued.receivedAt + 120_000);
 });

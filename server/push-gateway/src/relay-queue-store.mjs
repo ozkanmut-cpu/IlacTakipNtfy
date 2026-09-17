@@ -166,6 +166,37 @@ export function openRelayQueue(filePath) {
   });
   const inboxStatement = db.prepare(`SELECT * FROM relay_messages
     WHERE recipient_install_id = ? AND expires_at > ? ORDER BY relay_seq ASC LIMIT ?`);
+  const dueWakeRecipientsStatement = db.prepare(`
+    WITH ranked AS (
+      SELECT
+        recipient_install_id,
+        wake_attempts,
+        coalesce(next_wake_at, received_at) AS due_at,
+        max(relay_seq) OVER (PARTITION BY recipient_install_id) AS selected_through_relay_seq,
+        row_number() OVER (
+          PARTITION BY recipient_install_id
+          ORDER BY wake_attempts ASC, coalesce(next_wake_at, received_at) ASC, relay_seq ASC
+        ) AS recipient_rank
+      FROM relay_messages
+      WHERE expires_at > @now
+    )
+    SELECT recipient_install_id, wake_attempts, due_at, selected_through_relay_seq
+    FROM ranked
+    WHERE recipient_rank = 1 AND due_at <= @now
+    ORDER BY due_at ASC, recipient_install_id ASC
+    LIMIT @limit
+  `);
+  const markWakeAttemptStatement = db.prepare(`
+    UPDATE relay_messages
+    SET wake_attempts = ?, next_wake_at = ?
+    WHERE recipient_install_id = ? AND relay_seq <= ? AND expires_at > ?
+  `);
+  const hasActiveRecipientStatement = db.prepare(`
+    SELECT 1
+    FROM relay_messages
+    WHERE recipient_install_id = ? AND expires_at > ?
+    LIMIT 1
+  `);
   const expiredAggregateStatement = db.prepare(`SELECT count(*) AS count,
     coalesce(sum(length(ciphertext)), 0) AS bytes FROM relay_messages WHERE expires_at <= ?`);
   const activeAggregateStatement = db.prepare(`SELECT count(*) AS count,
@@ -187,6 +218,26 @@ export function openRelayQueue(filePath) {
     },
     *pendingRecipient(recipientInstallId, now, limit) {
       for (const row of inboxStatement.iterate(recipientInstallId, now, limit)) yield mapMessage(row);
+    },
+    dueWakeRecipients(now, limit = 100) {
+      return dueWakeRecipientsStatement.all({ now: Number(now), limit: Number(limit) }).map(row => ({
+        recipientInstallId: row.recipient_install_id,
+        wakeAttempts: row.wake_attempts,
+        dueAt: row.due_at,
+        selectedThroughRelaySeq: row.selected_through_relay_seq
+      }));
+    },
+    markWakeAttempt(recipientInstallId, wakeAttempts, nextWakeAt, selectedThroughRelaySeq, now) {
+      return markWakeAttemptStatement.run(
+        Number(wakeAttempts),
+        Number(nextWakeAt),
+        recipientInstallId,
+        Number(selectedThroughRelaySeq),
+        Number(now)
+      ).changes;
+    },
+    hasActiveRecipient(recipientInstallId, now) {
+      return Boolean(hasActiveRecipientStatement.get(recipientInstallId, Number(now)));
     },
     purgeExpired(now) {
       return purgeExpiredTransaction.immediate(now);
