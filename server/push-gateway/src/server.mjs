@@ -11,6 +11,7 @@ import { PushDispatcher } from './push-dispatcher.mjs';
 import { validatePushRegistration } from './push-registration.mjs';
 import { buildProvisioningCredentials } from './provisioning-credentials.mjs';
 import { openMetadataStore } from './relay-metadata-store.mjs';
+import { listRoutesForSender } from './relay-routes.mjs';
 import { clearStoredPushTarget, selectWakeTargets } from './wake-targets.mjs';
 
 const cfg = {
@@ -159,6 +160,17 @@ const server = http.createServer(async (req, res) => {
           fcm: { ready: providerReadiness.fcm }
         }
       });
+    }
+
+    if (req.method === 'GET' && req.url === '/v1/routes') {
+      const metadataStore = openMetadataStore(cfg.relayMetadataDb);
+      try {
+        const authenticated = authenticateInstall(String(req.headers.authorization || ''), metadataStore);
+        if (!authenticated) return json(res, 401, { error: 'unauthorized' });
+        return json(res, 200, { routes: listRoutesForSender(metadataStore, authenticated.installId) });
+      } finally {
+        metadataStore.close();
+      }
     }
 
     if (req.method === 'POST' && req.url === '/internal/enrollment') {

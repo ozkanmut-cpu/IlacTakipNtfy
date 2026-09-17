@@ -38,6 +38,16 @@ function mapRoute(row) {
   };
 }
 
+function mapRouteListing(row) {
+  return {
+    routeId: row.route_id,
+    recipientInstallId: row.recipient_install_id,
+    encryptionPublicKey: row.encryption_public_key,
+    signingPublicKey: row.signing_public_key,
+    keyVersion: row.key_version
+  };
+}
+
 export function openMetadataStore(filePath) {
   const { db, path } = prepareDatabase(filePath);
   db.exec(`
@@ -101,6 +111,26 @@ export function openMetadataStore(filePath) {
     )
   `);
   const getRouteStatement = db.prepare('SELECT * FROM routes WHERE route_id = ?');
+  const listActiveRoutesForSenderStatement = db.prepare(`
+    SELECT
+      r.route_id,
+      r.recipient_install_id,
+      recipient.encryption_public_key,
+      recipient.signing_public_key,
+      recipient.key_version
+    FROM routes AS r
+    JOIN installations AS recipient
+      ON recipient.install_id = r.recipient_install_id
+    WHERE r.sender_install_id = ?
+      AND r.status = 'active'
+      AND recipient.revoked_at IS NULL
+    ORDER BY r.created_at ASC, r.route_id ASC
+  `);
+  const revokeRouteStatement = db.prepare(`
+    UPDATE routes
+    SET status = 'revoked', revoked_at = ?
+    WHERE route_id = ? AND status = 'active'
+  `);
 
   return {
     path,
@@ -138,6 +168,12 @@ export function openMetadataStore(filePath) {
     },
     getRoute(routeId) {
       return mapRoute(getRouteStatement.get(routeId));
+    },
+    listActiveRoutesForSender(installId) {
+      return listActiveRoutesForSenderStatement.all(installId).map(mapRouteListing);
+    },
+    revokeRoute(routeId, revokedAt) {
+      return revokeRouteStatement.run(Number(revokedAt), routeId).changes > 0;
     },
     close() {
       db.close();

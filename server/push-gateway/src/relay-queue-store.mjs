@@ -92,6 +92,9 @@ export function openRelayQueue(filePath) {
     DELETE FROM relay_messages
     WHERE recipient_install_id = ? AND message_id = ?
   `);
+  const purgeRouteStatement = db.prepare(
+    'DELETE FROM relay_messages WHERE route_id = ?'
+  );
 
   const enqueueTransaction = db.transaction((message) => {
     const existing = findMessageStatement.get(message.messageId);
@@ -134,6 +137,9 @@ export function openRelayQueue(filePath) {
     },
     deleteMessage(recipientInstallId, messageId) {
       return deleteMessageStatement.run(recipientInstallId, messageId).changes > 0;
+    },
+    purgeRoute(routeId) {
+      return purgeRouteStatement.run(routeId).changes;
     },
     close() {
       db.close();
