@@ -14,7 +14,7 @@ interface RelayInboxFaults {
     companion object { val NONE = object : RelayInboxFaults { override fun afterDurableApplyBeforeAck(messageId: String) = Unit } }
 }
 
-class RelayInbox(
+class RelayInbox internal constructor(
     private val context: Context,
     private val localInstallId: String,
     private val crypto: RelayCrypto,
