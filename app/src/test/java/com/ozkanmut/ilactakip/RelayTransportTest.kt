@@ -478,6 +478,27 @@ class RelayTransportTest {
         assertFalse(RemoteEventReceiptStore.processed(recipient.context, inbound.eventId))
     }
 
+    // Mutation caught: treat the escalation deferral that follows a fresh remote care claim as
+    // best-effort. The baton record and the deferral are one relay effect bundle: if the
+    // synchronous smart-escalation persistence cannot commit, replay must remain possible and
+    // the relay must retain its ciphertext.
+    @Test
+    fun careClaimEscalationDeferralCommitFailureLeavesRelayDeliveryAppendedAndUnacknowledged() {
+        val now = System.currentTimeMillis()
+        val event = localEvent("TEST-ONLY-care-claim-escalation-failure").copy(
+            type = "care_claimed",
+            medications = emptyList(),
+            timestamp = now,
+            snoozeUntil = now + 60_000L
+        )
+
+        assertRelayEffectCommitFailure(
+            failedPreference = "dosefolk_smart_escalation",
+            messageId = "TEST-ONLY-care-claim-escalation-message",
+            event = event
+        )
+    }
+
     // Mutation caught: discard terminal ACK state after a response-loss even though the relay has deleted it.
     @Test
     fun lostAckResponseRetriesPersistedTerminalAckOnNextEmptyInboxOnlyOnce() {
