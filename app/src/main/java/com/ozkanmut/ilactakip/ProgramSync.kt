@@ -126,12 +126,12 @@ object ProgramSync {
      * update only that owner's read-only Circle cache. Revision is authoritative.
      */
     @Synchronized
-    fun applyRemote(c: Context, event: DoseEvent): Boolean {
-        if (event.type !in setOf("program_added", "program_updated", "program_deleted")) return true
-        val med = event.medications.firstOrNull() ?: return true
-        if (med.id.isBlank()) return true
+    fun applyRemote(c: Context, event: DoseEvent) {
+        if (event.type !in setOf("program_added", "program_updated", "program_deleted")) return
+        val med = event.medications.firstOrNull() ?: return
+        if (med.id.isBlank()) return
         val ownerId = event.ownerId.ifBlank { event.actorTopic }
-        if (ownerId.isBlank()) return true
+        if (ownerId.isBlank()) return
         val localOwner = OwnerScopeStore.localOwnerId(c)
         val p = prefs(c)
 
@@ -149,12 +149,12 @@ object ProgramSync {
         } else {
             event.timestamp >= legacyStamp
         }
-        if (!accept) return true
+        if (!accept) return
 
         val localProgram = if (ownerId == localOwner) {
-            applyLocalOwnerProgramDurably(c, event.type, med) ?: return false
+            applyLocalOwnerProgramDurably(c, event.type, med) ?: return
         } else {
-            if (!OwnerScopeStore.applyRemoteProgram(c, ownerId, event.type, med)) return false
+            OwnerScopeStore.applyRemoteProgram(c, ownerId, event.type, med)
             null
         }
 
@@ -167,12 +167,11 @@ object ProgramSync {
             edit.putString(KEY_BASELINE, encodeMedications(localProgram))
                 .putBoolean(KEY_INITIALIZED, true)
         }
-        if (!edit.commit()) return false
+        edit.commit()
 
         if (localProgram != null) {
             AlarmScheduler.scheduleAll(c, localProgram, observeProgramChanges = false)
         }
-        return true
     }
 
     /**

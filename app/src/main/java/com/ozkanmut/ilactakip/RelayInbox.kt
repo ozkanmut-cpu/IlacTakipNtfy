@@ -78,7 +78,16 @@ class RelayInbox internal constructor(
         if (prior?.phase != RelayInboxJournal.EFFECTS) {
         try {
             faults.beforeEffects(outer.messageId)
-            RelayDomainEffects.apply(context, stored)
+            OwnerScopeStore.remember(context, stored)
+            val ownerId = stored.ownerId.ifBlank { stored.actorTopic }
+            if (ownerId.isNotBlank() && ownerId != OwnerScopeStore.localOwnerId(context)) {
+                stored.medicationMeta.forEach { MedicationMetaStore.saveRemote(context, ownerId, it) }
+            }
+            if (ownerId.isBlank() || ownerId == OwnerScopeStore.localOwnerId(context)) {
+                PrnUsageLedger.observe(context, stored); StockEngine.applyEvent(context, stored)
+            }
+            SyncEngine.applyRemoteState(context, stored)
+            RemoteEventReceiptStore.markProcessed(context, stored.eventId)
         } catch (_: Exception) { throw IOException("Relay local persistence failed") }
         journal.put(RelayInboxJournal.Entry(outer.messageId, event.eventId, hash, RelayInboxJournal.EFFECTS, null))
         faults.afterEffects(outer.messageId)

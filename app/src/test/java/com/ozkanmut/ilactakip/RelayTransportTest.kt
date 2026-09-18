@@ -57,6 +57,21 @@ class RelayTransportTest {
     private lateinit var senderApi: RelayApi
     private lateinit var recipientApi: RelayApi
 
+    private companion object {
+        private const val RELAY_URL = "https://relay.field-maintenance-prod.com"
+        private const val TEST_INSTALL_CREDENTIAL = "TEST-ONLY-install-credential"
+        private const val SENDER_INSTALL = "TEST-ONLY-sender-install"
+        private const val RECIPIENT_INSTALL = "TEST-ONLY-recipient-install"
+        private const val ROUTE_ID = "TEST-ONLY-route-a"
+        private const val ROUTE_ID_B = "TEST-ONLY-route-b"
+        private const val EVENT_ID = "TEST-ONLY-event-a"
+        private const val EVENT_ID_B = "TEST-ONLY-event-b"
+        private const val EVENT_SUBSTITUTION_ID = "TEST-ONLY-event-substitution"
+        private const val JOURNAL_HASH = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        private const val RECEIVED_AT = 1_700_000_000_000L
+        private const val EXPIRES_AT = RECEIVED_AT + 2_592_000_000L
+    }
+
     @Before
     fun setUp() {
         AeadConfig.register()
@@ -990,11 +1005,4 @@ class RelayTransportTest {
         }
     }
 
-    private companion object {
-        private const val RELAY_URL = "https://relay.field-maintenance-prod.com"
-        private const val TEST_INSTALL_CREDENTIAL = "TEST-ONLY-install-credential"
-        private const val SENDER_INSTALL = "TEST-ONLY-sender-install"
-        private const val RECIPIENT_INSTALL = "TEST-ONLY-recipient-install"
-        private const val ROUTE_ID = "TEST-ONLY-route-a"
-        private const val ROUTE_ID_B = "TEST-ONLY-route-b"
-        private const val EVENT_ID = "TEST-ONLY-event-a"
+}

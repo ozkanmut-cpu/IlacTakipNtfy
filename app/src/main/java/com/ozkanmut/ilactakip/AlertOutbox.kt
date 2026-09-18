@@ -114,25 +114,15 @@ object AlertOutbox {
 
     @Synchronized
     fun dropTopic(c: Context, topic: String) {
-        dropTopicChecked(c, topic)
-    }
-
-    @Synchronized
-    fun dropTopicChecked(c: Context, topic: String): Boolean {
-        if (topic.isBlank()) return true
-        return saveChecked(c, load(c).filterNot { it.topic == topic })
+        if (topic.isBlank()) return
+        save(c, load(c).filterNot { it.topic == topic })
     }
 
     @Synchronized
     fun dropEscalationSession(c: Context, time: String, scheduledDate: String) {
-        dropEscalationSessionChecked(c, time, scheduledDate)
-    }
-
-    @Synchronized
-    fun dropEscalationSessionChecked(c: Context, time: String, scheduledDate: String): Boolean {
-        if (time.isBlank() || scheduledDate.isBlank()) return true
+        if (time.isBlank() || scheduledDate.isBlank()) return
         val prefix = "escalation|$scheduledDate|$time|"
-        return saveChecked(c, load(c).filterNot { it.id.startsWith(prefix) })
+        save(c, load(c).filterNot { it.id.startsWith(prefix) })
     }
 
     internal fun batchForFlush(all: List<PendingAlert>): List<PendingAlert> =
@@ -307,10 +297,6 @@ object AlertOutbox {
     }.getOrDefault(emptyList())
 
     private fun save(c: Context, alerts: List<PendingAlert>) {
-        saveChecked(c, alerts)
-    }
-
-    private fun saveChecked(c: Context, alerts: List<PendingAlert>): Boolean {
         val a = JSONArray()
         alerts.forEach {
             a.put(
@@ -323,6 +309,6 @@ object AlertOutbox {
                     .put("inFlight", it.inFlight)
             )
         }
-        return prefs(c).edit().putString(KEY, a.toString()).commit()
+        prefs(c).edit().putString(KEY, a.toString()).commit()
     }
 }

@@ -79,18 +79,13 @@ object DeliveryLedger {
 
     @Synchronized
     fun dropTopic(c: Context, topic: String) {
-        dropTopicChecked(c, topic)
-    }
-
-    @Synchronized
-    fun dropTopicChecked(c: Context, topic: String): Boolean {
-        if (topic.isBlank()) return true
+        if (topic.isBlank()) return
         val suffix = "|$topic"
         val p = prefs(c)
         val matching = p.all.keys.filter { it.endsWith(suffix) }
-        if (matching.isEmpty()) return true
+        if (matching.isEmpty()) return
         val editor = p.edit()
         matching.forEach(editor::remove)
-        return editor.commit()
+        editor.commit()
     }
 }

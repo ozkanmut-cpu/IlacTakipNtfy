@@ -18,15 +18,10 @@ object RevokedPeerFence {
 
     @Synchronized
     fun markRevoked(c: Context, topic: String) {
-        markRevokedChecked(c, topic)
-    }
-
-    @Synchronized
-    fun markRevokedChecked(c: Context, topic: String): Boolean {
-        if (topic.isBlank()) return true
+        if (topic.isBlank()) return
         val topics = prefs(c).getStringSet(KEY, emptySet()).orEmpty().toMutableSet()
         topics += topic
-        return prefs(c).edit().putStringSet(KEY, topics).commit()
+        prefs(c).edit().putStringSet(KEY, topics).commit()
     }
 
     @Synchronized
@@ -98,16 +93,12 @@ object PairingLifecycle {
     }
 
     fun applyRemoteRevoke(c: Context, event: DoseEvent) {
-        applyRemoteRevokeChecked(c, event)
-    }
-
-    fun applyRemoteRevokeChecked(c: Context, event: DoseEvent): Boolean {
-        if (event.type != "circle_revoked") return true
-        if (event.targetTopic != Store.topic(c)) return true
+        if (event.type != "circle_revoked") return
+        if (event.targetTopic != Store.topic(c)) return
         val peerTopic = event.actorTopic
-        if (peerTopic.isBlank() || peerTopic == Store.topic(c)) return true
+        if (peerTopic.isBlank() || peerTopic == Store.topic(c)) return
         DosefolkQaLog.record(c, DosefolkQaLog.Category.REVOKE, "revoke_remote_apply", mapOf("peerTopic" to peerTopic))
-        return cleanupPeerChecked(c.applicationContext, peerTopic, dropOutbox = true)
+        cleanupPeer(c.applicationContext, peerTopic, dropOutbox = true)
     }
 
     fun prepareRePair(c: Context, topic: String): Boolean {
@@ -127,19 +118,14 @@ object PairingLifecycle {
     }
 
     private fun cleanupPeer(c: Context, topic: String, dropOutbox: Boolean) {
-        cleanupPeerChecked(c, topic, dropOutbox)
-    }
-
-    private fun cleanupPeerChecked(c: Context, topic: String, dropOutbox: Boolean): Boolean {
-        if (!RevokedPeerFence.markRevokedChecked(c, topic)) return false
-        if (!Store.savePeopleChecked(c, Store.people(c).filterNot { it.topic == topic })) return false
-        if (!PermissionPolicy.clearPeerChecked(c, topic)) return false
-        if (!RevocationCleanup.clearPeerChecked(c, topic)) return false
-        if (!MedicationMetaStore.clearRemoteOwnerChecked(c, topic)) return false
-        if (!StockEngine.clearRemoteOwnerChecked(c, topic)) return false
-        if (!CirclePresence.clearChecked(c, topic)) return false
-        if (dropOutbox && !AlertOutbox.dropTopicChecked(c, topic)) return false
+        RevokedPeerFence.markRevoked(c, topic)
+        Store.savePeople(c, Store.people(c).filterNot { it.topic == topic })
+        PermissionPolicy.clearPeer(c, topic)
+        RevocationCleanup.clearPeer(c, topic)
+        MedicationMetaStore.clearRemoteOwner(c, topic)
+        StockEngine.clearRemoteOwner(c, topic)
+        CirclePresence.clear(c, topic)
+        if (dropOutbox) AlertOutbox.dropTopic(c, topic)
         NtfyAccessRefresh.schedule(c, force = true)
-        return true
     }
 }

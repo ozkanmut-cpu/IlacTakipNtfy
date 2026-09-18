@@ -32,18 +32,14 @@ object PrnUsageLedger {
     private fun prefs(c:Context)=c.getSharedPreferences(PREFS,Context.MODE_PRIVATE)
 
     @Synchronized fun observe(c:Context,event:DoseEvent){
-        observeChecked(c,event)
-    }
-
-    @Synchronized fun observeChecked(c:Context,event:DoseEvent):Boolean{
-        if(event.type!="prn_taken"||event.eventId.isBlank())return true
+        if(event.type!="prn_taken"||event.eventId.isBlank())return
         val ownerId=event.ownerId.ifBlank{event.actorTopic}
-        if(ownerId.isNotBlank()&&ownerId!=OwnerScopeStore.localOwnerId(c))return true
+        if(ownerId.isNotBlank()&&ownerId!=OwnerScopeStore.localOwnerId(c))return
         val rows=loadRaw(c).toMutableList()
         event.medications.distinctBy{it.id}.filter{it.id.isNotBlank()}.forEach{med->
             if(rows.none{it.eventId==event.eventId&&it.medicationId==med.id}) rows+=PrnUsage(event.eventId,med.id,event.timestamp)
         }
-        return saveChecked(c,compact(c,rows))
+        save(c,compact(c,rows))
     }
 
     @Synchronized fun ensureBackfilled(c:Context){
@@ -72,8 +68,7 @@ object PrnUsageLedger {
             val eventId=o.optString("eventId");val medId=o.optString("medicationId");if(eventId.isBlank()||medId.isBlank())null else PrnUsage(eventId,medId,o.optLong("timestamp"))
         }}}.getOrDefault(emptyList())
     }
-    private fun save(c:Context,rows:List<PrnUsage>){saveChecked(c,rows)}
-    private fun saveChecked(c:Context,rows:List<PrnUsage>):Boolean{val a=JSONArray();rows.forEach{u->a.put(JSONObject().put("eventId",u.eventId).put("medicationId",u.medicationId).put("timestamp",u.timestamp))};return prefs(c).edit().putString(KEY,a.toString()).commit()}
+    private fun save(c:Context,rows:List<PrnUsage>){val a=JSONArray();rows.forEach{u->a.put(JSONObject().put("eventId",u.eventId).put("medicationId",u.medicationId).put("timestamp",u.timestamp))};prefs(c).edit().putString(KEY,a.toString()).commit()}
 }
 
 /**
