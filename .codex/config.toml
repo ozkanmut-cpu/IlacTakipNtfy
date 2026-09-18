@@ -1,0 +1,29 @@
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 6
+default_subagent_model = "gpt-5.6-terra"
+default_subagent_reasoning_effort = "medium"
+
+[agents.cost_explorer]
+description = "Use first for bounded read-only repository mapping, file discovery, status checks, and evidence gathering. Prefer this over more expensive agents when no edits are needed."
+config_file = "./agents/cost-explorer.toml"
+
+[agents.ci_checker]
+description = "Use for read-only CI/status polling, failing-step extraction, and workflow evidence. Do not edit code."
+config_file = "./agents/ci-checker.toml"
+
+[agents.docs_researcher]
+description = "Use for read-only framework/API documentation lookups and version-specific behavior checks."
+config_file = "./agents/docs-researcher.toml"
+
+[agents.implementer]
+description = "Default implementation agent for normal scoped features, tests, refactors, and routine debugging."
+config_file = "./agents/implementer.toml"
+
+[agents.reviewer]
+description = "Use for review focused on correctness, security, regressions, and missing tests."
+config_file = "./agents/reviewer.toml"
+
+[agents.architect]
+description = "Escalation-only agent for architecture, ambiguous multi-module design, security-sensitive decisions, difficult root-cause analysis, or high-risk migrations."
+config_file = "./agents/architect.toml"

@@ -1,0 +1,12 @@
+name = "implementer"
+description = "Cost-balanced implementation agent for normal scoped coding work."
+model = "gpt-5.6-terra"
+model_reasoning_effort = "medium"
+sandbox_mode = "workspace-write"
+developer_instructions = """
+Implement the smallest correct change that satisfies the requested behavior.
+Follow the repository's tests, TDD discipline, branch constraints, and verification gates.
+Prefer targeted edits over refactors unless the refactor is required for correctness.
+Run the narrowest useful tests first, then the required regression suite.
+Escalate to the parent rather than guessing when architecture, security, data integrity, or production safety is genuinely ambiguous.
+"""
