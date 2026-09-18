@@ -258,3 +258,595 @@ class RelayTransportTest {
     @Test
     fun duplicateDeliveryHasExactlyOnceEffectiveDomainStateAndReceivesDuplicateAck() {
         val envelope = inboundEnvelope("TEST-ONLY-duplicate", inboundPayload(EVENT_ID))
+        http.inboxEnvelopes = listOf(envelope)
+        val inbox = recipient.inbox(recipientApi)
+
+        assertTrue(inbox.reconcile())
+        http.inboxEnvelopes = listOf(envelope)
+        assertTrue(inbox.reconcile())
+
+        assertEquals(1, EventStore.load(recipient.context).count { it.eventId == EVENT_ID })
+        assertEquals(listOf("processed", "duplicate"), http.terminalAcks.map { it.outcome })
+    }
+
+    // Mutation caught: acknowledge the accepted message before all domain effects and the receipt
+    // are committed, losing delivery when the process dies in that interval.
+    @Test
+    fun crashAfterDurableApplyBeforeTerminalMarkerRedeliversAndConvergesAsProcessed() {
+        val envelope = inboundEnvelope("TEST-ONLY-crash-window", inboundPayload(EVENT_ID))
+        http.inboxEnvelopes = listOf(envelope)
+        val crash = object : RelayInboxFaults {
+            override fun afterDurableApplyBeforeAck(messageId: String) {
+                throw IOException("TEST-ONLY crash")
+            }
+        }
+
+        assertThrows(IOException::class.java) { recipient.inbox(recipientApi, crash).reconcile() }
+        assertTrue(EventStore.contains(recipient.context, EVENT_ID))
+        assertTrue(http.terminalAcks.isEmpty())
+
+        assertTrue(recipient.inbox(recipientApi).reconcile())
+        assertEquals(listOf("processed"), http.terminalAcks.map { it.outcome })
+    }
+
+    // Mutation caught: interpret EventStore presence after an append crash as terminal duplicate,
+    // skipping the remaining effects and terminal journal marker on replay.
+    @Test
+    fun crashImmediatelyAfterAppendReplaysNonterminalJournalBeforeAckingProcessed() {
+        http.inboxEnvelopes = listOf(inboundEnvelope("TEST-ONLY-after-append", inboundPayload(EVENT_ID)))
+        val fault = object : RelayInboxFaults {
+            override fun afterAppend(messageId: String) { throw IOException("TEST-ONLY") }
+            override fun afterDurableApplyBeforeAck(messageId: String) = Unit
+        }
+        assertThrows(IOException::class.java) { recipient.inbox(recipientApi, fault).reconcile() }
+        assertTrue(EventStore.contains(recipient.context, EVENT_ID)); assertTrue(http.terminalAcks.isEmpty())
+        var effects = 0
+        val replay = object : RelayInboxFaults {
+            override fun beforeEffects(messageId: String) { effects++ }
+            override fun afterDurableApplyBeforeAck(messageId: String) = Unit
+        }
+        assertTrue(recipient.inbox(recipientApi, replay).reconcile())
+        assertEquals(1, effects)
+        assertEquals(listOf("processed"), http.terminalAcks.map { it.outcome })
+    }
+
+    // Mutation caught: repeat applied domain effects after a process death between effects and the
+    // terminal journal marker instead of resuming from EFFECTS and only committing the ACK gate.
+    @Test
+    fun crashAfterEffectsResumesTerminalMarkerWithoutRepeatingTheDelivery() {
+        http.inboxEnvelopes = listOf(inboundEnvelope("TEST-ONLY-after-effects", inboundPayload(EVENT_ID)))
+        var effects = 0
+        var crash = true
+        val fault = object : RelayInboxFaults {
+            override fun beforeEffects(messageId: String) { effects++ }
+            override fun afterEffects(messageId: String) { if (crash) throw IOException("TEST-ONLY") }
+            override fun afterDurableApplyBeforeAck(messageId: String) = Unit
+        }
+        assertThrows(IOException::class.java) { recipient.inbox(recipientApi, fault).reconcile() }
+        assertTrue(EventStore.contains(recipient.context, EVENT_ID)); assertTrue(http.terminalAcks.isEmpty())
+        crash = false
+        assertTrue(recipient.inbox(recipientApi, fault).reconcile())
+        assertEquals(1, effects)
+        assertEquals(1, EventStore.load(recipient.context).count { it.eventId == EVENT_ID })
+        assertEquals(listOf("processed"), http.terminalAcks.map { it.outcome })
+    }
+
+    // Mutation caught: discard terminal ACK state after a response-loss even though the relay has deleted it.
+    @Test
+    fun lostAckResponseRetriesPersistedTerminalAckOnNextEmptyInboxOnlyOnce() {
+        http.inboxEnvelopes = listOf(inboundEnvelope("TEST-ONLY-lost-ack", inboundPayload(EVENT_ID)))
+        http.throwAfterAckOnce = true
+        assertFalse(recipient.inbox(recipientApi).reconcile())
+        http.inboxEnvelopes = emptyList()
+        assertTrue(recipient.inbox(recipientApi).reconcile())
+        assertTrue(recipient.inbox(recipientApi).reconcile())
+        assertEquals(2, http.terminalAcks.count { it.messageId == "TEST-ONLY-lost-ack" })
+    }
+
+    // Mutation caught: deserialize JSONObject.NULL as the string "null", or coerce a numeric
+    // or object outcome into an ACKable journal state instead of rejecting the ledger closed.
+    @Test
+    fun journalTreatsJsonNullAsNoOutcomeForEveryNonterminalPhaseAndRejectsNonStringOutcomes() {
+        val phases = listOf(RelayInboxJournal.STARTED, RelayInboxJournal.APPENDED, RelayInboxJournal.EFFECTS)
+        val messageIds = phases.indices.map { "TEST-ONLY-null-journal-$it" }
+        writeJournal(messageIds.indices.map { index ->
+            rawJournalEntry(messageIds[index], "TEST-ONLY-null-event-$index", phases[index], JSONObject.NULL)
+        })
+
+        val journal = RelayInboxJournal(recipient.context)
+        messageIds.forEach { messageId -> assertEquals(null, journal.get(messageId)?.outcome) }
+
+        listOf(7, JSONObject().put("unexpected", "processed")).forEachIndexed { index, malformedOutcome ->
+            writeJournal(listOf(rawJournalEntry(
+                "TEST-ONLY-invalid-outcome-$index", "TEST-ONLY-invalid-event-$index",
+                RelayInboxJournal.TERMINAL, malformedOutcome
+            )))
+            assertThrows(GeneralSecurityException::class.java) {
+                RelayInboxJournal(recipient.context).pendingAcks()
+            }
+        }
+    }
+
+    // Mutation caught: coerce non-string journal identity/hash/phase values through getString(),
+    // then ACK a ledger whose durable schema has become ambiguous or attacker-controlled.
+    @Test
+    fun journalRejectsEveryNonStringRequiredFieldBeforeSendingAnyAck() {
+        val invalidValues: List<Any?> = listOf(JSONObject.NULL, 7, true, JSONObject().put("unexpected", "value"))
+        val fields = listOf("messageId", "eventId", "eventHash", "phase")
+        fields.forEach { field ->
+            invalidValues.forEach { invalidValue ->
+                assertJournalFailsClosed(listOf(rawJournalEntryWithValues(
+                    messageId = if (field == "messageId") invalidValue else "TEST-ONLY-strict-message",
+                    eventId = if (field == "eventId") invalidValue else "TEST-ONLY-strict-event",
+                    eventHash = if (field == "eventHash") invalidValue else JOURNAL_HASH,
+                    phase = if (field == "phase") invalidValue else RelayInboxJournal.TERMINAL,
+                    outcome = "processed"
+                )))
+            }
+        }
+    }
+
+    // Mutation caught: deduplicate a malformed journal by silently selecting one relay receipt ID,
+    // including when the duplicate records disagree on their terminal outcome.
+    @Test
+    fun duplicateJournalMessageIdsFailClosedBeforeSendingAnyAck() {
+        listOf("processed" to "processed", "processed" to "rejected").forEachIndexed { index, outcomes ->
+            val messageId = "TEST-ONLY-duplicate-journal-$index"
+            assertJournalFailsClosed(listOf(
+                rawJournalEntry(messageId, "TEST-ONLY-duplicate-event-$index", RelayInboxJournal.TERMINAL, outcomes.first),
+                rawJournalEntry(messageId, "TEST-ONLY-conflicting-event-$index", RelayInboxJournal.TERMINAL, outcomes.second)
+            ))
+        }
+    }
+
+    // Mutation caught: treat eventId == messageId as a rejection placeholder and leave a real
+    // processed relay receipt in-flight forever after its successful terminal acknowledgement.
+    @Test
+    fun processedTerminalWithMatchingMessageAndEventIdCompactsItsInFlightReceipt() {
+        val receiptId = "TEST-ONLY-same-message-and-event"
+        val journal = RelayInboxJournal(recipient.context)
+        journal.put(terminalJournalEntry(receiptId, receiptId))
+        RemoteEventReceiptStore.markProcessed(recipient.context, receiptId)
+
+        assertTrue(recipient.inbox(recipientApi).reconcile())
+
+        assertEquals(listOf(receiptId), http.terminalAcks.map { it.messageId })
+        assertTrue(inFlightRelayReceiptIds().isEmpty())
+        assertTrue(RemoteEventReceiptStore.processed(recipient.context, receiptId))
+    }
+
+    // Mutation caught: submit more than the relay's 100-outcome ACK limit, or retain a successful
+    // chunk until every later ACK has succeeded instead of compacting that chunk independently.
+    @Test
+    fun oneHundredAndOneTerminalOutcomesAreAcknowledgedInBoundedChunksAndRemovedPerChunk() {
+        val journal = RelayInboxJournal(recipient.context)
+        val messageIds = (0 until 101).map { "TEST-ONLY-terminal-chunk-$it" }
+        messageIds.forEachIndexed { index, messageId ->
+            journal.put(terminalJournalEntry(messageId, "TEST-ONLY-terminal-event-$index"))
+        }
+        var ackCalls = 0
+        http.beforeAckBatch = {
+            ackCalls++
+            if (ackCalls == 2) {
+                assertEquals(messageIds.drop(100).toSet(), journal.pendingAcks().map { it.messageId }.toSet())
+            }
+        }
+
+        assertTrue(recipient.inbox(recipientApi).reconcile())
+
+        assertEquals(listOf(100, 1), http.ackBatches.map { it.size })
+        assertEquals(messageIds.toSet(), http.terminalAcks.map { it.messageId }.toSet())
+        assertTrue(journal.pendingAcks().isEmpty())
+    }
+
+    // Mutation caught: merge persisted terminal ACKs and a full inbound page into one oversized
+    // request, preventing either group from reaching a terminal server acknowledgement.
+    @Test
+    fun pendingTerminalAcksAndFullInboxAreEventuallyAcknowledgedWithoutAnOversizedRequest() {
+        val journal = RelayInboxJournal(recipient.context)
+        val pendingIds = (0 until 100).map { "TEST-ONLY-pending-ack-$it" }
+        pendingIds.forEachIndexed { index, messageId ->
+            journal.put(terminalJournalEntry(messageId, "TEST-ONLY-pending-event-$index"))
+        }
+        val inboundIds = (0 until 100).map { "TEST-ONLY-full-inbox-$it" }
+        http.inboxEnvelopes = inboundIds.mapIndexed { index, messageId ->
+            inboundEnvelope(messageId, inboundPayload("TEST-ONLY-full-inbox-event-$index"))
+        }
+
+        assertTrue(recipient.inbox(recipientApi).reconcile())
+
+        assertEquals(listOf(100, 100), http.ackBatches.map { it.size })
+        assertTrue(http.ackBatches.all { it.size <= 100 })
+        assertEquals((pendingIds + inboundIds).toSet(), http.terminalAcks.map { it.messageId }.toSet())
+        assertEquals(200, http.terminalAcks.size)
+        assertTrue(journal.pendingAcks().isEmpty())
+    }
+
+    // Mutation caught: drop the uncertain second ACK chunk after a lost response, or retain the
+    // already confirmed first chunk in the journal and resend it with the retry.
+    @Test
+    fun lostSecondAckChunkRetainsOnlyThatChunkAndLaterJournalEntriesForRetry() {
+        val journal = RelayInboxJournal(recipient.context)
+        val messageIds = (0 until 201).map { "TEST-ONLY-lost-chunk-$it" }
+        messageIds.forEachIndexed { index, messageId ->
+            journal.put(terminalJournalEntry(messageId, "TEST-ONLY-lost-event-$index"))
+        }
+        http.throwAfterAckCall = 2
+
+        assertFalse(recipient.inbox(recipientApi).reconcile())
+
+        assertEquals(messageIds.drop(100).toSet(), journal.pendingAcks().map { it.messageId }.toSet())
+        assertEquals(listOf(100, 100), http.ackBatches.map { it.size })
+        assertEquals(messageIds.take(100), http.ackBatches[0].map { it.messageId })
+        assertEquals(messageIds.drop(100).take(100), http.ackBatches[1].map { it.messageId })
+
+        assertTrue(recipient.inbox(recipientApi).reconcile())
+
+        assertEquals(listOf(100, 100, 100, 1), http.ackBatches.map { it.size })
+        assertEquals(messageIds.drop(100).take(100), http.ackBatches[2].map { it.messageId })
+        assertEquals(listOf(messageIds.last()), http.ackBatches[3].map { it.messageId })
+        assertTrue(journal.pendingAcks().isEmpty())
+    }
+
+    // Mutation caught: compact every in-flight receipt after one successful relay ACK, losing an
+    // unrelated delivery's crash-recovery evidence instead of compacting only the ACKed receipt.
+    @Test
+    fun successfulAckCompactsOnlyItsMatchingRelayReceiptAndLeavesUnrelatedReceiptInFlight() {
+        val matchingReceiptId = "TEST-ONLY-matching-receipt"
+        val unrelatedReceiptId = "TEST-ONLY-unrelated-receipt"
+        val journal = RelayInboxJournal(recipient.context)
+        journal.put(terminalJournalEntry("TEST-ONLY-matching-receipt-message", matchingReceiptId))
+        RemoteEventReceiptStore.markProcessed(recipient.context, matchingReceiptId)
+        RemoteEventReceiptStore.markProcessed(recipient.context, unrelatedReceiptId)
+
+        assertTrue(recipient.inbox(recipientApi).reconcile())
+
+        assertEquals(listOf("TEST-ONLY-matching-receipt-message"), http.terminalAcks.map { it.messageId })
+        assertEquals(setOf(unrelatedReceiptId), inFlightRelayReceiptIds())
+        assertTrue(RemoteEventReceiptStore.processed(recipient.context, matchingReceiptId))
+        assertTrue(journal.pendingAcks().isEmpty())
+    }
+
+    // Mutation caught: send ACK when the terminal journal marker failed to persist.
+    @Test
+    fun terminalJournalFailurePreventsAckAndTransportReturnsFalse() {
+        http.inboxEnvelopes = listOf(inboundEnvelope("TEST-ONLY-terminal-failure", inboundPayload(EVENT_ID)))
+        val journal = object : RelayInboxJournalStore {
+            override fun get(messageId: String) = null
+            override fun pendingAcks() = emptyList<RelayInboxJournal.Entry>()
+            override fun remove(ids: Set<String>) = Unit
+            override fun put(entry: RelayInboxJournal.Entry) {
+                if (entry.phase == RelayInboxJournal.TERMINAL) throw IOException("TEST-ONLY")
+            }
+        }
+        val inbox = RelayInbox(recipient.context, recipient.installId, recipient.codec, recipient.peers, recipientApi, RelayInboxFaults.NONE, journal)
+        assertFalse(RelaySyncTransport(sender.outbox(senderApi), inbox).pullBlocking(recipient.context))
+        assertTrue(http.terminalAcks.isEmpty())
+    }
+
+    // Mutation caught: accept a corrupted relay-only journal and ACK from malformed or ambiguous
+    // durable progress rather than failing closed before any terminal acknowledgement.
+    @Test
+    fun corruptInboxJournalFailsClosedBeforeAnyAck() {
+        http.inboxEnvelopes = listOf(inboundEnvelope("TEST-ONLY-corrupt-journal", inboundPayload(EVENT_ID)))
+        recipient.context.getSharedPreferences("dosefolk_relay_inbox_journal", Context.MODE_PRIVATE).edit()
+            .putString("entries", "[{\"messageId\":\"bad\",\"phase\":\"terminal\"}]").commit()
+
+        assertFalse(RelaySyncTransport(sender.outbox(senderApi), recipient.inbox(recipientApi))
+            .pullBlocking(recipient.context))
+        assertTrue(http.terminalAcks.isEmpty())
+    }
+
+    // Mutation caught: leave an invalid-signature message unacknowledged forever, or leak its
+    // cryptographic reason to the relay rather than sending the terminal generic rejection.
+    @Test
+    fun rejectedSignatureIsTerminallyAcknowledgedWithoutPersistingDomainState() {
+        val envelope = inboundEnvelope("TEST-ONLY-invalid-signature", inboundPayload(EVENT_ID)).copy(
+            ciphertext = ByteArray(64) { 0x5a }
+        )
+        http.inboxEnvelopes = listOf(envelope)
+
+        assertTrue(recipient.inbox(recipientApi).reconcile())
+
+        assertFalse(EventStore.contains(recipient.context, EVENT_ID))
+        assertEquals(listOf("rejected"), http.terminalAcks.map { it.outcome })
+        assertEquals(setOf("acks"), http.requests.last().body.keys().asSequence().toSet())
+        assertEquals(setOf("messageId", "outcome"), http.requests.last().body
+            .getJSONArray("acks").getJSONObject(0).keys().asSequence().toSet())
+    }
+
+    // Mutation caught: issue an ACK before EventStore append, domain application, and receipt
+    // persistence have completed. The HTTP boundary checks the real durable state at ACK time.
+    @Test
+    fun ackIsSentOnlyAfterDurableDomainApplyAndReceipt() {
+        val envelope = inboundEnvelope("TEST-ONLY-durable-before-ack", inboundPayload(EVENT_ID))
+        http.inboxEnvelopes = listOf(envelope)
+        http.beforeAck = {
+            check(EventStore.contains(recipient.context, EVENT_ID))
+            check(RemoteEventReceiptStore.processed(recipient.context, EVENT_ID))
+        }
+
+        assertTrue(recipient.inbox(recipientApi).reconcile())
+
+        assertEquals("/v1/inbox?limit=100", http.requests.first().path)
+        assertEquals(listOf("processed"), http.terminalAcks.map { it.outcome })
+    }
+
+    // Mutation caught: omit bearer authentication, put sender identity in JSON, serialize an
+    // unsupported field, use non-canonical base64, or include credential/body in diagnostics.
+    @Test
+    fun authenticatedApiUsesStrictSchemasAndRedactsCredentialAndBodyFromFailureDiagnostics() {
+        http.routes = listOf(route(ROUTE_ID, recipient))
+        http.enqueueFailure = IOException("TEST-ONLY $TEST_INSTALL_CREDENTIAL $EVENT_ID")
+        val api = RelayApi(RELAY_URL, TEST_INSTALL_CREDENTIAL, http)
+
+        val route = api.routes().single()
+        val envelope = sender.codec.seal(localPayload(EVENT_ID), route.recipientIdentity,
+            outer("TEST-ONLY-schema-message", route.routeId, recipient))
+        val failure = assertThrows(Exception::class.java) { api.enqueue(RelayOutboundEnvelope(
+            outer("TEST-ONLY-schema-message", route.routeId, recipient), envelope
+        )) }
+
+        assertEquals("GET", http.requests[0].method)
+        assertEquals("/v1/routes", http.requests[0].path)
+        assertEquals("Bearer $TEST_INSTALL_CREDENTIAL", http.requests[0].headers["Authorization"])
+        val request = http.requests[1]
+        assertEquals("POST", request.method)
+        assertEquals("/v1/messages", request.path)
+        assertEquals("Bearer $TEST_INSTALL_CREDENTIAL", request.headers["Authorization"])
+        assertEquals(setOf("messages"), request.body.keys().asSequence().toSet())
+        val wire = request.body.getJSONArray("messages").getJSONObject(0)
+        assertEquals(setOf("messageId", "routeId", "recipientInstallId", "senderKeyVersion",
+            "recipientKeyVersion", "ciphertext"), wire.keys().asSequence().toSet())
+        assertFalse(wire.has("senderInstallId"))
+        assertEquals(Base64.getEncoder().encodeToString(envelope), wire.getString("ciphertext"))
+        assertFalse(failure.toString().contains(TEST_INSTALL_CREDENTIAL))
+        assertFalse(failure.toString().contains(EVENT_ID))
+    }
+
+    // Mutation caught: treat a 200 ACK response with a missing, false, or extended `ok` member as
+    // successful, which could hide a proxy/server contract failure after durable local processing.
+    @Test
+    fun acknowledgeRequiresTheExactOkTrueServerSuccessShape() {
+        val ack = RelayTerminalAck("TEST-ONLY-ack-contract", "processed")
+        listOf(
+            JSONObject(),
+            JSONObject().put("ok", false),
+            JSONObject().put("ok", true).put("unexpected", 1)
+        ).forEach { malformed ->
+            http.ackResponse = malformed
+            assertThrows(GeneralSecurityException::class.java) { recipientApi.acknowledge(listOf(ack)) }
+        }
+    }
+
+    // Mutation caught: regard HTTP 201 alone as success and discard a durable outbox record when
+    // the server response does not confirm the same message ID.
+    @Test
+    fun enqueueRequiresMatchingCompleteServerResultBeforeReportingSuccess() {
+        http.routes = listOf(route(ROUTE_ID, recipient))
+        http.enqueueResultMessageId = "TEST-ONLY-wrong-result"
+        val route = senderApi.routes().single()
+        val context = outer("TEST-ONLY-result-message", route.routeId, recipient)
+        val sealed = sender.codec.seal(localPayload(EVENT_ID), route.recipientIdentity, context)
+
+        assertThrows(GeneralSecurityException::class.java) { senderApi.enqueue(RelayOutboundEnvelope(context, sealed)) }
+        assertEquals(1, http.acceptedEnvelopes.size)
+    }
+
+    // Mutation caught: downgrade to cleartext HTTP before attaching the install bearer credential.
+    @Test
+    fun apiFailsClosedBeforeAnyRequestForANonHttpsBaseUrl() {
+        assertThrows(GeneralSecurityException::class.java) {
+            RelayApi("http://relay.field-maintenance-prod.com", TEST_INSTALL_CREDENTIAL, http)
+        }
+        assertTrue(http.requests.isEmpty())
+    }
+
+    // Mutation caught: let a relay inbox process-death or unchecked fault escape WorkManager,
+    // bypassing its bounded retry result instead of reporting the selected transport failure.
+    @Test
+    fun relayTransportTurnsUnexpectedInboxFaultIntoRetryableFailure() {
+        http.inboxEnvelopes = listOf(inboundEnvelope("TEST-ONLY-transport-fault", inboundPayload(EVENT_ID)))
+        val fault = object : RelayInboxFaults { override fun afterDurableApplyBeforeAck(messageId: String) { throw IOException("TEST-ONLY") } }
+
+        assertFalse(RelaySyncTransport(sender.outbox(senderApi), recipient.inbox(recipientApi, fault))
+            .pullBlocking(recipient.context))
+        assertTrue(http.terminalAcks.isEmpty())
+    }
+
+    // Mutation caught: activate relay early, dual-write live events, or make worker outbound and
+    // inbound paths select different transports before Task 16's cutover transaction.
+    @Test
+    fun relayTransportIsInjectableButRuntimeAndWorkerConvergenceRemainOnSingleNtfySelection() {
+        val relay = RelaySyncTransport(sender.outbox(senderApi), recipient.inbox(recipientApi))
+
+        assertTrue(relay is SyncTransport)
+        assertSame(NtfySyncTransport, SyncTransportRuntime.current)
+        assertSame(SyncTransportRuntime.current, SyncWorkerTransport.selectedForOutboundAndInbound())
+    }
+
+    private fun allowSenderInRecipientGuard() {
+        Store.savePeople(recipient.context, listOf(Person("TEST-ONLY-person", "Peer", sender.installId)))
+    }
+
+    private fun localEvent(id: String) = DoseEvent(
+        eventId = id, type = "taken", time = "08:00", actor = "Sender", actorTopic = sender.installId,
+        timestamp = 1_700_000_000_000L, medications = emptyList(), revision = 1L,
+        scheduledDate = "2023-11-14", ownerId = sender.installId, targetTopic = recipient.installId
+    )
+
+    private fun localPayload(id: String): JSONObject = EventStore.payload(localEvent(id))
+
+    private fun inboundPayload(id: String): JSONObject = localPayload(id).put("syncState", "synced")
+
+    private fun outer(messageId: String, routeId: String, target: Device) = RelayOuterContext(
+        messageId, routeId, sender.installId, target.installId, sender.identity.keyVersion, target.identity.keyVersion
+    )
+
+    private fun inboundEnvelope(messageId: String, payload: JSONObject): RelayInboxEnvelope {
+        val context = outer(messageId, ROUTE_ID, recipient)
+        return RelayInboxEnvelope(
+            context, sender.codec.seal(payload, recipient.identity, context), relaySeq = 1L,
+            receivedAt = RECEIVED_AT, expiresAt = EXPIRES_AT
+        )
+    }
+
+    private fun route(routeId: String, target: Device) = RelayRoute(routeId, target.installId, target.identity)
+
+    private fun terminalJournalEntry(messageId: String, eventId: String) = RelayInboxJournal.Entry(
+        messageId, eventId, JOURNAL_HASH, RelayInboxJournal.TERMINAL, "processed"
+    )
+
+    private fun rawJournalEntry(messageId: String, eventId: String, phase: String, outcome: Any) =
+        JSONObject().put("messageId", messageId).put("eventId", eventId).put("eventHash", JOURNAL_HASH)
+            .put("phase", phase).put("outcome", outcome)
+
+    private fun rawJournalEntryWithValues(messageId: Any?, eventId: Any?, eventHash: Any?, phase: Any?, outcome: Any?) =
+        JSONObject().put("messageId", messageId).put("eventId", eventId).put("eventHash", eventHash)
+            .put("phase", phase).put("outcome", outcome)
+
+    private fun writeJournal(entries: List<JSONObject>) {
+        recipient.context.getSharedPreferences("dosefolk_relay_inbox_journal", Context.MODE_PRIVATE).edit()
+            .putString("entries", JSONArray(entries).toString()).commit()
+    }
+
+    private fun assertJournalFailsClosed(entries: List<JSONObject>) {
+        writeJournal(entries)
+        http.terminalAcks.clear()
+        http.ackBatches.clear()
+
+        assertFalse(RelaySyncTransport(sender.outbox(senderApi), recipient.inbox(recipientApi))
+            .pullBlocking(recipient.context))
+        assertTrue(http.terminalAcks.isEmpty())
+    }
+
+    private fun inFlightRelayReceiptIds(): Set<String> = recipient.context
+        .getSharedPreferences("dosefolk_remote_event_receipts", Context.MODE_PRIVATE)
+        .getStringSet("processed_event_ids_inflight", emptySet()).orEmpty()
+
+    private fun device(installId: String): Device {
+        val application = ApplicationProvider.getApplicationContext<Context>()
+        val namespace = "TEST-ONLY-relay-transport-${UUID.randomUUID()}"
+        val context = object : ContextWrapper(application) {
+            override fun getApplicationContext(): Context = this
+            override fun getSharedPreferences(name: String, mode: Int) =
+                super.getSharedPreferences("$namespace-$name", mode)
+        }
+        val master = KeysetHandle.generateNew(PredefinedAeadParameters.AES256_GCM)
+            .getPrimitive(RegistryConfiguration.get(), Aead::class.java)
+        val source = object : RelayMasterAeadSource {
+            private var exists = false
+            override fun exists(): Boolean = exists
+            override fun createNew(): Aead = master.also { exists = true }
+            override fun getExisting(): Aead = master
+        }
+        val identityStore = RelayIdentityStore(context, source)
+        val identity = identityStore.publicIdentity()
+        return Device(context, installId, identity, RelayCrypto(identityStore, installId), RelayPeerStore(context))
+    }
+
+    private data class Device(
+        val context: Context,
+        val installId: String,
+        val identity: RelayPublicIdentity,
+        val codec: RelayCrypto,
+        val peers: RelayPeerStore
+    ) {
+        fun outbox(api: RelayApi, faults: RelayOutboxFaults = RelayOutboxFaults.NONE) =
+            RelayOutbox(context, installId, codec, peers, api, faults)
+        fun inbox(api: RelayApi, faults: RelayInboxFaults = RelayInboxFaults.NONE) =
+            RelayInbox(context, installId, codec, peers, api, faults)
+    }
+
+    /** Records only metadata required to prove client API shape; no diagnostics serialize its body. */
+    private class ScriptedRelayHttp : RelayApiHttp {
+        val requests = mutableListOf<RelayApiRequest>()
+        val acceptedEnvelopes = mutableListOf<RelayOutboundEnvelope>()
+        val terminalAcks = mutableListOf<RelayTerminalAck>()
+        var routes: List<RelayRoute> = emptyList()
+        var inboxEnvelopes: List<RelayInboxEnvelope> = emptyList()
+        var enqueueFailure: IOException? = null
+        var failingRecipients: Set<String> = emptySet()
+        var enqueueResultMessageId: String? = null
+        var ackResponse: JSONObject = JSONObject().put("ok", true)
+        var beforeAck: (() -> Unit)? = null
+        var beforeAckBatch: ((List<RelayTerminalAck>) -> Unit)? = null
+        var throwAfterAckOnce = false
+        var throwAfterAckCall: Int? = null
+        val ackBatches = mutableListOf<List<RelayTerminalAck>>()
+        private var ackCalls = 0
+
+        override fun execute(request: RelayApiRequest): RelayApiResponse {
+            requests += request
+            return when (request.path) {
+                "/v1/routes" -> RelayApiResponse(200, JSONObject().put("routes", JSONArray(routes.map {
+                    JSONObject().put("routeId", it.routeId).put("recipientInstallId", it.recipientInstallId)
+                        .put("encryptionPublicKey", it.recipientIdentity.encryptionPublicKey)
+                        .put("signingPublicKey", it.recipientIdentity.signingPublicKey)
+                        .put("keyVersion", it.recipientIdentity.keyVersion)
+                })))
+                "/v1/messages" -> {
+                    enqueueFailure?.let { throw it }
+                    val decoded = decodeOutbound(request.body)
+                    if (decoded.outerContext.recipientInstallId in failingRecipients) throw IOException("TEST-ONLY recipient failure")
+                    acceptedEnvelopes += decoded
+                    RelayApiResponse(201, JSONObject().put("messages", JSONArray().put(JSONObject()
+                        .put("messageId", enqueueResultMessageId ?: acceptedEnvelopes.last().outerContext.messageId)
+                        .put("inserted", true).put("relaySeq", 1L))))
+                }
+                "/v1/inbox?limit=100" -> RelayApiResponse(200, encodeInbox(inboxEnvelopes))
+                "/v1/messages/ack" -> {
+                    val batch = decodeAcks(request.body)
+                    beforeAck?.invoke()
+                    beforeAckBatch?.invoke(batch)
+                    ackBatches += batch
+                    terminalAcks += batch
+                    ackCalls++
+                    if (throwAfterAckOnce) { throwAfterAckOnce = false; throw IOException("TEST-ONLY ACK response loss") }
+                    if (throwAfterAckCall == ackCalls) throw IOException("TEST-ONLY ACK response loss")
+                    RelayApiResponse(200, ackResponse)
+                }
+                else -> throw AssertionError("Unexpected relay path")
+            }
+        }
+
+        private fun decodeOutbound(body: JSONObject): RelayOutboundEnvelope {
+            val wire = body.getJSONArray("messages").getJSONObject(0)
+            val context = RelayOuterContext(
+                wire.getString("messageId"), wire.getString("routeId"), SENDER_INSTALL,
+                wire.getString("recipientInstallId"), wire.getInt("senderKeyVersion"), wire.getInt("recipientKeyVersion")
+            )
+            return RelayOutboundEnvelope(context, Base64.getDecoder().decode(wire.getString("ciphertext")))
+        }
+
+        private fun encodeInbox(envelopes: List<RelayInboxEnvelope>) = JSONObject().put("messages", JSONArray(envelopes.map {
+            JSONObject().put("messageId", it.outerContext.messageId).put("routeId", it.outerContext.routeId)
+                .put("senderInstallId", it.outerContext.senderInstallId).put("recipientInstallId", it.outerContext.recipientInstallId)
+                .put("senderKeyVersion", it.outerContext.senderKeyVersion).put("recipientKeyVersion", it.outerContext.recipientKeyVersion)
+                .put("relaySeq", it.relaySeq).put("receivedAt", it.receivedAt).put("expiresAt", it.expiresAt)
+                .put("ciphertext", Base64.getEncoder().encodeToString(it.ciphertext))
+        }))
+
+        private fun decodeAcks(body: JSONObject): List<RelayTerminalAck> = body.getJSONArray("acks").let { acks ->
+            (0 until acks.length()).map { index ->
+                val ack = acks.getJSONObject(index)
+                RelayTerminalAck(ack.getString("messageId"), ack.getString("outcome"))
+            }
+        }
+    }
+
+    private companion object {
+        private const val RELAY_URL = "https://relay.field-maintenance-prod.com"
+        private const val TEST_INSTALL_CREDENTIAL = "TEST-ONLY-install-credential"
+        private const val SENDER_INSTALL = "TEST-ONLY-sender-install"
+        private const val RECIPIENT_INSTALL = "TEST-ONLY-recipient-install"
+        private const val ROUTE_ID = "TEST-ONLY-route-a"
+        private const val ROUTE_ID_B = "TEST-ONLY-route-b"
+        private const val EVENT_ID = "TEST-ONLY-event-a"
+        private const val EVENT_ID_B = "TEST-ONLY-event-b"
+        private const val EVENT_SUBSTITUTION_ID = "TEST-ONLY-event-substitution"
+        private const val JOURNAL_HASH = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        private const val RECEIVED_AT = 1_700_000_000_000L
+        private const val EXPIRES_AT = RECEIVED_AT + 2_592_000_000L
+    }
+}
