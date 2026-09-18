@@ -29,13 +29,18 @@ object OwnerScopeStore {
 
     @Synchronized
     fun remember(c: Context, event: DoseEvent) {
+        rememberChecked(c, event)
+    }
+
+    @Synchronized
+    fun rememberChecked(c: Context, event: DoseEvent): Boolean {
         val owner = event.ownerId.ifBlank {
             if (event.type.startsWith("program_") || event.type == "alarm") event.actorTopic else ""
         }
-        if (owner.isBlank()) return
+        if (owner.isBlank()) return true
         val edit = prefs(c).edit()
         event.medications.filter { it.id.isNotBlank() }.forEach { edit.putString(ownerKey(it.id), owner) }
-        edit.commit()
+        return edit.commit()
     }
 
     fun remoteMedications(c: Context, ownerId: String): List<Medication> =
@@ -46,8 +51,8 @@ object OwnerScopeStore {
             ?: ProgramRule(medicationId)
 
     @Synchronized
-    fun applyRemoteProgram(c: Context, ownerId: String, type: String, medication: Medication) {
-        if (ownerId.isBlank() || medication.id.isBlank() || ownerId == localOwnerId(c)) return
+    fun applyRemoteProgram(c: Context, ownerId: String, type: String, medication: Medication): Boolean {
+        if (ownerId.isBlank() || medication.id.isBlank() || ownerId == localOwnerId(c)) return true
         val all = loadRemote(c).toMutableList()
         var rules: List<ScopedRule>? = null
         when (type) {
@@ -60,17 +65,28 @@ object OwnerScopeStore {
                 val scoped = ownerId to medication
                 if (index >= 0) all[index] = scoped else all += scoped
             }
-            else -> return
+            else -> return true
         }
 
         val edit = prefs(c).edit().putString(KEY_REMOTE, encodeRemote(all))
         if (rules != null) edit.putString(KEY_REMOTE_RULES, encodeRemoteRules(rules))
-        edit.putString(ownerKey(medication.id), ownerId).commit()
+        return edit.putString(ownerKey(medication.id), ownerId).commit()
     }
 
     @Synchronized
     fun applyRemoteRule(c: Context, ownerId: String, rule: ProgramRule, event: DoseEvent): Boolean {
-        if (ownerId.isBlank() || rule.medicationId.isBlank() || ownerId == localOwnerId(c)) return false
+        val result = applyRemoteRuleResult(c, ownerId, rule, event)
+        return result.accepted && result.committed
+    }
+
+    @Synchronized
+    fun applyRemoteRuleChecked(c: Context, ownerId: String, rule: ProgramRule, event: DoseEvent): Boolean =
+        applyRemoteRuleResult(c, ownerId, rule, event).committed
+
+    private data class RuleApplyResult(val accepted: Boolean, val committed: Boolean)
+
+    private fun applyRemoteRuleResult(c: Context, ownerId: String, rule: ProgramRule, event: DoseEvent): RuleApplyResult {
+        if (ownerId.isBlank() || rule.medicationId.isBlank() || ownerId == localOwnerId(c)) return RuleApplyResult(false, true)
         val p = prefs(c)
         val medId = rule.medicationId
         val storedRevision = p.getLong(ruleRevisionKey(ownerId, medId), 0L)
@@ -84,7 +100,7 @@ object OwnerScopeStore {
                 else -> event.eventId > storedEvent
             }
         } else event.timestamp >= legacyStamp
-        if (!accept) return false
+        if (!accept) return RuleApplyResult(false, true)
 
         val normalized = rule.copy(
             weekdays = rule.weekdays.filter { it in 1..7 }.toSet(),
@@ -98,7 +114,7 @@ object OwnerScopeStore {
         // Persist the rule body, its ordering checkpoint, and owner binding in one
         // commit. If the process dies before commit nothing is visible; if commit
         // succeeds, replay observes the checkpoint and is a no-op.
-        p.edit()
+        val committed = p.edit()
             .putString(KEY_REMOTE_RULES, encodeRemoteRules(current))
             .putLong(ruleStampKey(ownerId, medId), event.timestamp)
             .putLong(ruleRevisionKey(ownerId, medId), event.revision)
@@ -106,7 +122,7 @@ object OwnerScopeStore {
             .putString(ruleEventKey(ownerId, medId), event.eventId)
             .putString(ownerKey(normalized.medicationId), ownerId)
             .commit()
-        return true
+        return RuleApplyResult(true, committed)
     }
 
     @Synchronized

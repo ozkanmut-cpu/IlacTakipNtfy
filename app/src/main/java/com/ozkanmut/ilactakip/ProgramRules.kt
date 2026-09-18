@@ -69,16 +69,15 @@ object ProgramRuleStore {
     }
 
     @Synchronized
-    fun applyRemote(c: Context, event: DoseEvent) {
-        if (event.type != "program_rule_updated") return
-        val carrier = event.medications.firstOrNull() ?: return
-        if (carrier.id.isBlank() || carrier.dose.isBlank()) return
-        val rule = runCatching { decode(JSONObject(carrier.dose)) }.getOrNull() ?: return
-        if (rule.medicationId != carrier.id) return
+    fun applyRemote(c: Context, event: DoseEvent): Boolean {
+        if (event.type != "program_rule_updated") return true
+        val carrier = event.medications.firstOrNull() ?: return true
+        if (carrier.id.isBlank() || carrier.dose.isBlank()) return true
+        val rule = runCatching { decode(JSONObject(carrier.dose)) }.getOrNull() ?: return true
+        if (rule.medicationId != carrier.id) return true
         val ownerId = event.ownerId.ifBlank { event.actorTopic }
         if (ownerId.isNotBlank() && ownerId != OwnerScopeStore.localOwnerId(c)) {
-            OwnerScopeStore.applyRemoteRule(c, ownerId, rule, event)
-            return
+            return OwnerScopeStore.applyRemoteRuleChecked(c, ownerId, rule, event)
         }
 
         val p = prefs(c)
@@ -96,19 +95,21 @@ object ProgramRuleStore {
                 else -> event.eventId > storedEvent
             }
         } else event.timestamp >= lastStamp
-        if (!accept) return
+        if (!accept) return true
 
         val normalized = normalize(rule)
         val updatedRules = listOf(normalized) + load(c).filterNot { it.medicationId == normalized.medicationId }
         val encodedRules = encodeRules(updatedRules)
-        p.edit()
+        val committed = p.edit()
             .putString(KEY, encodedRules)
             .putLong(STAMP_PREFIX + id, event.timestamp)
             .putLong(REV_PREFIX + id, event.revision)
             .putString(ACTOR_PREFIX + id, event.actorTopic)
             .putString(EVENT_PREFIX + id, event.eventId)
             .commit()
+        if (!committed) return false
         AlarmScheduler.scheduleAll(c, Store.load(c), observeProgramChanges = false)
+        return true
     }
 
     private fun latestLocalRuleEvent(c: Context, medicationId: String): DoseEvent? {
