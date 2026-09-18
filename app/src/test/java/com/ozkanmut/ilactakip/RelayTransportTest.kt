@@ -2,6 +2,7 @@ package com.ozkanmut.ilactakip
 
 import android.content.Context
 import android.content.ContextWrapper
+import android.content.SharedPreferences
 import androidx.test.core.app.ApplicationProvider
 import com.google.crypto.tink.Aead
 import com.google.crypto.tink.KeysetHandle
@@ -329,6 +330,87 @@ class RelayTransportTest {
         assertEquals(1, effects)
         assertEquals(1, EventStore.load(recipient.context).count { it.eventId == EVENT_ID })
         assertEquals(listOf("processed"), http.terminalAcks.map { it.outcome })
+    }
+
+    // Mutation caught: ignore a failed synchronous commit from a direct relay domain effect,
+    // advance the journal to EFFECTS/TERMINAL, and ACK a delivery whose owner binding is not durable.
+    @Test
+    fun directDomainEffectCommitFailureLeavesRelayDeliveryAppendedAndUnacknowledged() {
+        val event = localEvent("TEST-ONLY-direct-effect-failure").copy(
+            medications = listOf(Medication("TEST-ONLY-direct-med", "Direct", "", listOf("08:00")))
+        )
+
+        assertRelayEffectCommitFailure(
+            failedPreference = "dosefolk_owner_scope",
+            messageId = "TEST-ONLY-direct-effect-message",
+            event = event
+        )
+    }
+
+    // Mutation caught: treat an ordering-sensitive body/checkpoint write as successful when its
+    // SharedPreferences commit failed, making replay skip or acknowledge a partial program state.
+    @Test
+    fun programRuleAndCapabilityCommitFailuresNeverAdvanceRelayEffectsOrAck() {
+        val medication = Medication("TEST-ONLY-ordered-med", "Ordered", "1", listOf("09:00"))
+        val ruleCarrier = medication.copy(
+            dose = ProgramRuleStore.encode(ProgramRule(medication.id, weekdays = setOf(1, 3, 5))).toString(),
+            times = emptyList()
+        )
+        val cases = listOf(
+            Triple(
+                "dosefolk_program_sync",
+                "TEST-ONLY-program-order-message",
+                localEvent("TEST-ONLY-program-order-event").copy(
+                    type = "program_updated",
+                    time = "program",
+                    medications = listOf(medication),
+                    ownerId = RECIPIENT_INSTALL
+                )
+            ),
+            Triple(
+                "dosefolk_program_rules",
+                "TEST-ONLY-rule-order-message",
+                localEvent("TEST-ONLY-rule-order-event").copy(
+                    type = "program_rule_updated",
+                    time = "program",
+                    medications = listOf(ruleCarrier),
+                    ownerId = RECIPIENT_INSTALL
+                )
+            ),
+            Triple(
+                "dosefolk_remote_capabilities",
+                "TEST-ONLY-capability-order-message",
+                localEvent("TEST-ONLY-capability-order-event").copy(
+                    type = "capability_edit_program_granted",
+                    time = "EDIT_PROGRAM",
+                    medications = emptyList(),
+                    ownerId = SENDER_INSTALL
+                )
+            )
+        )
+
+        cases.forEach { (failedPreference, messageId, event) ->
+            assertRelayEffectCommitFailure(failedPreference, messageId, event, canEditProgram = true)
+        }
+    }
+
+    // Mutation caught: ignore a failed revoke-tombstone/cleanup commit and send a terminal ACK,
+    // allowing the relay to delete the only recoverable copy of an incompletely applied revoke.
+    @Test
+    fun revokeCleanupCommitFailureLeavesRelayDeliveryAppendedAndUnacknowledged() {
+        val event = localEvent("TEST-ONLY-revoke-cleanup-event").copy(
+            type = "circle_revoked",
+            time = "circle",
+            medications = emptyList(),
+            ownerId = SENDER_INSTALL,
+            targetTopic = RECIPIENT_INSTALL
+        )
+
+        assertRelayEffectCommitFailure(
+            failedPreference = "dosefolk_revoked_peers",
+            messageId = "TEST-ONLY-revoke-cleanup-message",
+            event = event
+        )
     }
 
     // Mutation caught: discard terminal ACK state after a response-loss even though the relay has deleted it.
@@ -669,6 +751,40 @@ class RelayTransportTest {
         Store.savePeople(recipient.context, listOf(Person("TEST-ONLY-person", "Peer", sender.installId)))
     }
 
+    private fun assertRelayEffectCommitFailure(
+        failedPreference: String,
+        messageId: String,
+        event: DoseEvent,
+        canEditProgram: Boolean = false
+    ) {
+        recipient = device(RECIPIENT_INSTALL, setOf(failedPreference))
+        recipient.context.getSharedPreferences("ilac_takip", Context.MODE_PRIVATE).edit()
+            .putString("topic", recipient.installId).commit()
+        check(recipient.peers.pin(sender.installId, sender.identity))
+        Store.savePeople(recipient.context, listOf(
+            Person("TEST-ONLY-failing-effect-peer", "Peer", sender.installId, canEditProgram)
+        ))
+        http = ScriptedRelayHttp()
+        senderApi = RelayApi(RELAY_URL, TEST_INSTALL_CREDENTIAL, http)
+        recipientApi = RelayApi(RELAY_URL, TEST_INSTALL_CREDENTIAL, http)
+        val payload = EventStore.payload(event.copy(
+            actorTopic = sender.installId,
+            targetTopic = recipient.installId,
+            syncState = "synced"
+        ))
+        http.inboxEnvelopes = listOf(inboundEnvelope(messageId, payload))
+
+        val result = RelaySyncTransport(sender.outbox(senderApi), recipient.inbox(recipientApi))
+            .pullBlocking(recipient.context)
+
+        assertTrue(http.terminalAcks.isEmpty())
+        val durableProgress = RelayInboxJournal(recipient.context).get(messageId)
+        assertEquals(RelayInboxJournal.APPENDED, durableProgress?.phase)
+        assertEquals(null, durableProgress?.outcome)
+        assertFalse(RemoteEventReceiptStore.processed(recipient.context, event.eventId))
+        assertFalse(result)
+    }
+
     private fun localEvent(id: String) = DoseEvent(
         eventId = id, type = "taken", time = "08:00", actor = "Sender", actorTopic = sender.installId,
         timestamp = 1_700_000_000_000L, medications = emptyList(), revision = 1L,
@@ -724,14 +840,10 @@ class RelayTransportTest {
         .getSharedPreferences("dosefolk_remote_event_receipts", Context.MODE_PRIVATE)
         .getStringSet("processed_event_ids_inflight", emptySet()).orEmpty()
 
-    private fun device(installId: String): Device {
+    private fun device(installId: String, failedCommitPreferences: Set<String> = emptySet()): Device {
         val application = ApplicationProvider.getApplicationContext<Context>()
         val namespace = "TEST-ONLY-relay-transport-${UUID.randomUUID()}"
-        val context = object : ContextWrapper(application) {
-            override fun getApplicationContext(): Context = this
-            override fun getSharedPreferences(name: String, mode: Int) =
-                super.getSharedPreferences("$namespace-$name", mode)
-        }
+        val context = CommitFailingContext(application, namespace, failedCommitPreferences)
         val master = KeysetHandle.generateNew(PredefinedAeadParameters.AES256_GCM)
             .getPrimitive(RegistryConfiguration.get(), Aead::class.java)
         val source = object : RelayMasterAeadSource {
@@ -743,6 +855,49 @@ class RelayTransportTest {
         val identityStore = RelayIdentityStore(context, source)
         val identity = identityStore.publicIdentity()
         return Device(context, installId, identity, RelayCrypto(identityStore, installId), RelayPeerStore(context))
+    }
+
+    private class CommitFailingContext(
+        base: Context,
+        private val namespace: String,
+        private val failedPreferenceNames: Set<String>
+    ) : ContextWrapper(base) {
+        override fun getApplicationContext(): Context = this
+
+        override fun getSharedPreferences(name: String, mode: Int): SharedPreferences {
+            val preferences = super.getSharedPreferences("$namespace-$name", mode)
+            return if (name in failedPreferenceNames) CommitFailingPreferences(preferences) else preferences
+        }
+    }
+
+    private class CommitFailingPreferences(
+        private val delegate: SharedPreferences
+    ) : SharedPreferences by delegate {
+        override fun edit(): SharedPreferences.Editor = CommitFailingEditor(delegate.edit())
+    }
+
+    private class CommitFailingEditor(
+        private val delegate: SharedPreferences.Editor
+    ) : SharedPreferences.Editor {
+        override fun putString(key: String?, value: String?): SharedPreferences.Editor =
+            apply { delegate.putString(key, value) }
+        override fun putStringSet(key: String?, values: Set<String>?): SharedPreferences.Editor =
+            apply { delegate.putStringSet(key, values) }
+        override fun putInt(key: String?, value: Int): SharedPreferences.Editor =
+            apply { delegate.putInt(key, value) }
+        override fun putLong(key: String?, value: Long): SharedPreferences.Editor =
+            apply { delegate.putLong(key, value) }
+        override fun putFloat(key: String?, value: Float): SharedPreferences.Editor =
+            apply { delegate.putFloat(key, value) }
+        override fun putBoolean(key: String?, value: Boolean): SharedPreferences.Editor =
+            apply { delegate.putBoolean(key, value) }
+        override fun remove(key: String?): SharedPreferences.Editor = apply { delegate.remove(key) }
+        override fun clear(): SharedPreferences.Editor = apply { delegate.clear() }
+        override fun commit(): Boolean {
+            delegate.commit()
+            return false
+        }
+        override fun apply() = delegate.apply()
     }
 
     private data class Device(
@@ -843,10 +998,3 @@ class RelayTransportTest {
         private const val ROUTE_ID = "TEST-ONLY-route-a"
         private const val ROUTE_ID_B = "TEST-ONLY-route-b"
         private const val EVENT_ID = "TEST-ONLY-event-a"
-        private const val EVENT_ID_B = "TEST-ONLY-event-b"
-        private const val EVENT_SUBSTITUTION_ID = "TEST-ONLY-event-substitution"
-        private const val JOURNAL_HASH = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-        private const val RECEIVED_AT = 1_700_000_000_000L
-        private const val EXPIRES_AT = RECEIVED_AT + 2_592_000_000L
-    }
-}
