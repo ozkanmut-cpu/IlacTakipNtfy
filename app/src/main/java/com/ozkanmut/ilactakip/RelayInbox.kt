@@ -39,7 +39,7 @@ class RelayInbox internal constructor(
             try {
                 api.acknowledge(chunk.map { RelayTerminalAck(it.messageId, checkNotNull(it.outcome)) })
                 RemoteEventReceiptStore.commitRelayTerminalBatch(context, chunk.asSequence()
-                    .filter { it.outcome == "processed" && it.eventId != it.messageId }
+                    .filter { it.outcome == "processed" }
                     .map { it.eventId }
                     .toSet())
                 journal.remove(chunk.map { it.messageId }.toSet())

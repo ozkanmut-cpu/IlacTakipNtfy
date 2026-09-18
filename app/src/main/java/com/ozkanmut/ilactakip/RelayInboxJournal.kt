@@ -23,7 +23,7 @@ internal class RelayInboxJournal(context: Context) : RelayInboxJournalStore {
 
     private fun all(): List<Entry> = try {
         val array = JSONArray(prefs.getString("entries", "[]") ?: "[]")
-        (0 until array.length()).map { index ->
+        val entries = (0 until array.length()).map { index ->
             val o = array.getJSONObject(index)
             require(o.keys().asSequence().toSet() == setOf("messageId", "eventId", "eventHash", "phase", "outcome"))
             val outcome = when (val value = o.opt("outcome")) {
@@ -31,7 +31,13 @@ internal class RelayInboxJournal(context: Context) : RelayInboxJournalStore {
                 is String -> value
                 else -> throw IllegalArgumentException("Invalid relay journal outcome")
             }
-            val entry = Entry(o.getString("messageId"), o.getString("eventId"), o.getString("eventHash"), o.getString("phase"), outcome)
+            val entry = Entry(
+                o.opt("messageId") as? String ?: throw IllegalArgumentException("Invalid relay journal message ID"),
+                o.opt("eventId") as? String ?: throw IllegalArgumentException("Invalid relay journal event ID"),
+                o.opt("eventHash") as? String ?: throw IllegalArgumentException("Invalid relay journal event hash"),
+                o.opt("phase") as? String ?: throw IllegalArgumentException("Invalid relay journal phase"),
+                outcome
+            )
             RelayEnvelopeFormat.requireOpaqueId(entry.messageId); RelayEnvelopeFormat.requireOpaqueId(entry.eventId)
             require(entry.eventHash.matches(Regex("[0-9a-f]{64}")))
             require(entry.phase in setOf(STARTED, APPENDED, EFFECTS, TERMINAL))
@@ -39,6 +45,8 @@ internal class RelayInboxJournal(context: Context) : RelayInboxJournalStore {
             require(entry.outcome == null || entry.outcome in setOf("processed", "duplicate", "rejected"))
             entry
         }
+        require(entries.map { it.messageId }.toSet().size == entries.size)
+        entries
     } catch (_: Exception) { throw java.security.GeneralSecurityException("Invalid relay journal") }
 
     private fun save(entries: List<Entry>) {
