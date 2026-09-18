@@ -3,4 +3,5 @@
     <exclude domain="sharedpref" path="dosefolk_relay_identity.xml" />
     <exclude domain="sharedpref" path="dosefolk_relay_peers.xml" />
     <exclude domain="sharedpref" path="dosefolk_relay_outbox.xml" />
+    <exclude domain="sharedpref" path="dosefolk_relay_inbox_journal.xml" />
 </full-backup-content>

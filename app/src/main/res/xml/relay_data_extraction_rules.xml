@@ -4,10 +4,12 @@
         <exclude domain="sharedpref" path="dosefolk_relay_identity.xml" />
         <exclude domain="sharedpref" path="dosefolk_relay_peers.xml" />
         <exclude domain="sharedpref" path="dosefolk_relay_outbox.xml" />
+        <exclude domain="sharedpref" path="dosefolk_relay_inbox_journal.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="dosefolk_relay_identity.xml" />
         <exclude domain="sharedpref" path="dosefolk_relay_peers.xml" />
         <exclude domain="sharedpref" path="dosefolk_relay_outbox.xml" />
+        <exclude domain="sharedpref" path="dosefolk_relay_inbox_journal.xml" />
     </device-transfer>
 </data-extraction-rules>

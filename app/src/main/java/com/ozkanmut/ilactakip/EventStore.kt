@@ -38,7 +38,7 @@ object EventStore {
         val current = p.getLong(KEY_REVISION, 0L)
         check(current < Long.MAX_VALUE) { "Lamport revision counter exhausted" }
         val next = current + 1L
-        p.edit().putLong(KEY_REVISION, next).commit()
+        if (!p.edit().putLong(KEY_REVISION, next).commit()) throw java.io.IOException("Could not persist event revision")
         return next
     }
 
@@ -47,7 +47,9 @@ object EventStore {
         if (remoteRevision <= 0L) return
         val p = prefs(c)
         val current = p.getLong(KEY_REVISION, 0L)
-        if (remoteRevision > current) p.edit().putLong(KEY_REVISION, remoteRevision).commit()
+        if (remoteRevision > current && !p.edit().putLong(KEY_REVISION, remoteRevision).commit()) {
+            throw java.io.IOException("Could not persist event revision")
+        }
     }
 
     @Synchronized
@@ -104,7 +106,14 @@ object EventStore {
     private fun save(c: Context, events: List<DoseEvent>) {
         val array = JSONArray()
         events.forEach { array.put(toJson(it)) }
-        prefs(c).edit().putString(KEY_EVENTS, array.toString()).commit()
+        val preferences = prefs(c)
+        val previous = preferences.getString(KEY_EVENTS, null)
+        if (!preferences.edit().putString(KEY_EVENTS, array.toString()).commit()) {
+            val rollback = preferences.edit()
+            if (previous == null) rollback.remove(KEY_EVENTS) else rollback.putString(KEY_EVENTS, previous)
+            rollback.commit()
+            throw java.io.IOException("Could not persist events")
+        }
     }
 
     fun payload(event: DoseEvent): JSONObject = JSONObject()

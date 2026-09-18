@@ -1,6 +1,5 @@
 package com.ozkanmut.ilactakip
 
-import android.content.Context
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.BufferedOutputStream
@@ -115,13 +114,6 @@ class RelayApi(baseUrl: String, credential: String, private val http: RelayApiHt
     private fun requireFields(value: JSONObject, names: Set<String>) = requireRelay(value.keys().asSequence().toSet() == names)
 
     companion object {
-        const val PRODUCTION_URL = "https://relay.field-maintenance-prod.com"
-        fun production(context: Context, baseUrl: String = PRODUCTION_URL): RelayApi? {
-            val credential = PushGatewayCredentialStore.load(context) ?: return null
-            val normalized = validateBaseUrl(baseUrl)
-            return RelayApi(normalized, credential, UrlRelayHttp(normalized))
-        }
-
         private fun validateBaseUrl(raw: String): String = try {
             val uri = URI(raw.trim())
             requireRelay(uri.scheme == "https" && !uri.host.isNullOrBlank() && uri.userInfo == null &&

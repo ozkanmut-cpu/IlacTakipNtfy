@@ -138,10 +138,18 @@ object RemoteEventReceiptStore {
             eventId,
             Int.MAX_VALUE
         )
-        p.edit()
+        val previousSet = p.getStringSet(KEY_INFLIGHT_SET, null)?.toSet()
+        val previousOrder = p.getString(KEY_INFLIGHT_ORDER, null)
+        if (!p.edit()
             .putStringSet(KEY_INFLIGHT_SET, ordered.toSet())
             .putString(KEY_INFLIGHT_ORDER, JSONArray(ordered).toString())
-            .commit()
+            .commit()) {
+            val rollback = p.edit()
+            if (previousSet == null) rollback.remove(KEY_INFLIGHT_SET) else rollback.putStringSet(KEY_INFLIGHT_SET, previousSet)
+            if (previousOrder == null) rollback.remove(KEY_INFLIGHT_ORDER) else rollback.putString(KEY_INFLIGHT_ORDER, previousOrder)
+            rollback.commit()
+            throw java.io.IOException("Could not persist relay receipt")
+        }
     }
 
     /** Call only after SyncCheckpointStore.commitSuccessfulBatch(). */
@@ -156,12 +164,24 @@ object RemoteEventReceiptStore {
         val inflightOrder = orderedIds(c, KEY_INFLIGHT_ORDER, inflight)
         val merged = RemoteReceiptRetention.merge(historyOrder, inflightOrder, MAX_IDS)
 
-        p.edit()
+        val previousHistory = p.getStringSet(KEY_SET, null)?.toSet()
+        val previousHistoryOrder = p.getString(KEY_ORDER, null)
+        val previousInflight = p.getStringSet(KEY_INFLIGHT_SET, null)?.toSet()
+        val previousInflightOrder = p.getString(KEY_INFLIGHT_ORDER, null)
+        if (!p.edit()
             .putStringSet(KEY_SET, merged.toSet())
             .putString(KEY_ORDER, JSONArray(merged).toString())
             .remove(KEY_INFLIGHT_SET)
             .remove(KEY_INFLIGHT_ORDER)
-            .commit()
+            .commit()) {
+            val rollback = p.edit()
+            if (previousHistory == null) rollback.remove(KEY_SET) else rollback.putStringSet(KEY_SET, previousHistory)
+            if (previousHistoryOrder == null) rollback.remove(KEY_ORDER) else rollback.putString(KEY_ORDER, previousHistoryOrder)
+            if (previousInflight == null) rollback.remove(KEY_INFLIGHT_SET) else rollback.putStringSet(KEY_INFLIGHT_SET, previousInflight)
+            if (previousInflightOrder == null) rollback.remove(KEY_INFLIGHT_ORDER) else rollback.putString(KEY_INFLIGHT_ORDER, previousInflightOrder)
+            rollback.commit()
+            throw java.io.IOException("Could not compact relay receipt")
+        }
     }
 
     /** Relay ACK has made terminal inbox outcomes safe to compact from the in-flight receipt ledger. */

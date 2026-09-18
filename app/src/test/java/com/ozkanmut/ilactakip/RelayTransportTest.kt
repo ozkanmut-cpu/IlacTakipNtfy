@@ -138,6 +138,100 @@ class RelayTransportTest {
             .map { it.outerContext.recipientInstallId })
     }
 
+    // Mutation caught: rematerialize the already accepted recipient after another recipient fails.
+    @Test
+    fun partialRecipientAcceptanceSurvivesReconstructionWithoutResendingAcceptedEnvelope() {
+        val other = device("TEST-ONLY-partial-b")
+        EventStore.append(sender.context, localEvent(EVENT_ID).copy(targetTopic = ""))
+        sender.peers.pin(recipient.installId, recipient.identity); sender.peers.pin(other.installId, other.identity)
+        http.routes = listOf(route(ROUTE_ID, recipient), route(ROUTE_ID_B, other))
+        http.failingRecipients = setOf(other.installId)
+        assertFalse(sender.outbox(senderApi).flush())
+        val firstAccepted = http.acceptedEnvelopes.single().outerContext.messageId
+        http.failingRecipients = emptySet()
+        assertTrue(sender.outbox(senderApi).flush())
+        assertEquals(2, http.acceptedEnvelopes.size)
+        assertEquals(firstAccepted, http.acceptedEnvelopes[0].outerContext.messageId)
+        assertEquals("synced", EventStore.load(sender.context).single { it.eventId == EVENT_ID }.syncState)
+    }
+
+    // Mutation caught: retain two equivalent server routes and emit duplicate ciphertext for one
+    // recipient instead of selecting one deterministic route.
+    @Test
+    fun equivalentDuplicateRoutesMaterializeOneLexicographicallySelectedEnvelope() {
+        EventStore.append(sender.context, localEvent(EVENT_ID).copy(targetTopic = ""))
+        assertTrue(sender.peers.pin(recipient.installId, recipient.identity))
+        http.routes = listOf(route("TEST-ONLY-route-z", recipient), route("TEST-ONLY-route-a", recipient))
+
+        val outbox = sender.outbox(senderApi)
+        assertEquals(1, outbox.materializePending())
+        assertEquals(listOf("TEST-ONLY-route-a"), outbox.recordsFor(EVENT_ID).map { it.outerContext.routeId })
+    }
+
+    // Mutation caught: choose an arbitrary server identity when route records for a recipient
+    // conflict, turning route metadata into a trust root.
+    @Test
+    fun conflictingDuplicateRoutesFailClosedWithoutAnyEnqueue() {
+        val substituted = device("TEST-ONLY-conflicting-route")
+        EventStore.append(sender.context, localEvent(EVENT_ID).copy(targetTopic = ""))
+        assertTrue(sender.peers.pin(recipient.installId, recipient.identity))
+        http.routes = listOf(route(ROUTE_ID, recipient), route(ROUTE_ID_B, substituted).copy(recipientInstallId = recipient.installId))
+
+        val outbox = sender.outbox(senderApi)
+        assertEquals(0, outbox.materializePending())
+        assertFalse(outbox.flush())
+        assertTrue(outbox.recordsFor(EVENT_ID).isEmpty())
+        assertTrue(http.acceptedEnvelopes.isEmpty())
+    }
+
+    // Mutation caught: delete accepted evidence before it is possible to recover a crash after
+    // source sync, forcing a later flush to recreate or resend recipient ciphertext.
+    @Test
+    fun crashAfterSourceSyncedBeforeCleanupCompactsAcceptedRecordsWithoutResending() {
+        val other = device("TEST-ONLY-finalize-b")
+        EventStore.append(sender.context, localEvent(EVENT_ID).copy(targetTopic = ""))
+        assertTrue(sender.peers.pin(recipient.installId, recipient.identity))
+        assertTrue(sender.peers.pin(other.installId, other.identity))
+        http.routes = listOf(route(ROUTE_ID, recipient), route(ROUTE_ID_B, other))
+        val crash = object : RelayOutboxFaults {
+            override fun afterSourceSyncedBeforeCleanup(sourceEventId: String) { throw IOException("TEST-ONLY") }
+        }
+
+        assertFalse(sender.outbox(senderApi, crash).flush())
+        assertEquals(2, http.acceptedEnvelopes.size)
+        assertEquals("synced", EventStore.load(sender.context).single { it.eventId == EVENT_ID }.syncState)
+
+        val reconstructed = sender.outbox(senderApi)
+        assertTrue(reconstructed.flush())
+        assertEquals(2, http.acceptedEnvelopes.size)
+        assertTrue(reconstructed.recordsFor(EVENT_ID).isEmpty())
+    }
+
+    // Mutation caught: strand all accepted records if the process dies after the final recipient
+    // acceptance was persisted but before source sync, then enqueue them again on reconstruction.
+    @Test
+    fun crashAfterFinalAcceptanceBeforeSourceSyncFinalizesWithoutResending() {
+        val other = device("TEST-ONLY-before-sync-b")
+        EventStore.append(sender.context, localEvent(EVENT_ID).copy(targetTopic = ""))
+        assertTrue(sender.peers.pin(recipient.installId, recipient.identity))
+        assertTrue(sender.peers.pin(other.installId, other.identity))
+        http.routes = listOf(route(ROUTE_ID, recipient), route(ROUTE_ID_B, other))
+        val crash = object : RelayOutboxFaults {
+            override fun beforeSourceSynced(sourceEventId: String) { throw IOException("TEST-ONLY") }
+            override fun afterSourceSyncedBeforeCleanup(sourceEventId: String) = Unit
+        }
+
+        assertFalse(sender.outbox(senderApi, crash).flush())
+        assertEquals(2, http.acceptedEnvelopes.size)
+        assertEquals("pending", EventStore.load(sender.context).single { it.eventId == EVENT_ID }.syncState)
+
+        val reconstructed = sender.outbox(senderApi)
+        assertTrue(reconstructed.flush())
+        assertEquals(2, http.acceptedEnvelopes.size)
+        assertEquals("synced", EventStore.load(sender.context).single { it.eventId == EVENT_ID }.syncState)
+        assertTrue(reconstructed.recordsFor(EVENT_ID).isEmpty())
+    }
+
     // Mutation caught: use decrypted actor/target topics without binding them to authenticated outer
     // install IDs, allowing a valid peer signature to relay a payload for another actor or target.
     @Test
@@ -193,6 +287,90 @@ class RelayTransportTest {
 
         assertTrue(recipient.inbox(recipientApi).reconcile())
         assertEquals(listOf("duplicate"), http.terminalAcks.map { it.outcome })
+    }
+
+    // Mutation caught: interpret EventStore presence after an append crash as terminal duplicate,
+    // skipping the remaining effects and terminal journal marker on replay.
+    @Test
+    fun crashImmediatelyAfterAppendReplaysNonterminalJournalBeforeAckingProcessed() {
+        http.inboxEnvelopes = listOf(inboundEnvelope("TEST-ONLY-after-append", inboundPayload(EVENT_ID)))
+        val fault = object : RelayInboxFaults {
+            override fun afterAppend(messageId: String) { throw IOException("TEST-ONLY") }
+            override fun afterDurableApplyBeforeAck(messageId: String) = Unit
+        }
+        assertThrows(IOException::class.java) { recipient.inbox(recipientApi, fault).reconcile() }
+        assertTrue(EventStore.contains(recipient.context, EVENT_ID)); assertTrue(http.terminalAcks.isEmpty())
+        var effects = 0
+        val replay = object : RelayInboxFaults {
+            override fun beforeEffects(messageId: String) { effects++ }
+            override fun afterDurableApplyBeforeAck(messageId: String) = Unit
+        }
+        assertTrue(recipient.inbox(recipientApi, replay).reconcile())
+        assertEquals(1, effects)
+        assertEquals(listOf("processed"), http.terminalAcks.map { it.outcome })
+    }
+
+    // Mutation caught: repeat applied domain effects after a process death between effects and the
+    // terminal journal marker instead of resuming from EFFECTS and only committing the ACK gate.
+    @Test
+    fun crashAfterEffectsResumesTerminalMarkerWithoutRepeatingTheDelivery() {
+        http.inboxEnvelopes = listOf(inboundEnvelope("TEST-ONLY-after-effects", inboundPayload(EVENT_ID)))
+        var effects = 0
+        var crash = true
+        val fault = object : RelayInboxFaults {
+            override fun beforeEffects(messageId: String) { effects++ }
+            override fun afterEffects(messageId: String) { if (crash) throw IOException("TEST-ONLY") }
+            override fun afterDurableApplyBeforeAck(messageId: String) = Unit
+        }
+        assertThrows(IOException::class.java) { recipient.inbox(recipientApi, fault).reconcile() }
+        assertTrue(EventStore.contains(recipient.context, EVENT_ID)); assertTrue(http.terminalAcks.isEmpty())
+        crash = false
+        assertTrue(recipient.inbox(recipientApi, fault).reconcile())
+        assertEquals(1, effects)
+        assertEquals(1, EventStore.load(recipient.context).count { it.eventId == EVENT_ID })
+        assertEquals(listOf("processed"), http.terminalAcks.map { it.outcome })
+    }
+
+    // Mutation caught: discard terminal ACK state after a response-loss even though the relay has deleted it.
+    @Test
+    fun lostAckResponseRetriesPersistedTerminalAckOnNextEmptyInboxOnlyOnce() {
+        http.inboxEnvelopes = listOf(inboundEnvelope("TEST-ONLY-lost-ack", inboundPayload(EVENT_ID)))
+        http.throwAfterAckOnce = true
+        assertFalse(recipient.inbox(recipientApi).reconcile())
+        http.inboxEnvelopes = emptyList()
+        assertTrue(recipient.inbox(recipientApi).reconcile())
+        assertTrue(recipient.inbox(recipientApi).reconcile())
+        assertEquals(2, http.terminalAcks.count { it.messageId == "TEST-ONLY-lost-ack" })
+    }
+
+    // Mutation caught: send ACK when the terminal journal marker failed to persist.
+    @Test
+    fun terminalJournalFailurePreventsAckAndTransportReturnsFalse() {
+        http.inboxEnvelopes = listOf(inboundEnvelope("TEST-ONLY-terminal-failure", inboundPayload(EVENT_ID)))
+        val journal = object : RelayInboxJournalStore {
+            override fun get(messageId: String) = null
+            override fun pendingAcks() = emptyList<RelayInboxJournal.Entry>()
+            override fun remove(ids: Set<String>) = Unit
+            override fun put(entry: RelayInboxJournal.Entry) {
+                if (entry.phase == RelayInboxJournal.TERMINAL) throw IOException("TEST-ONLY")
+            }
+        }
+        val inbox = RelayInbox(recipient.context, recipient.installId, recipient.codec, recipient.peers, recipientApi, RelayInboxFaults.NONE, journal)
+        assertFalse(RelaySyncTransport(sender.outbox(senderApi), inbox).pullBlocking(recipient.context))
+        assertTrue(http.terminalAcks.isEmpty())
+    }
+
+    // Mutation caught: accept a corrupted relay-only journal and ACK from malformed or ambiguous
+    // durable progress rather than failing closed before any terminal acknowledgement.
+    @Test
+    fun corruptInboxJournalFailsClosedBeforeAnyAck() {
+        http.inboxEnvelopes = listOf(inboundEnvelope("TEST-ONLY-corrupt-journal", inboundPayload(EVENT_ID)))
+        recipient.context.getSharedPreferences("dosefolk_relay_inbox_journal", Context.MODE_PRIVATE).edit()
+            .putString("entries", "[{\"messageId\":\"bad\",\"phase\":\"terminal\"}]").commit()
+
+        assertFalse(RelaySyncTransport(sender.outbox(senderApi), recipient.inbox(recipientApi))
+            .pullBlocking(recipient.context))
+        assertTrue(http.terminalAcks.isEmpty())
     }
 
     // Mutation caught: leave an invalid-signature message unacknowledged forever, or leak its
@@ -379,7 +557,8 @@ class RelayTransportTest {
         val codec: RelayCrypto,
         val peers: RelayPeerStore
     ) {
-        fun outbox(api: RelayApi) = RelayOutbox(context, installId, codec, peers, api)
+        fun outbox(api: RelayApi, faults: RelayOutboxFaults = RelayOutboxFaults.NONE) =
+            RelayOutbox(context, installId, codec, peers, api, faults)
         fun inbox(api: RelayApi, faults: RelayInboxFaults = RelayInboxFaults.NONE) =
             RelayInbox(context, installId, codec, peers, api, faults)
     }
@@ -392,9 +571,11 @@ class RelayTransportTest {
         var routes: List<RelayRoute> = emptyList()
         var inboxEnvelopes: List<RelayInboxEnvelope> = emptyList()
         var enqueueFailure: IOException? = null
+        var failingRecipients: Set<String> = emptySet()
         var enqueueResultMessageId: String? = null
         var ackResponse: JSONObject = JSONObject().put("ok", true)
         var beforeAck: (() -> Unit)? = null
+        var throwAfterAckOnce = false
 
         override fun execute(request: RelayApiRequest): RelayApiResponse {
             requests += request
@@ -407,7 +588,9 @@ class RelayTransportTest {
                 })))
                 "/v1/messages" -> {
                     enqueueFailure?.let { throw it }
-                    acceptedEnvelopes += decodeOutbound(request.body)
+                    val decoded = decodeOutbound(request.body)
+                    if (decoded.outerContext.recipientInstallId in failingRecipients) throw IOException("TEST-ONLY recipient failure")
+                    acceptedEnvelopes += decoded
                     RelayApiResponse(201, JSONObject().put("messages", JSONArray().put(JSONObject()
                         .put("messageId", enqueueResultMessageId ?: acceptedEnvelopes.last().outerContext.messageId)
                         .put("inserted", true).put("relaySeq", 1L))))
@@ -416,6 +599,7 @@ class RelayTransportTest {
                 "/v1/messages/ack" -> {
                     beforeAck?.invoke()
                     terminalAcks += decodeAcks(request.body)
+                    if (throwAfterAckOnce) { throwAfterAckOnce = false; throw IOException("TEST-ONLY ACK response loss") }
                     RelayApiResponse(200, ackResponse)
                 }
                 else -> throw AssertionError("Unexpected relay path")

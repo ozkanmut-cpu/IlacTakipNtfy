@@ -84,6 +84,7 @@ class RelayBackupRulesTest {
     private val relayPreferenceFiles = setOf(
         "sharedpref" to "dosefolk_relay_identity.xml",
         "sharedpref" to "dosefolk_relay_peers.xml",
-        "sharedpref" to "dosefolk_relay_outbox.xml"
+        "sharedpref" to "dosefolk_relay_outbox.xml",
+        "sharedpref" to "dosefolk_relay_inbox_journal.xml"
     )
 }
