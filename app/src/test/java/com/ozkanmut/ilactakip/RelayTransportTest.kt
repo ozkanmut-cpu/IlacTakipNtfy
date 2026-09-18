@@ -343,6 +343,122 @@ class RelayTransportTest {
         assertEquals(2, http.terminalAcks.count { it.messageId == "TEST-ONLY-lost-ack" })
     }
 
+    // Mutation caught: deserialize JSONObject.NULL as the string "null", or coerce a numeric
+    // or object outcome into an ACKable journal state instead of rejecting the ledger closed.
+    @Test
+    fun journalTreatsJsonNullAsNoOutcomeForEveryNonterminalPhaseAndRejectsNonStringOutcomes() {
+        val phases = listOf(RelayInboxJournal.STARTED, RelayInboxJournal.APPENDED, RelayInboxJournal.EFFECTS)
+        val messageIds = phases.indices.map { "TEST-ONLY-null-journal-$it" }
+        writeJournal(messageIds.indices.map { index ->
+            rawJournalEntry(messageIds[index], "TEST-ONLY-null-event-$index", phases[index], JSONObject.NULL)
+        })
+
+        val journal = RelayInboxJournal(recipient.context)
+        messageIds.forEach { messageId -> assertEquals(null, journal.get(messageId)?.outcome) }
+
+        listOf(7, JSONObject().put("unexpected", "processed")).forEachIndexed { index, malformedOutcome ->
+            writeJournal(listOf(rawJournalEntry(
+                "TEST-ONLY-invalid-outcome-$index", "TEST-ONLY-invalid-event-$index",
+                RelayInboxJournal.TERMINAL, malformedOutcome
+            )))
+            assertThrows(GeneralSecurityException::class.java) {
+                RelayInboxJournal(recipient.context).pendingAcks()
+            }
+        }
+    }
+
+    // Mutation caught: submit more than the relay's 100-outcome ACK limit, or retain a successful
+    // chunk until every later ACK has succeeded instead of compacting that chunk independently.
+    @Test
+    fun oneHundredAndOneTerminalOutcomesAreAcknowledgedInBoundedChunksAndRemovedPerChunk() {
+        val journal = RelayInboxJournal(recipient.context)
+        val messageIds = (0 until 101).map { "TEST-ONLY-terminal-chunk-$it" }
+        messageIds.forEachIndexed { index, messageId ->
+            journal.put(terminalJournalEntry(messageId, "TEST-ONLY-terminal-event-$index"))
+        }
+        var ackCalls = 0
+        http.beforeAckBatch = {
+            ackCalls++
+            if (ackCalls == 2) {
+                assertEquals(messageIds.drop(100).toSet(), journal.pendingAcks().map { it.messageId }.toSet())
+            }
+        }
+
+        assertTrue(recipient.inbox(recipientApi).reconcile())
+
+        assertEquals(listOf(100, 1), http.ackBatches.map { it.size })
+        assertEquals(messageIds.toSet(), http.terminalAcks.map { it.messageId }.toSet())
+        assertTrue(journal.pendingAcks().isEmpty())
+    }
+
+    // Mutation caught: merge persisted terminal ACKs and a full inbound page into one oversized
+    // request, preventing either group from reaching a terminal server acknowledgement.
+    @Test
+    fun pendingTerminalAcksAndFullInboxAreEventuallyAcknowledgedWithoutAnOversizedRequest() {
+        val journal = RelayInboxJournal(recipient.context)
+        val pendingIds = (0 until 100).map { "TEST-ONLY-pending-ack-$it" }
+        pendingIds.forEachIndexed { index, messageId ->
+            journal.put(terminalJournalEntry(messageId, "TEST-ONLY-pending-event-$index"))
+        }
+        val inboundIds = (0 until 100).map { "TEST-ONLY-full-inbox-$it" }
+        http.inboxEnvelopes = inboundIds.mapIndexed { index, messageId ->
+            inboundEnvelope(messageId, inboundPayload("TEST-ONLY-full-inbox-event-$index"))
+        }
+
+        assertTrue(recipient.inbox(recipientApi).reconcile())
+
+        assertEquals(listOf(100, 100), http.ackBatches.map { it.size })
+        assertTrue(http.ackBatches.all { it.size <= 100 })
+        assertEquals((pendingIds + inboundIds).toSet(), http.terminalAcks.map { it.messageId }.toSet())
+        assertEquals(200, http.terminalAcks.size)
+        assertTrue(journal.pendingAcks().isEmpty())
+    }
+
+    // Mutation caught: drop the uncertain second ACK chunk after a lost response, or retain the
+    // already confirmed first chunk in the journal and resend it with the retry.
+    @Test
+    fun lostSecondAckChunkRetainsOnlyThatChunkAndLaterJournalEntriesForRetry() {
+        val journal = RelayInboxJournal(recipient.context)
+        val messageIds = (0 until 201).map { "TEST-ONLY-lost-chunk-$it" }
+        messageIds.forEachIndexed { index, messageId ->
+            journal.put(terminalJournalEntry(messageId, "TEST-ONLY-lost-event-$index"))
+        }
+        http.throwAfterAckCall = 2
+
+        assertFalse(recipient.inbox(recipientApi).reconcile())
+
+        assertEquals(messageIds.drop(100).toSet(), journal.pendingAcks().map { it.messageId }.toSet())
+        assertEquals(listOf(100, 100), http.ackBatches.map { it.size })
+        assertEquals(messageIds.take(100), http.ackBatches[0].map { it.messageId })
+        assertEquals(messageIds.drop(100).take(100), http.ackBatches[1].map { it.messageId })
+
+        assertTrue(recipient.inbox(recipientApi).reconcile())
+
+        assertEquals(listOf(100, 100, 100, 1), http.ackBatches.map { it.size })
+        assertEquals(messageIds.drop(100).take(100), http.ackBatches[2].map { it.messageId })
+        assertEquals(listOf(messageIds.last()), http.ackBatches[3].map { it.messageId })
+        assertTrue(journal.pendingAcks().isEmpty())
+    }
+
+    // Mutation caught: compact every in-flight receipt after one successful relay ACK, losing an
+    // unrelated delivery's crash-recovery evidence instead of compacting only the ACKed receipt.
+    @Test
+    fun successfulAckCompactsOnlyItsMatchingRelayReceiptAndLeavesUnrelatedReceiptInFlight() {
+        val matchingReceiptId = "TEST-ONLY-matching-receipt"
+        val unrelatedReceiptId = "TEST-ONLY-unrelated-receipt"
+        val journal = RelayInboxJournal(recipient.context)
+        journal.put(terminalJournalEntry("TEST-ONLY-matching-receipt-message", matchingReceiptId))
+        RemoteEventReceiptStore.markProcessed(recipient.context, matchingReceiptId)
+        RemoteEventReceiptStore.markProcessed(recipient.context, unrelatedReceiptId)
+
+        assertTrue(recipient.inbox(recipientApi).reconcile())
+
+        assertEquals(listOf("TEST-ONLY-matching-receipt-message"), http.terminalAcks.map { it.messageId })
+        assertEquals(setOf(unrelatedReceiptId), inFlightRelayReceiptIds())
+        assertTrue(RemoteEventReceiptStore.processed(recipient.context, matchingReceiptId))
+        assertTrue(journal.pendingAcks().isEmpty())
+    }
+
     // Mutation caught: send ACK when the terminal journal marker failed to persist.
     @Test
     fun terminalJournalFailurePreventsAckAndTransportReturnsFalse() {
@@ -529,6 +645,23 @@ class RelayTransportTest {
 
     private fun route(routeId: String, target: Device) = RelayRoute(routeId, target.installId, target.identity)
 
+    private fun terminalJournalEntry(messageId: String, eventId: String) = RelayInboxJournal.Entry(
+        messageId, eventId, JOURNAL_HASH, RelayInboxJournal.TERMINAL, "processed"
+    )
+
+    private fun rawJournalEntry(messageId: String, eventId: String, phase: String, outcome: Any) =
+        JSONObject().put("messageId", messageId).put("eventId", eventId).put("eventHash", JOURNAL_HASH)
+            .put("phase", phase).put("outcome", outcome)
+
+    private fun writeJournal(entries: List<JSONObject>) {
+        recipient.context.getSharedPreferences("dosefolk_relay_inbox_journal", Context.MODE_PRIVATE).edit()
+            .putString("entries", JSONArray(entries).toString()).commit()
+    }
+
+    private fun inFlightRelayReceiptIds(): Set<String> = recipient.context
+        .getSharedPreferences("dosefolk_remote_event_receipts", Context.MODE_PRIVATE)
+        .getStringSet("processed_event_ids_inflight", emptySet()).orEmpty()
+
     private fun device(installId: String): Device {
         val application = ApplicationProvider.getApplicationContext<Context>()
         val namespace = "TEST-ONLY-relay-transport-${UUID.randomUUID()}"
@@ -575,7 +708,11 @@ class RelayTransportTest {
         var enqueueResultMessageId: String? = null
         var ackResponse: JSONObject = JSONObject().put("ok", true)
         var beforeAck: (() -> Unit)? = null
+        var beforeAckBatch: ((List<RelayTerminalAck>) -> Unit)? = null
         var throwAfterAckOnce = false
+        var throwAfterAckCall: Int? = null
+        val ackBatches = mutableListOf<List<RelayTerminalAck>>()
+        private var ackCalls = 0
 
         override fun execute(request: RelayApiRequest): RelayApiResponse {
             requests += request
@@ -597,9 +734,14 @@ class RelayTransportTest {
                 }
                 "/v1/inbox?limit=100" -> RelayApiResponse(200, encodeInbox(inboxEnvelopes))
                 "/v1/messages/ack" -> {
+                    val batch = decodeAcks(request.body)
                     beforeAck?.invoke()
-                    terminalAcks += decodeAcks(request.body)
+                    beforeAckBatch?.invoke(batch)
+                    ackBatches += batch
+                    terminalAcks += batch
+                    ackCalls++
                     if (throwAfterAckOnce) { throwAfterAckOnce = false; throw IOException("TEST-ONLY ACK response loss") }
+                    if (throwAfterAckCall == ackCalls) throw IOException("TEST-ONLY ACK response loss")
                     RelayApiResponse(200, ackResponse)
                 }
                 else -> throw AssertionError("Unexpected relay path")
@@ -641,6 +783,7 @@ class RelayTransportTest {
         private const val EVENT_ID = "TEST-ONLY-event-a"
         private const val EVENT_ID_B = "TEST-ONLY-event-b"
         private const val EVENT_SUBSTITUTION_ID = "TEST-ONLY-event-substitution"
+        private const val JOURNAL_HASH = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         private const val RECEIVED_AT = 1_700_000_000_000L
         private const val EXPIRES_AT = RECEIVED_AT + 2_592_000_000L
     }
