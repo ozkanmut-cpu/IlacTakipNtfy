@@ -25,10 +25,11 @@ class DosefolkSyncWorker(appContext: Context, params: WorkerParameters) : Worker
         PrescriptionNotifier.evaluate(applicationContext)
         DeliveryLedger.pruneCompleted(applicationContext)
 
-        val outboundOk = SyncTransportRuntime.current.flushPendingBlocking(applicationContext)
+        val transport = SyncWorkerTransport.selectedForOutboundAndInbound()
+        val outboundOk = transport.flushPendingBlocking(applicationContext)
         val hasMoreOutbound = EventStore.pending(applicationContext).isNotEmpty()
         val alertsOk = AlertOutbox.flushBlocking(applicationContext)
-        val inboundOk = SyncEngine.pullBlocking(applicationContext)
+        val inboundOk = transport.pullBlocking(applicationContext)
         val retry = SyncWorkDecision.shouldRetry(outboundOk, alertsOk, inboundOk, hasMoreOutbound)
         DosefolkQaLog.record(
             applicationContext,
@@ -43,6 +44,11 @@ class DosefolkSyncWorker(appContext: Context, params: WorkerParameters) : Worker
         )
         return if (retry) Result.retry() else Result.success()
     }
+}
+
+/** Ensures worker inbound and outbound paths share exactly one selected transport. */
+internal object SyncWorkerTransport {
+    fun selectedForOutboundAndInbound(): SyncTransport = SyncTransportRuntime.current
 }
 
 object DosefolkSyncScheduler {

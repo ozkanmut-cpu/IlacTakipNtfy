@@ -2,4 +2,5 @@
 <full-backup-content>
     <exclude domain="sharedpref" path="dosefolk_relay_identity.xml" />
     <exclude domain="sharedpref" path="dosefolk_relay_peers.xml" />
+    <exclude domain="sharedpref" path="dosefolk_relay_outbox.xml" />
 </full-backup-content>

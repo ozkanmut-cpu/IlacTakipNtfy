@@ -163,4 +163,7 @@ object RemoteEventReceiptStore {
             .remove(KEY_INFLIGHT_ORDER)
             .commit()
     }
+
+    /** Relay ACK has made terminal inbox outcomes safe to compact from the in-flight receipt ledger. */
+    fun commitRelayTerminalBatch(c: Context) = commitSuccessfulBatch(c)
 }

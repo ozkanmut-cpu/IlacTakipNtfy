@@ -15,9 +15,9 @@ import org.xmlpull.v1.XmlPullParser
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [35])
 class RelayBackupRulesTest {
-    // Mutation caught: omitting the legacy manifest rules or allowing either relay preference file into backup.
+    // Mutation caught: allowing relay identity, trust, or durable encrypted outbox records into backup.
     @Test
-    fun manifestLegacyBackupRulesExcludeOnlyRelayIdentityAndTrust() {
+    fun manifestLegacyBackupRulesExcludeRelayIdentityTrustAndOutbox() {
         assertEquals(
             mapOf("full-backup-content" to relayPreferenceFiles),
             exclusionsFromManifest("fullBackupContent", "full-backup-content")
@@ -26,7 +26,7 @@ class RelayBackupRulesTest {
 
     // Mutation caught: excluding relay state from cloud backup but not device transfer, or disabling all app backup.
     @Test
-    fun manifestCloudAndDeviceTransferRulesExcludeOnlyRelayIdentityAndTrust() {
+    fun manifestCloudAndDeviceTransferRulesExcludeRelayIdentityTrustAndOutbox() {
         assertEquals(
             mapOf("cloud-backup" to relayPreferenceFiles, "device-transfer" to relayPreferenceFiles),
             exclusionsFromManifest("dataExtractionRules", "data-extraction-rules")
@@ -83,6 +83,7 @@ class RelayBackupRulesTest {
 
     private val relayPreferenceFiles = setOf(
         "sharedpref" to "dosefolk_relay_identity.xml",
-        "sharedpref" to "dosefolk_relay_peers.xml"
+        "sharedpref" to "dosefolk_relay_peers.xml",
+        "sharedpref" to "dosefolk_relay_outbox.xml"
     )
 }

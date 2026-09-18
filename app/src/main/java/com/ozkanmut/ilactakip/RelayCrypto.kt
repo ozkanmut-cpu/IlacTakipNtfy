@@ -44,6 +44,9 @@ class VerifiedPayload internal constructor(val domainPayload: JSONObject) {
 
 /** Device-local codec. Call off the UI thread; identity capabilities reopen encrypted disk keysets. */
 class RelayCrypto(private val identityStore: RelayIdentityStore, private val localInstallId: String) {
+    /** Public version only; private keysets remain confined to RelayIdentityStore. */
+    internal fun localKeyVersion(): Int = identityStore.publicIdentity().keyVersion
+
     fun seal(domainPayload: JSONObject, recipient: RelayPublicIdentity, outerContext: RelayOuterContext): ByteArray = safely {
         HybridConfig.register()
         val context = outerContext.json()

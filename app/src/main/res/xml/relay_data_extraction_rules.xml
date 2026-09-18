@@ -3,9 +3,11 @@
     <cloud-backup>
         <exclude domain="sharedpref" path="dosefolk_relay_identity.xml" />
         <exclude domain="sharedpref" path="dosefolk_relay_peers.xml" />
+        <exclude domain="sharedpref" path="dosefolk_relay_outbox.xml" />
     </cloud-backup>
     <device-transfer>
         <exclude domain="sharedpref" path="dosefolk_relay_identity.xml" />
         <exclude domain="sharedpref" path="dosefolk_relay_peers.xml" />
+        <exclude domain="sharedpref" path="dosefolk_relay_outbox.xml" />
     </device-transfer>
 </data-extraction-rules>

@@ -101,7 +101,7 @@ class RelayTransportTest {
     @Test
     fun outboxEncryptsIndependentlyPerPinnedRecipientAndRejectsServerKeySubstitution() {
         val otherRecipient = device("TEST-ONLY-recipient-b")
-        val event = localEvent(EVENT_ID)
+        val event = localEvent(EVENT_ID).copy(targetTopic = "")
         EventStore.append(sender.context, event)
         sender.peers.pin(recipient.installId, recipient.identity)
         sender.peers.pin(otherRecipient.installId, otherRecipient.identity)
@@ -120,6 +120,22 @@ class RelayTransportTest {
         http.routes = listOf(route(ROUTE_ID, recipient).copy(recipientIdentity = otherRecipient.identity))
         assertEquals(0, outbox.materializePending())
         assertTrue(outbox.recordsFor(EVENT_SUBSTITUTION_ID).isEmpty())
+    }
+
+    // Mutation caught: fan out a nonblank recipient-bound event to every active route instead of
+    // materializing exactly one envelope for its intended recipient.
+    @Test
+    fun targetedOutboxEventMaterializesOnlyItsExactRecipientRoute() {
+        val otherRecipient = device("TEST-ONLY-targeted-recipient-b")
+        EventStore.append(sender.context, localEvent(EVENT_ID))
+        assertTrue(sender.peers.pin(recipient.installId, recipient.identity))
+        assertTrue(sender.peers.pin(otherRecipient.installId, otherRecipient.identity))
+        http.routes = listOf(route(ROUTE_ID, recipient), route(ROUTE_ID_B, otherRecipient))
+
+        assertEquals(1, sender.outbox(senderApi).materializePending())
+
+        assertEquals(listOf(recipient.installId), sender.outbox(senderApi).recordsFor(EVENT_ID)
+            .map { it.outerContext.recipientInstallId })
     }
 
     // Mutation caught: use decrypted actor/target topics without binding them to authenticated outer
@@ -282,6 +298,18 @@ class RelayTransportTest {
             RelayApi("http://relay.field-maintenance-prod.com", TEST_INSTALL_CREDENTIAL, http)
         }
         assertTrue(http.requests.isEmpty())
+    }
+
+    // Mutation caught: let a relay inbox process-death or unchecked fault escape WorkManager,
+    // bypassing its bounded retry result instead of reporting the selected transport failure.
+    @Test
+    fun relayTransportTurnsUnexpectedInboxFaultIntoRetryableFailure() {
+        http.inboxEnvelopes = listOf(inboundEnvelope("TEST-ONLY-transport-fault", inboundPayload(EVENT_ID)))
+        val fault = object : RelayInboxFaults { override fun afterDurableApplyBeforeAck(messageId: String) { throw IOException("TEST-ONLY") } }
+
+        assertFalse(RelaySyncTransport(sender.outbox(senderApi), recipient.inbox(recipientApi, fault))
+            .pullBlocking(recipient.context))
+        assertTrue(http.terminalAcks.isEmpty())
     }
 
     // Mutation caught: activate relay early, dual-write live events, or make worker outbound and
