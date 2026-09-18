@@ -115,7 +115,7 @@ object CareBatonStore {
     }
 
     @Synchronized fun cleanupChecked(c: Context): Boolean {
-        reconcileLocalDurableEvents(c)
+        if (!reconcileLocalDurableEvents(c)) return false
         val current = load(c)
         val now = System.currentTimeMillis()
         if (current.any { it.expiresAt <= now } && !saveChecked(c, current.filter { it.expiresAt > now })) return false
@@ -123,13 +123,13 @@ object CareBatonStore {
     }
 
     /** Rebuild local baton side effects after a crash that happened after EventStore append. */
-    private fun reconcileLocalDurableEvents(c: Context) {
+    private fun reconcileLocalDurableEvents(c: Context): Boolean {
         val localTopic = Store.topic(c)
         val latest = EventStore.load(c)
             .filter { it.actorTopic == localTopic && it.type in setOf("care_claimed", "care_released") }
             .groupBy { doseKey(it.time, it.scheduledDate.ifBlank { LocalDate.now().toString() }) }
             .mapValues { (_, events) -> events.maxWithOrNull(DoseEventOrder.withinActor)!! }
-        if (latest.isEmpty()) return
+        if (latest.isEmpty()) return true
         var claims = load(c)
         var changed = false
         val now = System.currentTimeMillis()
@@ -152,7 +152,7 @@ object CareBatonStore {
                 }
             }
         }
-        if (changed) save(c, claims)
+        return !changed || saveChecked(c, claims)
     }
 
     private fun resumeIfUnresolved(c: Context, time: String, scheduledDate: String) {
