@@ -219,13 +219,13 @@ class RelayTransportTest {
     @Test
     fun authenticatedApiUsesStrictSchemasAndRedactsCredentialAndBodyFromFailureDiagnostics() {
         http.routes = listOf(route(ROUTE_ID, recipient))
-        http.enqueueFailure = IOException("TEST-ONLY network failure")
+        http.enqueueFailure = IOException("TEST-ONLY $TEST_INSTALL_CREDENTIAL $EVENT_ID")
         val api = RelayApi(RELAY_URL, TEST_INSTALL_CREDENTIAL, http)
 
         val route = api.routes().single()
         val envelope = sender.codec.seal(localPayload(EVENT_ID), route.recipientIdentity,
             outer("TEST-ONLY-schema-message", route.routeId, recipient))
-        val failure = assertThrows(IOException::class.java) { api.enqueue(RelayOutboundEnvelope(
+        val failure = assertThrows(Exception::class.java) { api.enqueue(RelayOutboundEnvelope(
             outer("TEST-ONLY-schema-message", route.routeId, recipient), envelope
         )) }
 
@@ -244,6 +244,21 @@ class RelayTransportTest {
         assertEquals(Base64.getEncoder().encodeToString(envelope), wire.getString("ciphertext"))
         assertFalse(failure.toString().contains(TEST_INSTALL_CREDENTIAL))
         assertFalse(failure.toString().contains(EVENT_ID))
+    }
+
+    // Mutation caught: treat a 200 ACK response with a missing, false, or extended `ok` member as
+    // successful, which could hide a proxy/server contract failure after durable local processing.
+    @Test
+    fun acknowledgeRequiresTheExactOkTrueServerSuccessShape() {
+        val ack = RelayTerminalAck("TEST-ONLY-ack-contract", "processed")
+        listOf(
+            JSONObject(),
+            JSONObject().put("ok", false),
+            JSONObject().put("ok", true).put("unexpected", 1)
+        ).forEach { malformed ->
+            http.ackResponse = malformed
+            assertThrows(GeneralSecurityException::class.java) { recipientApi.acknowledge(listOf(ack)) }
+        }
     }
 
     // Mutation caught: regard HTTP 201 alone as success and discard a durable outbox record when
@@ -350,6 +365,7 @@ class RelayTransportTest {
         var inboxEnvelopes: List<RelayInboxEnvelope> = emptyList()
         var enqueueFailure: IOException? = null
         var enqueueResultMessageId: String? = null
+        var ackResponse: JSONObject = JSONObject().put("ok", true)
         var beforeAck: (() -> Unit)? = null
 
         override fun execute(request: RelayApiRequest): RelayApiResponse {
@@ -372,7 +388,7 @@ class RelayTransportTest {
                 "/v1/messages/ack" -> {
                     beforeAck?.invoke()
                     terminalAcks += decodeAcks(request.body)
-                    RelayApiResponse(200, JSONObject())
+                    RelayApiResponse(200, ackResponse)
                 }
                 else -> throw AssertionError("Unexpected relay path")
             }
