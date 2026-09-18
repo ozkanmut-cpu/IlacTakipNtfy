@@ -272,7 +272,7 @@ class RelayTransportTest {
     // Mutation caught: acknowledge the accepted message before all domain effects and the receipt
     // are committed, losing delivery when the process dies in that interval.
     @Test
-    fun crashAfterDurableApplyBeforeAckRedeliversAndConvergesAsDuplicate() {
+    fun crashAfterDurableApplyBeforeTerminalMarkerRedeliversAndConvergesAsProcessed() {
         val envelope = inboundEnvelope("TEST-ONLY-crash-window", inboundPayload(EVENT_ID))
         http.inboxEnvelopes = listOf(envelope)
         val crash = object : RelayInboxFaults {
@@ -286,7 +286,7 @@ class RelayTransportTest {
         assertTrue(http.terminalAcks.isEmpty())
 
         assertTrue(recipient.inbox(recipientApi).reconcile())
-        assertEquals(listOf("duplicate"), http.terminalAcks.map { it.outcome })
+        assertEquals(listOf("processed"), http.terminalAcks.map { it.outcome })
     }
 
     // Mutation caught: interpret EventStore presence after an append crash as terminal duplicate,

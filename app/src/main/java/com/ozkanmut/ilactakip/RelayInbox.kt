@@ -25,20 +25,27 @@ class RelayInbox internal constructor(
 ) {
     fun reconcile(): Boolean {
         val messages = try { api.inbox() } catch (_: Exception) { return false }
-        val acks = journal.pendingAcks().mapNotNull { it.outcome?.let { outcome -> RelayTerminalAck(it.messageId, outcome) } }.toMutableList()
+        val pending = linkedMapOf<String, RelayInboxJournal.Entry>()
+        journal.pendingAcks().forEach { entry -> pending.putIfAbsent(entry.messageId, entry) }
         messages.forEach { message ->
-            val outcome = process(message)
-            if (acks.none { it.messageId == message.outerContext.messageId }) acks += RelayTerminalAck(message.outerContext.messageId, outcome)
+            process(message)
+            journal.get(message.outerContext.messageId)?.let { entry ->
+                if (entry.phase == RelayInboxJournal.TERMINAL && entry.outcome != null) {
+                    pending.putIfAbsent(entry.messageId, entry)
+                }
+            }
         }
-        if (acks.isEmpty()) return true
-        return try {
-            api.acknowledge(acks)
-            // Receipts were committed before ACK. Moving the in-flight ledger after ACK is safe:
-            // a crash here still finds either EventStore or the in-flight receipt on replay.
-            RemoteEventReceiptStore.commitRelayTerminalBatch(context)
-            journal.remove(acks.map { it.messageId }.toSet())
-            true
-        } catch (_: Exception) { false }
+        pending.values.chunked(MAX_ACKS_PER_REQUEST).forEach { chunk ->
+            try {
+                api.acknowledge(chunk.map { RelayTerminalAck(it.messageId, checkNotNull(it.outcome)) })
+                RemoteEventReceiptStore.commitRelayTerminalBatch(context, chunk.asSequence()
+                    .filter { it.outcome == "processed" && it.eventId != it.messageId }
+                    .map { it.eventId }
+                    .toSet())
+                journal.remove(chunk.map { it.messageId }.toSet())
+            } catch (_: Exception) { return false }
+        }
+        return true
     }
 
     private fun process(message: RelayInboxEnvelope): String {
@@ -100,4 +107,6 @@ class RelayInbox internal constructor(
         val hash = MessageDigest.getInstance("SHA-256").digest(messageId.toByteArray()).joinToString("") { "%02x".format(it) }
         return terminal(messageId, messageId, hash, "rejected")
     }
+
+    private companion object { const val MAX_ACKS_PER_REQUEST = 100 }
 }

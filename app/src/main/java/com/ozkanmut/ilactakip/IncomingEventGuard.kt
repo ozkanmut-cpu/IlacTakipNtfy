@@ -184,6 +184,55 @@ object RemoteEventReceiptStore {
         }
     }
 
-    /** Relay ACK has made terminal inbox outcomes safe to compact from the in-flight receipt ledger. */
-    fun commitRelayTerminalBatch(c: Context) = commitSuccessfulBatch(c)
+    /**
+     * A relay ACK only releases receipts for the exact durable terminal outcomes in that ACK.
+     * Other in-flight receipts may belong to ntfy cursor recovery or later relay chunks.
+     */
+    @Synchronized
+    fun commitRelayTerminalBatch(c: Context, eventIds: Set<String>) {
+        if (eventIds.isEmpty()) return
+        val p = prefs(c)
+        val inflight = p.getStringSet(KEY_INFLIGHT_SET, emptySet()).orEmpty()
+        val acknowledged = inflight.intersect(eventIds)
+        if (acknowledged.isEmpty()) return
+
+        val history = p.getStringSet(KEY_SET, emptySet()).orEmpty()
+        val historyOrder = orderedIds(c, KEY_ORDER, history)
+        val inflightOrder = orderedIds(c, KEY_INFLIGHT_ORDER, inflight)
+        val acknowledgedOrder = inflightOrder.filter { it in acknowledged }
+        val retainedInflightOrder = inflightOrder.filterNot { it in acknowledged }
+        val mergedHistory = RemoteReceiptRetention.merge(historyOrder, acknowledgedOrder, MAX_IDS)
+
+        val previousHistory = p.getStringSet(KEY_SET, null)?.toSet()
+        val previousHistoryOrder = p.getString(KEY_ORDER, null)
+        val previousInflight = p.getStringSet(KEY_INFLIGHT_SET, null)?.toSet()
+        val previousInflightOrder = p.getString(KEY_INFLIGHT_ORDER, null)
+        fun rollback() {
+            val restore = p.edit()
+            if (previousHistory == null) restore.remove(KEY_SET) else restore.putStringSet(KEY_SET, previousHistory)
+            if (previousHistoryOrder == null) restore.remove(KEY_ORDER) else restore.putString(KEY_ORDER, previousHistoryOrder)
+            if (previousInflight == null) restore.remove(KEY_INFLIGHT_SET) else restore.putStringSet(KEY_INFLIGHT_SET, previousInflight)
+            if (previousInflightOrder == null) restore.remove(KEY_INFLIGHT_ORDER) else restore.putString(KEY_INFLIGHT_ORDER, previousInflightOrder)
+            restore.commit()
+        }
+        val edit = p.edit()
+            .putStringSet(KEY_SET, mergedHistory.toSet())
+            .putString(KEY_ORDER, JSONArray(mergedHistory).toString())
+        if (retainedInflightOrder.isEmpty()) {
+            edit.remove(KEY_INFLIGHT_SET).remove(KEY_INFLIGHT_ORDER)
+        } else {
+            edit.putStringSet(KEY_INFLIGHT_SET, retainedInflightOrder.toSet())
+                .putString(KEY_INFLIGHT_ORDER, JSONArray(retainedInflightOrder).toString())
+        }
+        if (!edit.commit()) {
+            rollback()
+            throw java.io.IOException("Could not compact relay receipt")
+        }
+        val committedHistory = p.getStringSet(KEY_SET, emptySet()).orEmpty()
+        val committedInflight = p.getStringSet(KEY_INFLIGHT_SET, emptySet()).orEmpty()
+        if (committedHistory != mergedHistory.toSet() || committedInflight != retainedInflightOrder.toSet()) {
+            rollback()
+            throw java.io.IOException("Could not compact relay receipt")
+        }
+    }
 }

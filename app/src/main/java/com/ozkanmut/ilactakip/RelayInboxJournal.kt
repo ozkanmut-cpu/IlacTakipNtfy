@@ -26,7 +26,12 @@ internal class RelayInboxJournal(context: Context) : RelayInboxJournalStore {
         (0 until array.length()).map { index ->
             val o = array.getJSONObject(index)
             require(o.keys().asSequence().toSet() == setOf("messageId", "eventId", "eventHash", "phase", "outcome"))
-            val entry = Entry(o.getString("messageId"), o.getString("eventId"), o.getString("eventHash"), o.getString("phase"), o.optString("outcome").ifBlank { null })
+            val outcome = when (val value = o.opt("outcome")) {
+                null, JSONObject.NULL -> null
+                is String -> value
+                else -> throw IllegalArgumentException("Invalid relay journal outcome")
+            }
+            val entry = Entry(o.getString("messageId"), o.getString("eventId"), o.getString("eventHash"), o.getString("phase"), outcome)
             RelayEnvelopeFormat.requireOpaqueId(entry.messageId); RelayEnvelopeFormat.requireOpaqueId(entry.eventId)
             require(entry.eventHash.matches(Regex("[0-9a-f]{64}")))
             require(entry.phase in setOf(STARTED, APPENDED, EFFECTS, TERMINAL))
