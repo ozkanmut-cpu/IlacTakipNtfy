@@ -40,15 +40,21 @@ object MedicationMetaStore {
         prefs(c).edit().putString(KEY, encodeList(all).toString()).commit()
     }
     @Synchronized fun saveRemote(c: Context, ownerId: String, meta: MedicationMeta) {
-        if (ownerId.isBlank() || ownerId == OwnerScopeStore.localOwnerId(c) || meta.medicationId.isBlank()) return
+        saveRemoteChecked(c, ownerId, meta)
+    }
+    @Synchronized fun saveRemoteChecked(c: Context, ownerId: String, meta: MedicationMeta): Boolean {
+        if (ownerId.isBlank() || ownerId == OwnerScopeStore.localOwnerId(c) || meta.medicationId.isBlank()) return true
         val all = listOf(ownerId to meta) + loadRemote(c).filterNot { it.first == ownerId && it.second.medicationId == meta.medicationId }
         val a = JSONArray(); all.forEach { (owner, item) -> a.put(toJson(item).put("ownerId", owner)) }
-        prefs(c).edit().putString(KEY_REMOTE, a.toString()).commit()
+        return prefs(c).edit().putString(KEY_REMOTE, a.toString()).commit()
     }
     @Synchronized fun clearRemoteOwner(c: Context, ownerId: String) {
+        clearRemoteOwnerChecked(c, ownerId)
+    }
+    @Synchronized fun clearRemoteOwnerChecked(c: Context, ownerId: String): Boolean {
         val all = loadRemote(c).filterNot { it.first == ownerId }; val a = JSONArray()
         all.forEach { (owner, item) -> a.put(toJson(item).put("ownerId", owner)) }
-        prefs(c).edit().putString(KEY_REMOTE, a.toString()).commit()
+        return prefs(c).edit().putString(KEY_REMOTE, a.toString()).commit()
     }
     fun toJson(m: MedicationMeta): JSONObject = JSONObject().put("medicationId", m.medicationId).put("form", m.form.name)
         .put("quantity", m.quantity ?: JSONObject.NULL).put("administrationSite", m.administrationSite)

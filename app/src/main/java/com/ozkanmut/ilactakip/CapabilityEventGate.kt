@@ -23,6 +23,12 @@ object CapabilityEventGate {
 
     @Synchronized
     fun accept(c: Context, event: DoseEvent): Boolean {
+        if (!shouldAccept(c, event)) return false
+        return recordAccepted(c, event)
+    }
+
+    @Synchronized
+    fun shouldAccept(c: Context, event: DoseEvent): Boolean {
         val permission = permission(event) ?: return false
         val owner = owner(event)
         if (owner.isBlank()) return false
@@ -47,23 +53,36 @@ object CapabilityEventGate {
                 else -> event.eventId > storedEvent
             }
         }
-        if (!newer) return false
+        return newer
+    }
 
-        p.edit()
+    @Synchronized
+    fun recordAccepted(c: Context, event: DoseEvent): Boolean {
+        val permission = permission(event) ?: return false
+        val owner = owner(event)
+        if (owner.isBlank()) return false
+        val p = prefs(c)
+        val base = base(owner, permission)
+
+        return p.edit()
             .putLong("$base|rev", event.revision)
             .putLong("$base|ts", event.timestamp)
             .putString("$base|actor", event.actorTopic)
             .putString("$base|event", event.eventId)
             .commit()
-        return true
     }
 
     @Synchronized
     fun clearPeer(c: Context, topic: String) {
-        if (topic.isBlank()) return
+        clearPeerChecked(c, topic)
+    }
+
+    @Synchronized
+    fun clearPeerChecked(c: Context, topic: String): Boolean {
+        if (topic.isBlank()) return true
         val p = prefs(c)
         val edit = p.edit()
         p.all.keys.filter { it.startsWith("$topic|") }.forEach(edit::remove)
-        edit.commit()
+        return edit.commit()
     }
 }

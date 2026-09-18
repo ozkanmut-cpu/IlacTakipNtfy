@@ -47,6 +47,7 @@ object Store{
  fun save(c:Context,meds:List<Medication>){val a=JSONArray();meds.forEach{m->a.put(JSONObject().put("id",m.id).put("name",m.name).put("dose",m.dose).put("times",JSONArray(m.times)))};p(c).edit().putString("meds",a.toString()).apply();AlarmScheduler.scheduleAll(c,meds)}
  fun people(c:Context):List<Person>{val a=JSONArray(p(c).getString("people","[]")?:"[]");return(0 until a.length()).map{i->val o=a.getJSONObject(i);Person(o.getString("id"),o.getString("name"),o.getString("topic"),o.optBoolean("canEdit"))}}
  fun savePeople(c:Context,people:List<Person>){val a=JSONArray();people.forEach{a.put(JSONObject().put("id",it.id).put("name",it.name).put("topic",it.topic).put("canEdit",it.canEdit))};p(c).edit().putString("people",a.toString()).apply()}
+ fun savePeopleChecked(c:Context,people:List<Person>):Boolean{val a=JSONArray();people.forEach{a.put(JSONObject().put("id",it.id).put("name",it.name).put("topic",it.topic).put("canEdit",it.canEdit))};return p(c).edit().putString("people",a.toString()).commit()}
 }
 private fun ui(tr:String,en:String)=if(I18n.language()=="tr")tr else en
 

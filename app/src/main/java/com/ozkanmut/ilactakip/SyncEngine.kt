@@ -261,29 +261,37 @@ object SyncEngine {
     }
 
     internal fun applyRemoteState(c: Context, event: DoseEvent) {
+        applyRemoteStateChecked(c, event)
+    }
+
+    internal fun applyRemoteStateChecked(c: Context, event: DoseEvent): Boolean {
         val scheduledDate = event.scheduledDate
-        when (event.type) {
-            "care_claimed" -> CareBatonStore.applyRemoteClaim(c, event)
-            "care_released" -> CareBatonStore.applyRemoteRelease(c, event)
+        return when (event.type) {
+            "care_claimed" -> CareBatonStore.applyRemoteClaimChecked(c, event)
+            "care_released" -> CareBatonStore.applyRemoteReleaseChecked(c, event)
             "taken", "missed", "conflict_resolved_taken", "conflict_resolved_missed" -> {
-                CareBatonStore.resolve(c, event.time, scheduledDate)
-                SmartEscalation.cancel(c, event.time, scheduledDate)
+                if (!CareBatonStore.resolveChecked(c, event.time, scheduledDate)) return false
+                if (!SmartEscalation.cancelChecked(c, event.time, scheduledDate)) return false
                 AlarmScheduler.cancelSnooze(c, event.time, scheduledDate)
                 DoseNotificationLifecycle.cancel(c, event.time, scheduledDate)
+                true
             }
             "snoozed" -> {
-                SmartEscalation.cancel(c, event.time, scheduledDate)
+                if (!SmartEscalation.cancelChecked(c, event.time, scheduledDate)) return false
                 DoseNotificationLifecycle.cancel(c, event.time, scheduledDate)
                 AlarmScheduler.scheduleSnoozeIfActive(c, event.time, event.medications, event.snoozeUntil, scheduledDate)
+                true
             }
             "program_added", "program_updated", "program_deleted" -> ProgramSync.applyRemote(c, event)
             "program_rule_updated" -> ProgramRuleStore.applyRemote(c, event)
             "capability_edit_program_granted", "capability_edit_program_revoked",
             "capability_edit_stock_granted", "capability_edit_stock_revoked" -> {
-                if (CapabilityEventGate.accept(c, event)) RemoteCapabilityStore.applyEvent(c, event)
+                if (!CapabilityEventGate.shouldAccept(c, event)) true
+                else RemoteCapabilityStore.applyEvent(c, event) && CapabilityEventGate.recordAccepted(c, event)
             }
             "circle_presence" -> CirclePresence.markSeen(c, event)
-            "circle_revoked" -> PairingLifecycle.applyRemoteRevoke(c, event)
+            "circle_revoked" -> PairingLifecycle.applyRemoteRevokeChecked(c, event)
+            else -> true
         }
     }
 }

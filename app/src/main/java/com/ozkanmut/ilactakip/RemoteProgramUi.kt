@@ -16,10 +16,10 @@ object RemoteCapabilityStore {
     private fun prefs(c: Context) = c.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
     private fun key(ownerTopic: String, permission: CirclePermission) = "$ownerTopic|${permission.name}"
     fun allowedByOwner(c: Context, ownerTopic: String, permission: CirclePermission): Boolean = prefs(c).getBoolean(key(ownerTopic, permission), false)
-    fun applyEvent(c: Context, event: DoseEvent) {
-        val permission = when { event.type.startsWith("capability_edit_program_") -> CirclePermission.EDIT_PROGRAM; event.type.startsWith("capability_edit_stock_") -> CirclePermission.EDIT_STOCK; else -> return }
-        val owner = event.ownerId.ifBlank { event.actorTopic }; if (owner.isBlank()) return
-        prefs(c).edit().putBoolean(key(owner, permission), event.type.endsWith("_granted")).commit()
+    fun applyEvent(c: Context, event: DoseEvent): Boolean {
+        val permission = when { event.type.startsWith("capability_edit_program_") -> CirclePermission.EDIT_PROGRAM; event.type.startsWith("capability_edit_stock_") -> CirclePermission.EDIT_STOCK; else -> return true }
+        val owner = event.ownerId.ifBlank { event.actorTopic }; if (owner.isBlank()) return true
+        return prefs(c).edit().putBoolean(key(owner, permission), event.type.endsWith("_granted")).commit()
     }
 }
 

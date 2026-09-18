@@ -39,10 +39,14 @@ object PermissionPolicy {
     }
 
     fun clearPeer(c: Context, topic: String) {
-        if (topic.isBlank()) return
+        clearPeerChecked(c, topic)
+    }
+
+    fun clearPeerChecked(c: Context, topic: String): Boolean {
+        if (topic.isBlank()) return true
         val edit = prefs(c).edit()
         CirclePermission.entries.forEach { edit.remove(key(topic, it)) }
-        edit.commit()
+        return edit.commit()
     }
 
     fun acceptRemote(c: Context, event: DoseEvent): Boolean {

@@ -13,16 +13,20 @@ object CirclePresence {
 
     fun lastSeen(c: Context, peerTopic: String): Long = prefs(c).getLong(peerTopic, 0L)
 
-    fun markSeen(c: Context, event: DoseEvent) {
-        if (event.type != "circle_presence") return
-        if (event.targetTopic != Store.topic(c)) return
-        if (event.actorTopic.isBlank() || event.actorTopic == Store.topic(c)) return
-        prefs(c).edit().putLong(event.actorTopic, event.timestamp.coerceAtLeast(System.currentTimeMillis())).commit()
+    fun markSeen(c: Context, event: DoseEvent): Boolean {
+        if (event.type != "circle_presence") return true
+        if (event.targetTopic != Store.topic(c)) return true
+        if (event.actorTopic.isBlank() || event.actorTopic == Store.topic(c)) return true
+        return prefs(c).edit().putLong(event.actorTopic, event.timestamp.coerceAtLeast(System.currentTimeMillis())).commit()
     }
 
     fun clear(c: Context, peerTopic: String) {
-        if (peerTopic.isBlank()) return
-        prefs(c).edit().remove(peerTopic).commit()
+        clearChecked(c, peerTopic)
+    }
+
+    fun clearChecked(c: Context, peerTopic: String): Boolean {
+        if (peerTopic.isBlank()) return true
+        return prefs(c).edit().remove(peerTopic).commit()
     }
 
     fun publish(c: Context, targetTopic: String) {

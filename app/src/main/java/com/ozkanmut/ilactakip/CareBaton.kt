@@ -44,13 +44,23 @@ object CareBatonStore {
         applyClaim(c, event)
     }
 
+    @Synchronized fun applyRemoteClaimChecked(c: Context, event: DoseEvent): Boolean {
+        if (!cleanupChecked(c)) return false
+        return applyClaimChecked(c, event)
+    }
+
     private fun applyClaim(c: Context, event: DoseEvent) {
+        applyClaimChecked(c, event)
+    }
+
+    private fun applyClaimChecked(c: Context, event: DoseEvent): Boolean {
         val scheduledDate = event.scheduledDate.ifBlank { LocalDate.now().toString() }
         val expiresAt = event.snoozeUntil.takeIf { it > event.timestamp } ?: (event.timestamp + DEFAULT_MINUTES * 60_000L)
         val claim = CareBatonClaim(doseKey(event.time, scheduledDate), event.time, event.actor, event.actorTopic, event.timestamp, expiresAt, scheduledDate)
-        if (claim.expiresAt <= System.currentTimeMillis()) return
-        save(c, listOf(claim) + load(c).filterNot { it.doseKey == claim.doseKey })
+        if (claim.expiresAt <= System.currentTimeMillis()) return true
+        if (!saveChecked(c, listOf(claim) + load(c).filterNot { it.doseKey == claim.doseKey })) return false
         SmartEscalation.deferUntil(c, event.time, claim.expiresAt, scheduledDate)
+        return true
     }
 
     fun release(c: Context, time: String, scheduledDate: String = LocalDate.now().toString()) {
@@ -63,33 +73,53 @@ object CareBatonStore {
 
     @Synchronized fun applyRemoteRelease(c: Context, event: DoseEvent) = applyRelease(c, event)
 
+    @Synchronized fun applyRemoteReleaseChecked(c: Context, event: DoseEvent): Boolean = applyReleaseChecked(c, event)
+
     private fun applyRelease(c: Context, event: DoseEvent) {
+        applyReleaseChecked(c, event)
+    }
+
+    private fun applyReleaseChecked(c: Context, event: DoseEvent): Boolean {
         val scheduledDate = event.scheduledDate.ifBlank { LocalDate.now().toString() }
         val key = doseKey(event.time, scheduledDate)
         val current = load(c)
-        if (current.none { it.doseKey == key }) return
+        if (current.none { it.doseKey == key }) return true
+        if (!saveChecked(c, current.filterNot { it.doseKey == key })) return false
         resumeIfUnresolved(c, event.time, scheduledDate)
-        save(c, current.filterNot { it.doseKey == key })
+        return true
     }
 
     @Synchronized fun resolve(c: Context, time: String, scheduledDate: String = LocalDate.now().toString()) {
         save(c, load(c).filterNot { it.doseKey == doseKey(time, scheduledDate) })
     }
 
+    @Synchronized fun resolveChecked(c: Context, time: String, scheduledDate: String = LocalDate.now().toString()): Boolean =
+        saveChecked(c, load(c).filterNot { it.doseKey == doseKey(time, scheduledDate) })
+
     @Synchronized fun clearPeer(c: Context, topic: String) {
-        if (topic.isBlank()) return
+        clearPeerChecked(c, topic)
+    }
+
+    @Synchronized fun clearPeerChecked(c: Context, topic: String): Boolean {
+        if (topic.isBlank()) return true
         val current = load(c)
         val removed = current.filter { it.actorTopic == topic }
-        if (removed.isEmpty()) return
+        if (removed.isEmpty()) return true
+        if (!saveChecked(c, current.filterNot { it.actorTopic == topic })) return false
         removed.forEach { resumeIfUnresolved(c, it.time, it.scheduledDate) }
-        save(c, current.filterNot { it.actorTopic == topic })
+        return true
     }
 
     @Synchronized fun cleanup(c: Context) {
+        cleanupChecked(c)
+    }
+
+    @Synchronized fun cleanupChecked(c: Context): Boolean {
         reconcileLocalDurableEvents(c)
         val current = load(c)
         val now = System.currentTimeMillis()
-        if (current.any { it.expiresAt <= now }) save(c, current.filter { it.expiresAt > now })
+        if (current.any { it.expiresAt <= now } && !saveChecked(c, current.filter { it.expiresAt > now })) return false
+        return true
     }
 
     /** Rebuild local baton side effects after a crash that happened after EventStore append. */
@@ -146,9 +176,13 @@ object CareBatonStore {
     }
 
     private fun save(c: Context, claims: List<CareBatonClaim>) {
+        saveChecked(c, claims)
+    }
+
+    private fun saveChecked(c: Context, claims: List<CareBatonClaim>): Boolean {
         val a = JSONArray()
         claims.forEach { a.put(JSONObject().put("doseKey", it.doseKey).put("time", it.time).put("actor", it.actor).put("actorTopic", it.actorTopic).put("claimedAt", it.claimedAt).put("expiresAt", it.expiresAt).put("scheduledDate", it.scheduledDate)) }
-        prefs(c).edit().putString(KEY, a.toString()).commit()
+        return prefs(c).edit().putString(KEY, a.toString()).commit()
     }
 }
 

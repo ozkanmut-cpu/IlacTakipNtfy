@@ -33,10 +33,14 @@ object SmartEscalation {
     }
 
     fun cancel(c: Context, time: String, scheduledDate: String = LocalDate.now().toString()) {
+        cancelChecked(c, time, scheduledDate)
+    }
+
+    fun cancelChecked(c: Context, time: String, scheduledDate: String = LocalDate.now().toString()): Boolean {
         cancelAlarms(c, time, scheduledDate)
-        AlertOutbox.dropEscalationSession(c.applicationContext, time, scheduledDate)
-        AttentionBudget.clear(c, time, scheduledDate)
-        prefs(c).edit().remove(anchorKey(time, scheduledDate)).commit()
+        if (!AlertOutbox.dropEscalationSessionChecked(c.applicationContext, time, scheduledDate)) return false
+        if (!AttentionBudget.clearChecked(c, time, scheduledDate)) return false
+        return prefs(c).edit().remove(anchorKey(time, scheduledDate)).commit()
     }
 
     fun deferUntil(c: Context, time: String, expiresAt: Long, scheduledDate: String = LocalDate.now().toString()) {
@@ -190,9 +194,13 @@ object AttentionBudget {
     }
 
     fun clear(c: Context, time: String, scheduledDate: String = LocalDate.now().toString()) {
+        clearChecked(c, time, scheduledDate)
+    }
+
+    fun clearChecked(c: Context, time: String, scheduledDate: String = LocalDate.now().toString()): Boolean {
         val prefix = "$scheduledDate|$time|"
         val editor = prefs(c).edit()
         prefs(c).all.keys.filter { it.startsWith(prefix) }.forEach { editor.remove(it) }
-        editor.commit()
+        return editor.commit()
     }
 }
