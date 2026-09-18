@@ -428,6 +428,56 @@ class RelayTransportTest {
         )
     }
 
+    // Mutation caught: ignore a failed reconciliation write made before an already-expired
+    // inbound claim becomes a no-op, then terminally ACK despite the local baton not being
+    // recoverably rebuilt from its durable EventStore claim.
+    @Test
+    fun careBatonReconciliationCommitFailureLeavesExpiredInboundClaimAppendedAndUnacknowledged() {
+        recipient = device(RECIPIENT_INSTALL, setOf("dosefolk_care_baton"))
+        recipient.context.getSharedPreferences("ilac_takip", Context.MODE_PRIVATE).edit()
+            .putString("topic", recipient.installId).commit()
+        check(recipient.peers.pin(sender.installId, sender.identity))
+        Store.savePeople(recipient.context, listOf(Person("TEST-ONLY-baton-peer", "Peer", sender.installId)))
+        http = ScriptedRelayHttp()
+        senderApi = RelayApi(RELAY_URL, TEST_INSTALL_CREDENTIAL, http)
+        recipientApi = RelayApi(RELAY_URL, TEST_INSTALL_CREDENTIAL, http)
+
+        val now = System.currentTimeMillis()
+        EventStore.append(recipient.context, DoseEvent(
+            eventId = "TEST-ONLY-local-baton-claim",
+            type = "care_claimed",
+            time = "08:00",
+            actor = "Recipient",
+            actorTopic = recipient.installId,
+            timestamp = now,
+            medications = emptyList(),
+            syncState = "synced",
+            revision = 1L,
+            scheduledDate = "2023-11-14",
+            snoozeUntil = now + 60_000L,
+            ownerId = recipient.installId,
+            targetTopic = recipient.installId
+        ))
+        val inbound = localEvent("TEST-ONLY-expired-baton-claim").copy(
+            type = "care_claimed",
+            timestamp = now - 120_000L,
+            snoozeUntil = now - 60_000L,
+            medications = emptyList()
+        )
+        val messageId = "TEST-ONLY-expired-baton-message"
+        http.inboxEnvelopes = listOf(inboundEnvelope(messageId, EventStore.payload(inbound.copy(
+            actorTopic = sender.installId,
+            targetTopic = recipient.installId,
+            syncState = "synced"
+        ))))
+
+        assertFalse(RelaySyncTransport(sender.outbox(senderApi), recipient.inbox(recipientApi))
+            .pullBlocking(recipient.context))
+        assertTrue(http.terminalAcks.isEmpty())
+        assertEquals(RelayInboxJournal.APPENDED, RelayInboxJournal(recipient.context).get(messageId)?.phase)
+        assertFalse(RemoteEventReceiptStore.processed(recipient.context, inbound.eventId))
+    }
+
     // Mutation caught: discard terminal ACK state after a response-loss even though the relay has deleted it.
     @Test
     fun lostAckResponseRetriesPersistedTerminalAckOnNextEmptyInboxOnlyOnce() {
