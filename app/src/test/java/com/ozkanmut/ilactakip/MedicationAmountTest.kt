@@ -18,6 +18,13 @@ class MedicationAmountTest {
         }
     }
 
+    @Test fun changingTabletQuantityDoesNotDuplicateOldInstructionsAfterALanguageChange() {
+        val meta = MedicationMeta("m", MedicationForm.TABLET, 0.5)
+        assertEquals("with food", meta.noteFrom("0.5 adet • with food"))
+        assertEquals("", meta.noteFrom("0.5 count"))
+        assertEquals("custom note", meta.noteFrom("custom note"))
+    }
+
     @Test fun openingAnExistingUnknownAmountDoesNotAssignOneTablet() {
         assertNull(MedicationAmount.existing(null).quantity)
         assertEquals(TabletChoice.CUSTOM, MedicationAmount.existing(null).choice)

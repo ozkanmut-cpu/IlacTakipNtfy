@@ -1,14 +1,24 @@
 import SwiftUI
 import UserNotifications
 
+enum DailyViewMode: String, CaseIterable, Identifiable {
+    case simple = "Sade", standard = "Standart", advanced = "Gelişmiş"
+    static let preference = "dosefolk.dailyViewMode"
+    var id: Self { self }
+}
+
 struct ContentView: View {
     let runtime: DosefolkRuntime?
     let startupError: String?
 
+    @Environment(\.colorScheme) private var scheme
     @Environment(\.scenePhase) private var scenePhase
     @State private var notificationStatus: UNAuthorizationStatus?
     @State private var notificationError: String?
     @State private var todayItems: [TodayDoseItem] = []
+    @AppStorage(DailyViewMode.preference) private var mode: DailyViewMode = .standard
+    @State private var showOther = false
+    @State private var showRecorded = false
     @State private var todayError: String?
     @State private var busyDoseID: String?
 
@@ -19,13 +29,14 @@ struct ContentView: View {
         NavigationStack {
             List {
                 Section {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Dosefolk")
-                            .font(.largeTitle.bold())
-                        Text(todayItems.isEmpty ? "Bugün planlı doz görünmüyor." : "Bugünkü ilaçların burada.")
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text([runtime?.settings.displayName, "Kendi planım"].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · ")).font(.headline)
+                        Text(Date.now, format: .dateTime.weekday(.wide).day().month(.wide))
                             .foregroundStyle(.secondary)
                     }
-                    .padding(.vertical, 8)
+                    Picker("Görünüm", selection: $mode) {
+                        ForEach(DailyViewMode.allCases) { option in Text(option.rawValue).tag(option) }
+                    }
                 }
 
                 Section("Bugünkü dozlar") {
@@ -66,12 +77,12 @@ struct ContentView: View {
                     }
                 }
 
-                Section("Circle") {
+                Section("Yakın takibi") {
                     if let runtime {
                         NavigationLink {
                             CircleOverviewView(runtime: runtime)
                         } label: {
-                            Label("Circle", systemImage: "person.2")
+                            Label("Takip ettiğim kişiler", systemImage: "person.2")
                         }
                     } else {
                         Text("Circle başlatılamadı.")
@@ -87,12 +98,16 @@ struct ContentView: View {
                     }
                 }
             }
+            .scrollContentBackground(.hidden)
+            .background(scheme == .dark ? Color(uiColor: .systemGroupedBackground) : Color(red: 0.965, green: 0.957, blue: 0.937))
+            .tint(scheme == .dark ? Color(red: 0.92, green: 0.76, blue: 0.83) : Color(red: 0.37, green: 0.20, blue: 0.30))
             .navigationTitle("Bugün")
             .task {
                 runtime?.start()
                 await refreshNotificationStatus()
                 refreshToday()
             }
+            .onChange(of: mode) { _, _ in showOther = false }
             .onChange(of: scenePhase) { _, newPhase in
                 guard newPhase == .active else { return }
                 Task {
@@ -125,65 +140,95 @@ struct ContentView: View {
             Text("Bugün için kayıtlı bir doz yok.")
                 .foregroundStyle(.secondary)
         } else {
-            ForEach(todayItems) { item in
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(item.time)
-                            .font(.title3.monospacedDigit().bold())
+            let recorded = todayItems.filter { $0.status == .taken || $0.status == .missed }
+            let pending = todayItems.filter { $0.status != .taken && $0.status != .missed }
+            let ordered = pending.filter { $0.status == .conflict } + pending.filter { $0.status != .conflict }
+            let visible = mode == .simple && !showOther ? Array(ordered.prefix(1)) : ordered
+            ForEach(visible) { item in
+                doseRow(item, featured: item.id == ordered.first?.id)
+            }
+            if mode == .simple && ordered.count > 1 {
+                Button(showOther ? "Diğer saatleri gizle" : "Diğer saatleri göster (\(ordered.count - 1))") { showOther.toggle() }
+            }
+            if !recorded.isEmpty {
+                DisclosureGroup("Kaydedilen dozlar (\(recorded.count))", isExpanded: $showRecorded) {
+                    ForEach(recorded) { item in doseRow(item) }
+                }
+            }
+        }
+    }
+
+    private func doseRow(_ item: TodayDoseItem, featured: Bool = false) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if featured {
+                let hour = Int(item.time.prefix(2)) ?? 0
+                let period = switch hour {
+                case 5..<12: "Sabah listesi"
+                case 12..<17: "Öğle listesi"
+                case 17..<21: "Akşam listesi"
+                default: "Gece listesi"
+                }
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(period).font(.system(.title, design: .serif))
+                        Text("\(item.time) · \(item.medications.count) ilaç").font(.subheadline.weight(.semibold))
+                    }
+                    Spacer(minLength: 4)
+                    Image(systemName: (5..<21).contains(hour) ? "sunrise.fill" : "moon.stars.fill")
+                        .font(.title).foregroundStyle(Color(red: 1, green: 0.84, blue: 0.65))
+                        .accessibilityHidden(true)
+                }
+                .padding(16)
+                .foregroundStyle(.white)
+                .background(Color(red: 0.36, green: 0.21, blue: 0.29), in: RoundedRectangle(cornerRadius: 14))
+                statusLabel(item.status)
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    HStack {
+                        Text(item.time).font(.title2.monospacedDigit().bold())
                         Spacer()
                         statusLabel(item.status)
                     }
-
-                    Text(item.medications.map { medicationText($0) }.joined(separator: " • "))
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-
-                    doseActions(item)
+                    VStack(alignment: .leading) {
+                        Text(item.time).font(.title2.monospacedDigit().bold())
+                        statusLabel(item.status)
+                    }
                 }
-                .padding(.vertical, 4)
-                .accessibilityElement(children: .contain)
             }
+            ForEach(item.medications) { medication in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(medication.name).font(.system(.title3, design: .serif))
+                    if !medication.dose.isEmpty { Text(medication.dose).foregroundStyle(.secondary) }
+                    if mode == .advanced && !medication.times.isEmpty {
+                        Text("Program saatleri · " + medication.times.joined(separator: ", ")).font(.footnote)
+                    }
+                }
+                .accessibilityElement(children: .combine)
+            }
+            doseActions(item).controlSize(.large)
         }
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .contain)
     }
 
     @ViewBuilder
     private func doseActions(_ item: TodayDoseItem) -> some View {
         let isBusy = busyDoseID == item.id
         switch item.status {
-        case .unknown, .pending:
-            ViewThatFits(in: .horizontal) {
-                HStack {
-                    Button("Aldım") { runAction(.taken, item: item) }
-                        .buttonStyle(.borderedProminent)
-                    Button("30 dk ertele") { runAction(.snooze, item: item) }
-                        .buttonStyle(.bordered)
-                    Button("Almadım") { runAction(.missed, item: item) }
+        case .unknown, .pending, .snoozed:
+            VStack(alignment: .leading, spacing: 6) {
+                Button {
+                    runAction(.taken, item: item)
+                } label: {
+                    Text(item.medications.count > 1 ? "Hepsini aldım" : "Aldım")
+                        .frame(maxWidth: .infinity, minHeight: 32)
+                }
+                .buttonStyle(.borderedProminent)
+                if item.status != .snoozed {
+                    Button("\(DoseActionService.snoozeMinutes) dk ertele") { runAction(.snooze, item: item) }
                         .buttonStyle(.bordered)
                 }
-                VStack(alignment: .leading) {
-                    Button("Aldım") { runAction(.taken, item: item) }
-                        .buttonStyle(.borderedProminent)
-                    Button("30 dk ertele") { runAction(.snooze, item: item) }
-                        .buttonStyle(.bordered)
-                    Button("Almadım") { runAction(.missed, item: item) }
-                        .buttonStyle(.bordered)
-                }
-            }
-            .disabled(isBusy)
-        case .snoozed:
-            ViewThatFits(in: .horizontal) {
-                HStack {
-                    Button("Aldım") { runAction(.taken, item: item) }
-                        .buttonStyle(.borderedProminent)
-                    Button("Almadım") { runAction(.missed, item: item) }
-                        .buttonStyle(.bordered)
-                }
-                VStack(alignment: .leading) {
-                    Button("Aldım") { runAction(.taken, item: item) }
-                        .buttonStyle(.borderedProminent)
-                    Button("Almadım") { runAction(.missed, item: item) }
-                        .buttonStyle(.bordered)
-                }
+                Button("Almadım") { runAction(.missed, item: item) }.buttonStyle(.borderless)
             }
             .disabled(isBusy)
         case .taken:
@@ -297,10 +342,6 @@ struct ContentView: View {
                     .foregroundStyle(.secondary)
             }
         }
-    }
-
-    private func medicationText(_ medication: Medication) -> String {
-        medication.dose.isEmpty ? medication.name : "\(medication.name) \(medication.dose)"
     }
 
     @MainActor

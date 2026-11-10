@@ -19,6 +19,13 @@ final class MedicationAmountTests: XCTestCase {
         }
     }
 
+    func testAndroidTabletLabelsDoNotRemainInTheNoteWhenChangingQuantity() {
+        let meta = MedicationMeta(medicationId: "m", form: .TABLET, quantity: 0.5)
+        XCTAssertEqual(meta.editorNote(from: "0.5 adet • with food"), "with food")
+        XCTAssertEqual(meta.editorNote(from: "0.5 count"), "")
+        XCTAssertEqual(meta.editorNote(from: "custom note"), "custom note")
+    }
+
     func testReopeningAnExistingUnspecifiedAmountDoesNotInventAQuantity() {
         let missing = MedicationAmount(existing: nil)
         XCTAssertNil(missing.quantity)

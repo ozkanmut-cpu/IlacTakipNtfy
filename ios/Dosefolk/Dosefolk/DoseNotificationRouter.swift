@@ -4,13 +4,13 @@ import UserNotifications
 enum DoseNotificationActionIdentifier {
     static let category = "DOSE_REMINDER"
     static let taken = "DOSE_TAKEN"
-    static let snooze = "DOSE_SNOOZE_30"
+    static let snooze = "DOSE_SNOOZE_15"
     static let missed = "DOSE_MISSED"
 
     static func action(for identifier: String) -> DoseUserAction? {
         switch identifier {
         case taken: return .taken
-        case snooze: return .snooze
+        case snooze, "DOSE_SNOOZE_30": return .snooze
         case missed: return .missed
         default: return nil
         }
@@ -53,9 +53,9 @@ final class DoseNotificationRouter: NSObject, UNUserNotificationCenterDelegate {
 
     func activate() {
         let actions = [
-            UNNotificationAction(identifier: DoseNotificationActionIdentifier.taken, title: "İçtim"),
-            UNNotificationAction(identifier: DoseNotificationActionIdentifier.snooze, title: "30 dk ertele"),
-            UNNotificationAction(identifier: DoseNotificationActionIdentifier.missed, title: "İçilmedi")
+            UNNotificationAction(identifier: DoseNotificationActionIdentifier.taken, title: "Aldım"),
+            UNNotificationAction(identifier: DoseNotificationActionIdentifier.snooze, title: "\(DoseActionService.snoozeMinutes) dk ertele"),
+            UNNotificationAction(identifier: DoseNotificationActionIdentifier.missed, title: "Almadım")
         ]
         let category = UNNotificationCategory(
             identifier: DoseNotificationActionIdentifier.category,
