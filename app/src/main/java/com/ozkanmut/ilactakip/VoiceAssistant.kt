@@ -144,7 +144,7 @@ object AssistantLocalRouter {
         val snoozeWords = listOf("ertele", "snooze", "delay", "verschieb", "report", "pospon", "posticip", "adiar", "отлож", "відклад", "تأجيل", "تعویق", "דחה", "αναβολ", "amân", "skjut", "udsæt", "utsett", "siirrä", "odlož", "halaszt", "tunda", "hoãn", "स्थगित", "延期", "미루")
         if (snoozeWords.any { q.contains(it) }) {
             if (target == null) return I18n.t("all_good")
-            val minutes = Regex("(\\d+)\\s*(dk|dakika|min|minute|minuto|minuten)").find(q)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: 30
+            val minutes = Regex("(\\d+)\\s*(dk|dakika|min|minute|minuto|minuten)").find(q)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: AlarmScheduler.DEFAULT_SNOOZE_MINUTES
             val until = AlarmScheduler.snoozeGroup(c, target.first, target.second, minutes)
             Ntfy.sendEvent(c, "snoozed", target.first, target.second, snoozeUntil = until)
             return "${target.first} • $minutes min"

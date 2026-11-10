@@ -20,6 +20,7 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.concurrent.thread
 
 object AlarmScheduler {
+    const val DEFAULT_SNOOZE_MINUTES = 15
     private const val PREFS = "dosefolk_alarm_scheduler"
     private const val KEY_TIMES = "scheduled_times"
 
@@ -188,7 +189,7 @@ class AlarmReceiver : BroadcastReceiver() {
         if (Build.VERSION.SDK_INT >= 26) notificationManager.createNotificationChannel(NotificationChannel(channel, I18n.t("channel"), NotificationManager.IMPORTANCE_HIGH))
         fun action(actionName: String): PendingIntent = PendingIntent.getBroadcast(c,("$scheduledDate|$time|$actionName").hashCode(),Intent(c,ActionReceiver::class.java).putExtra("action",actionName).putExtra("time",time).putExtra("names",names.joinToString("|#|")).putExtra("ids",ids.joinToString("|#|")).putExtra("scheduledDate",scheduledDate),PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val text = names.joinToString(", ")
-        val notification = NotificationCompat.Builder(c, channel).setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("$time • ${I18n.t("med_count", names.size)}").setContentText(text).setStyle(NotificationCompat.BigTextStyle().bigText(text)).setPriority(NotificationCompat.PRIORITY_MAX).setAutoCancel(true).addAction(0,I18n.t("all_taken"),action("taken")).addAction(0,I18n.t("snooze30"),action("snooze")).addAction(0,I18n.t("notif_missed"),action("missed")).build()
+        val notification = NotificationCompat.Builder(c, channel).setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle("$time • ${I18n.t("med_count", names.size)}").setContentText(text).setStyle(NotificationCompat.BigTextStyle().bigText(text)).setPriority(NotificationCompat.PRIORITY_MAX).setAutoCancel(true).addAction(0,I18n.t("all_taken"),action("taken")).addAction(0,I18n.t("snooze_default"),action("snooze")).addAction(0,I18n.t("notif_missed"),action("missed")).build()
         notificationManager.notify(("group-$scheduledDate-$time").hashCode(), notification)
         SmartEscalation.schedule(c, time, scheduledDate)
         AlarmScheduler.scheduleAll(c, Store.load(c))
@@ -211,7 +212,7 @@ class ActionReceiver : BroadcastReceiver() {
         val ids = i.getStringExtra("ids")?.split("|#|") ?: emptyList()
         val stored = Store.load(c).associateBy { it.id }
         val resolvedMeds = ids.mapNotNull { stored[it] }.ifEmpty { names.mapIndexed { index, label -> Medication("legacy-$index", label, "", listOf(time)) } }
-        val snoozeUntil = if (action == "snooze") System.currentTimeMillis() + 30 * 60_000L else 0L
+        val snoozeUntil = if (action == "snooze") System.currentTimeMillis() + AlarmScheduler.DEFAULT_SNOOZE_MINUTES * 60_000L else 0L
         Ntfy.sendEvent(c, if (action == "snooze") "snoozed" else action, time, resolvedMeds, scheduledDate, snoozeUntil)
     }
 }

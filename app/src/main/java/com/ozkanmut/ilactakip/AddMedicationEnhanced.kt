@@ -7,6 +7,13 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.MenuAnchorType
+import androidx.compose.material3.FilterChip
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -33,36 +40,52 @@ import java.time.LocalDate
 import java.time.LocalTime
 import java.util.UUID
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun AddMedicationDialogEnhanced(c: Context, close: () -> Unit, add: (Medication) -> Unit) {
-    var name by remember { mutableStateOf("") }
-    var doseNote by remember { mutableStateOf("") }
-    var times by remember { mutableStateOf(listOf<String>()) }
-    var prnOnly by remember { mutableStateOf(false) }
+fun AddMedicationDialogEnhanced(c: Context, close: () -> Unit, existing: Medication? = null, mode: DailyViewMode = DailyViewMode.STANDARD, add: (Medication) -> Unit) {
+    val original = remember(existing?.id) { existing?.let { MedicationMetaStore.get(c, it.id) } }
+    val originalPrn = remember(existing?.id) { existing?.let { med -> PrnEngine.all(c).firstOrNull { it.medicationId == med.id } } }
+    val tr = I18n.language() == "tr"
+    var name by remember { mutableStateOf(existing?.name.orEmpty()) }
+    var doseNote by remember { mutableStateOf(original?.noteFrom(existing?.dose.orEmpty()) ?: existing?.dose.orEmpty()) }
+    var times by remember { mutableStateOf(existing?.times.orEmpty()) }
+    var prnOnly by remember { mutableStateOf(existing?.times?.isEmpty() == true) }
     var shortCourse by remember { mutableStateOf(false) }
     var durationDays by remember { mutableStateOf("") }
-    var minInterval by remember { mutableStateOf("") }
-    var maxPerDay by remember { mutableStateOf("") }
-    var form by remember { mutableStateOf(MedicationForm.OTHER) }
-    var quantity by remember { mutableStateOf("") }
-    var site by remember { mutableStateOf("") }
-    var packCount by remember { mutableStateOf("") }
-    var packUnit by remember { mutableStateOf("") }
+    var minInterval by remember { mutableStateOf(originalPrn?.minimumIntervalMinutes?.toString().orEmpty()) }
+    var maxPerDay by remember { mutableStateOf(originalPrn?.maximumPerDay?.toString().orEmpty()) }
+    var form by remember { mutableStateOf(original?.form ?: MedicationForm.OTHER) }
+    var amount by remember { mutableStateOf(MedicationAmount.existing(original?.quantity)) }
+    var unitOverride by remember { mutableStateOf(original?.doseUnitOverride.orEmpty()) }
+    var site by remember { mutableStateOf(original?.administrationSite.orEmpty()) }
+    var packCount by remember { mutableStateOf(original?.packageCount?.toString().orEmpty()) }
+    var packUnit by remember { mutableStateOf(original?.packageUnit.orEmpty()) }
     var formMenu by remember { mutableStateOf(false) }
     var suggestionText by remember { mutableStateOf<String?>(null) }
-    var source by remember { mutableStateOf("manual") }
-    var showDetails by remember { mutableStateOf(false) }
+    var source by remember { mutableStateOf(original?.source ?: "manual") }
+    var editedFormOrAmount by remember { mutableStateOf(existing != null) }
+    var showDetails by remember { mutableStateOf(mode == DailyViewMode.ADVANCED) }
 
-    fun applySuggestion(ocr: String = "") {
+    fun chooseForm(next: MedicationForm, unit: String = "") {
+        if (form == next && unitOverride == unit) return
+        form = next
+        unitOverride = unit
+        site = ""
+        amount = if (next == MedicationForm.TABLET && !unit.isCapsuleUnit()) MedicationAmount.newTablet()
+                 else MedicationAmount.existing(null)
+    }
+
+    fun applySuggestion(ocr: String) {
         val s = MedicationSuggestionEngine.suggest(name, ocr)
-        if (s.form != MedicationForm.OTHER) form = s.form
-        if (quantity.isBlank()) s.quantity?.let { quantity = if (it % 1.0 == 0.0) it.toInt().toString() else it.toString() }
-        if (site.isBlank() && s.administrationSite.isNotBlank()) site = s.administrationSite
+        if (!editedFormOrAmount) {
+            if (s.form != MedicationForm.OTHER) chooseForm(s.form, s.doseUnit)
+            if (s.form != MedicationForm.OTHER) s.quantity?.let { amount = MedicationAmount.existing(it) }
+        }
+        if (site.isBlank()) site = s.administrationSite
         if (packCount.isBlank()) s.packageCount?.let { packCount = it.toString() }
-        if (packUnit.isBlank() && s.packageUnit.isNotBlank()) packUnit = s.packageUnit
-        if (name.isBlank() && s.suggestedName.isNotBlank()) name = s.suggestedName
-        suggestionText = if (I18n.language() == "tr") "Öneriler dolduruldu; kaydetmeden önce kontrol et." else "Suggestions filled in; review before saving."
+        if (packUnit.isBlank()) packUnit = s.packageUnit
+        if (name.isBlank()) name = s.suggestedName
+        if (ocr.isNotBlank()) suggestionText = if (tr) "Önerileri kaydetmeden önce kontrol et." else "Review suggestions before saving."
     }
 
     val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.GetContent()) { uri ->
@@ -75,36 +98,77 @@ fun AddMedicationDialogEnhanced(c: Context, close: () -> Unit, add: (Medication)
     }
 
     val duration = durationDays.toIntOrNull()?.takeIf { it > 0 }
-    val canSave = name.isNotBlank() && (prnOnly || times.isNotEmpty()) && (!shortCourse || duration != null)
-    val unit = if (I18n.language() == "tr") form.unitTr else form.unitEn
+    val tablet = form == MedicationForm.TABLET && !unitOverride.isCapsuleUnit()
+    val amountRequired = tablet && (existing == null || original?.form != form || original.quantity != null)
+    val validAmount = amount.quantity != null || (amount.text.isBlank() && !amountRequired)
+    val canSave = validAmount && name.isNotBlank() && (prnOnly || times.isNotEmpty()) && (!shortCourse || duration != null)
+    val unit = unitOverride.ifBlank { if (tr) form.unitTr else form.unitEn }
 
     AlertDialog(
         onDismissRequest = close,
-        title = { Text(I18n.t("new_med")) },
+        title = { Text(if (existing == null) I18n.t("new_med") else if (tr) "İlacı düzenle" else "Edit medication") },
         text = {
             Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(name, { name = it; if (it.length >= 3) applySuggestion() }, label = { Text(I18n.t("med_name")) }, modifier = Modifier.fillMaxWidth())
-                OutlinedTextField(doseNote, { doseNote = it }, label = { Text(I18n.t("dose_note")) }, modifier = Modifier.fillMaxWidth())
+                OutlinedTextField(name, {
+                    name = it
+                    if (existing == null && it.length >= 3) applySuggestion("")
+                }, label = { Text(I18n.t("med_name")) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                ExposedDropdownMenuBox(expanded = formMenu, onExpandedChange = { formMenu = it }) {
+                    OutlinedTextField(
+                        value = if (unitOverride.isCapsuleUnit()) (if (tr) "Kapsül" else "Capsule") else formLabel(form),
+                        onValueChange = {}, readOnly = true,
+                        label = { Text(if (tr) "İlaç biçimi" else "Medication form") },
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(formMenu) },
+                        modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth()
+                    )
+                    ExposedDropdownMenu(expanded = formMenu, onDismissRequest = { formMenu = false }) {
+                        MedicationForm.entries.forEach { f ->
+                            DropdownMenuItem(text = { Text(formLabel(f)) }, onClick = {
+                                editedFormOrAmount = true
+                                chooseForm(f, if (f == MedicationForm.TABLET) "tablet" else "")
+                                formMenu = false
+                            })
+                            if (f == MedicationForm.TABLET) DropdownMenuItem(text = { Text(if (tr) "Kapsül" else "Capsule") }, onClick = {
+                                editedFormOrAmount = true
+                                chooseForm(f, if (tr) "kapsül" else "capsule")
+                                formMenu = false
+                            })
+                        }
+                    }
+                }
+                if (tablet) {
+                    Text(if (tr) "Her kullanımda" else "Amount per dose", style = MaterialTheme.typography.titleSmall)
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TabletChoice.entries.forEach { choice ->
+                            FilterChip(selected = amount.choice == choice, onClick = { editedFormOrAmount = true; amount = amount.select(choice) },
+                                label = { Text(when (choice) {
+                                    TabletChoice.ONE -> "1 tablet"
+                                    TabletChoice.QUARTER -> "¼ tablet"
+                                    TabletChoice.HALF -> "½ tablet"
+                                    TabletChoice.CUSTOM -> if (tr) "Diğer miktar" else "Other amount"
+                                }) }, modifier = Modifier.heightIn(min = 48.dp))
+                        }
+                    }
+                }
+                if (!tablet || amount.choice == TabletChoice.CUSTOM) {
+                    OutlinedTextField(amount.text, { editedFormOrAmount = true; amount = MedicationAmount(TabletChoice.CUSTOM, it) },
+                        label = { Text(if (tr) "Kullanım miktarı ($unit)" else "Amount per dose ($unit)") },
+                        isError = amount.text.isNotBlank() && amount.quantity == null,
+                        supportingText = if (amount.text.isNotBlank() && amount.quantity == null) {
+                            { Text(if (tr) "Sıfırdan büyük bir sayı gir." else "Enter a number greater than zero.") }
+                        } else null,
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+                        singleLine = true, modifier = Modifier.fillMaxWidth())
+                }
+                OutlinedTextField(doseNote, { doseNote = it }, label = { Text(if (tr) "Kullanım notu (isteğe bağlı)" else "Instructions (optional)") }, modifier = Modifier.fillMaxWidth())
                 TextButton(onClick = { showDetails = !showDetails }) {
-                    Text(if (I18n.language() == "tr") if (showDetails) "Ayrıntıları gizle" else "İsteğe bağlı ayrıntılar" else if (showDetails) "Hide details" else "Optional details")
+                    Text(if (tr) if (showDetails) "Ayrıntıları gizle" else "İsteğe bağlı ayrıntılar" else if (showDetails) "Hide details" else "Optional details")
                 }
                 if (showDetails) {
                     OutlinedButton(onClick = { photoPicker.launch("image/*") }, modifier = Modifier.fillMaxWidth()) {
-                        Text(if (I18n.language() == "tr") "Kutu fotoğrafından öner" else "Suggest from box photo")
+                        Text(if (tr) "Kutu fotoğrafından öner" else "Suggest from box photo")
                     }
                     suggestionText?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-                    ExposedDropdownMenuBox(expanded = formMenu, onExpandedChange = { formMenu = !formMenu }) {
-                        OutlinedTextField(
-                            value = formLabel(form), onValueChange = {}, readOnly = true,
-                            label = { Text(if (I18n.language() == "tr") "Uygulama biçimi" else "Form") },
-                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(formMenu) },
-                            modifier = Modifier.menuAnchor().fillMaxWidth()
-                        )
-                        ExposedDropdownMenu(expanded = formMenu, onDismissRequest = { formMenu = false }) {
-                            MedicationForm.entries.forEach { f -> DropdownMenuItem(text = { Text(formLabel(f)) }, onClick = { form = f; formMenu = false }) }
-                        }
-                    }
-                    OutlinedTextField(quantity, { quantity = it.filter { ch -> ch.isDigit() || ch == ',' || ch == '.' } }, label = { Text(if (I18n.language() == "tr") "Kullanım miktarı ($unit)" else "Amount ($unit)") }, modifier = Modifier.fillMaxWidth())
                     if (form == MedicationForm.DROP || form == MedicationForm.CREAM || form == MedicationForm.INJECTION) {
                         OutlinedTextField(site, { site = it }, label = { Text(if (I18n.language() == "tr") "Uygulama yeri (opsiyonel)" else "Administration site (optional)") }, modifier = Modifier.fillMaxWidth())
                     }
@@ -114,9 +178,10 @@ fun AddMedicationDialogEnhanced(c: Context, close: () -> Unit, add: (Medication)
                     }
                 }
 
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                Text(if (tr) "Hatırlatma saatleri" else "Reminder times", style = MaterialTheme.typography.titleMedium)
+                if (existing == null) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     Text(if (I18n.language() == "tr") "Sadece gerektiğinde (PRN)" else "As needed only (PRN)")
-                    Switch(checked = prnOnly, onCheckedChange = { prnOnly = it; if (it) times = emptyList() })
+                    Switch(checked = prnOnly, onCheckedChange = { prnOnly = it })
                 }
                 if (prnOnly) {
                     if (showDetails) {
@@ -124,11 +189,16 @@ fun AddMedicationDialogEnhanced(c: Context, close: () -> Unit, add: (Medication)
                         OutlinedTextField(maxPerDay, { maxPerDay = it.filter(Char::isDigit) }, label = { Text(if (I18n.language() == "tr") "Günlük maksimum (opsiyonel)" else "Daily maximum (optional)") }, modifier = Modifier.fillMaxWidth())
                     }
                 } else {
-                    times.forEach { Text(it) }
-                    OutlinedButton(onClick = { val now = LocalTime.now(); TimePickerDialog(c, { _, h, m -> times = (times + String.format("%02d:%02d", h, m)).distinct().sorted() }, now.hour, now.minute, true).show() }) { Text(I18n.t("add_time")) }
+                    times.forEach { time ->
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                            Text(time, style = MaterialTheme.typography.titleMedium)
+                            TextButton(onClick = { times = times - time }) { Text(if (tr) "$time kaldır" else "Remove $time") }
+                        }
+                    }
+                    OutlinedButton(onClick = { val now = LocalTime.now(); TimePickerDialog(c, { _, h, m -> times = (times + String.format(java.util.Locale.ROOT, "%02d:%02d", h, m)).distinct().sorted() }, now.hour, now.minute, true).show() }) { Text(I18n.t("add_time")) }
                 }
 
-                if (showDetails) {
+                if (showDetails && existing == null) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         Text(if (I18n.language() == "tr") "Kısa süreli kullanım" else "Short-term course")
                         Switch(checked = shortCourse, onCheckedChange = { shortCourse = it })
@@ -142,15 +212,21 @@ fun AddMedicationDialogEnhanced(c: Context, close: () -> Unit, add: (Medication)
         },
         confirmButton = {
             Button(enabled = canSave, onClick = {
-                val q = quantity.replace(',', '.').toDoubleOrNull()
-                val doseLabel = MedicationMeta("", form, q, site.trim()).doseLabel()
-                val finalDose = listOf(doseLabel, doseNote.trim()).filter { it.isNotBlank() }.joinToString(" • ")
-                val med = Medication(UUID.randomUUID().toString(), name.trim(), finalDose, if (prnOnly) emptyList() else times)
-                val meta = MedicationMeta(med.id, form, q, site.trim(), packCount.toIntOrNull(), packUnit.trim(), source)
+                val id = existing?.id ?: UUID.randomUUID().toString()
+                val meta = MedicationMeta(id, form, amount.quantity, site.trim(), packCount.toIntOrNull(), packUnit.trim(), source, unitOverride)
+                val finalDose = if (existing != null && original?.quantity == meta.quantity && original?.form == meta.form &&
+                    original.administrationSite == meta.administrationSite && original.doseUnitOverride == meta.doseUnitOverride &&
+                    original.noteFrom(existing.dose) == doseNote) existing.dose
+                else listOf(meta.doseLabel(), doseNote.trim()).filter { it.isNotBlank() }.joinToString(" • ")
+                val med = Medication(id, name.trim(), finalDose, if (prnOnly) emptyList() else times)
                 MedicationMetaStore.save(c, meta)
                 add(med)
-                meta.packageCount?.takeIf { it > 0 }?.let { StockEngine.configure(c, med, it) }
-                if (prnOnly) PrnEngine.create(c, med, minInterval.toIntOrNull(), maxPerDay.toIntOrNull())
+                if (existing == null) meta.packageCount?.takeIf { it > 0 }?.let { StockEngine.configure(c, med, it) }
+                if (prnOnly && originalPrn != null) {
+                    PrnEngine.upsert(c, originalPrn.copy(name = med.name, doseNote = med.dose,
+                        minimumIntervalMinutes = minInterval.toIntOrNull()?.takeIf { it > 0 },
+                        maximumPerDay = maxPerDay.toIntOrNull()?.takeIf { it > 0 }))
+                } else if (prnOnly && existing == null) PrnEngine.create(c, med, minInterval.toIntOrNull(), maxPerDay.toIntOrNull())
                 if (shortCourse && duration != null) {
                     val start = LocalDate.now()
                     ProgramRuleStore.save(c, ProgramRule(medicationId = med.id, startDate = start.toString(), endDate = start.plusDays((duration - 1).toLong()).toString(), anchorDate = start.toString()))
@@ -162,7 +238,7 @@ fun AddMedicationDialogEnhanced(c: Context, close: () -> Unit, add: (Medication)
 }
 
 private fun formLabel(form: MedicationForm): String = when (form) {
-    MedicationForm.TABLET -> if (I18n.language() == "tr") "Tablet / kapsül" else "Tablet / capsule"
+    MedicationForm.TABLET -> "Tablet"
     MedicationForm.INSULIN -> if (I18n.language() == "tr") "İnsülin" else "Insulin"
     MedicationForm.INJECTION -> if (I18n.language() == "tr") "Enjeksiyon" else "Injection"
     MedicationForm.NEBULE -> if (I18n.language() == "tr") "Nebül" else "Nebule"
@@ -173,3 +249,5 @@ private fun formLabel(form: MedicationForm): String = when (form) {
     MedicationForm.PATCH -> if (I18n.language() == "tr") "Yama" else "Patch"
     MedicationForm.OTHER -> if (I18n.language() == "tr") "Diğer" else "Other"
 }
+
+private fun String.isCapsuleUnit() = lowercase() in setOf("capsule", "kapsül", "kapsul")

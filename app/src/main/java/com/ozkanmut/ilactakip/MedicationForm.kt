@@ -17,7 +17,7 @@ data class MedicationMeta(
 ) {
     fun unit(): String = doseUnitOverride.ifBlank { if (I18n.language() == "tr") form.unitTr else form.unitEn }
     fun doseLabel(): String = quantity?.let {
-        val n = if (it % 1.0 == 0.0) it.toInt().toString() else it.toString()
+        val n = MedicationAmount.existing(it).text
         "$n ${unit()}${if (administrationSite.isBlank()) "" else " • $administrationSite"}"
     }.orEmpty()
 }
@@ -127,4 +127,16 @@ object MedicationSuggestionEngine {
         val suggestedName = ocrText.lines().map { it.trim() }.firstOrNull { it.length in 3..40 && it.any(Char::isLetter) && !it.matches(Regex(".*\\d{3,}.*")) }.orEmpty()
         return MedicationSuggestion(form, quantity, site, pack?.first, pack?.second.orEmpty(), suggestedName, if(ocrText.isNotBlank())0.82f else 0.65f, doseUnit)
     }
+}
+
+internal fun MedicationMeta.noteFrom(dose: String): String {
+    if (quantity == null) return dose
+    val units = if (doseUnitOverride.isNotBlank()) listOf(doseUnitOverride)
+                else listOfNotNull(form.unitTr, form.unitEn, "tablet".takeIf { form == MedicationForm.TABLET })
+    for (unit in units) {
+        val label = copy(doseUnitOverride = unit).doseLabel()
+        if (dose == label) return ""
+        if (dose.startsWith("$label • ")) return dose.removePrefix("$label • ")
+    }
+    return dose
 }

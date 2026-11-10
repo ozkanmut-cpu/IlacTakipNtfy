@@ -34,15 +34,17 @@ actor MedicationProgramService {
         try store.save(medications, to: .medications)
 
         var metas = try store.load([MedicationMeta].self, from: .medicationMeta, default: [])
-        metas.removeAll { $0.medicationId == normalizedMedication.id }
-        if var meta {
-            meta.medicationId = normalizedMedication.id
-            metas.append(meta)
+        var savedMeta = meta ?? metas.first { $0.medicationId == normalizedMedication.id }
+        savedMeta?.medicationId = normalizedMedication.id
+        if let savedMeta {
+            metas.removeAll { $0.medicationId == normalizedMedication.id }
+            metas.append(savedMeta)
         }
         try store.save(metas, to: .medicationMeta)
 
-        let normalizedRule = ProgramRuleCodec.normalize(rule ?? ProgramRule(medicationId: normalizedMedication.id))
         var rules = try store.load([ProgramRule].self, from: .programRules, default: [])
+        let existingRule = rules.first { $0.medicationId == normalizedMedication.id }
+        let normalizedRule = ProgramRuleCodec.normalize(rule ?? existingRule ?? ProgramRule(medicationId: normalizedMedication.id))
         rules.removeAll { $0.medicationId == normalizedMedication.id }
         rules.append(normalizedRule)
         try store.save(rules, to: .programRules)
@@ -51,7 +53,7 @@ actor MedicationProgramService {
             type: existed ? "program_updated" : "program_added",
             time: normalizedMedication.times.first ?? "program",
             medications: [normalizedMedication],
-            medicationMeta: meta.map { [$0] } ?? []
+            medicationMeta: savedMeta.map { [$0] } ?? []
         )
 
         let encodedRule = try ProgramRuleCodec.encode(normalizedRule)

@@ -6,6 +6,7 @@ final class DoseNotificationRouterTests: XCTestCase {
         XCTAssertEqual(DoseNotificationActionIdentifier.action(for: DoseNotificationActionIdentifier.taken), .taken)
         XCTAssertEqual(DoseNotificationActionIdentifier.action(for: DoseNotificationActionIdentifier.snooze), .snooze)
         XCTAssertEqual(DoseNotificationActionIdentifier.action(for: DoseNotificationActionIdentifier.missed), .missed)
+        XCTAssertEqual(DoseNotificationActionIdentifier.action(for: "DOSE_SNOOZE_30"), .snooze)
         XCTAssertNil(DoseNotificationActionIdentifier.action(for: "UNKNOWN"))
     }
 

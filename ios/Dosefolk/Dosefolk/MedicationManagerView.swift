@@ -4,6 +4,7 @@ struct MedicationManagerView: View {
     let runtime: DosefolkRuntime
 
     @State private var medications: [Medication] = []
+    @State private var metadata: [MedicationMeta] = []
     @State private var rules: [ProgramRule] = []
     @State private var editing: Medication?
     @State private var showingNew = false
@@ -19,13 +20,13 @@ struct MedicationManagerView: View {
                 }
             }
 
-            if medications.isEmpty {
+            if medications.isEmpty && errorMessage == nil {
                 ContentUnavailableView(
                     "Henüz ilaç yok",
                     systemImage: "pills",
                     description: Text("İlk ilacını ekleyerek başlayabilirsin.")
                 )
-            } else {
+            } else if errorMessage == nil {
                 ForEach(medications) { medication in
                     Button {
                         editing = medication
@@ -58,7 +59,7 @@ struct MedicationManagerView: View {
         }
         .task { reload() }
         .sheet(isPresented: $showingNew) {
-            MedicationEditorView(runtime: runtime, medication: nil, rule: nil) {
+            MedicationEditorView(runtime: runtime, medication: nil, meta: nil, rule: nil) {
                 showingNew = false
                 reload()
             }
@@ -67,6 +68,7 @@ struct MedicationManagerView: View {
             MedicationEditorView(
                 runtime: runtime,
                 medication: medication,
+                meta: metadata.first { $0.medicationId == medication.id },
                 rule: rules.first(where: { $0.medicationId == medication.id })
             ) {
                 editing = nil
@@ -79,6 +81,7 @@ struct MedicationManagerView: View {
     private func reload() {
         do {
             medications = try runtime.store.load([Medication].self, from: .medications, default: [])
+            metadata = try runtime.store.load([MedicationMeta].self, from: .medicationMeta, default: [])
             rules = try runtime.store.load([ProgramRule].self, from: .programRules, default: [])
             errorMessage = nil
         } catch {
@@ -107,58 +110,91 @@ struct MedicationManagerView: View {
 private struct MedicationEditorView: View {
     let runtime: DosefolkRuntime
     let medication: Medication?
+    let originalMeta: MedicationMeta?
+    let originalRule: ProgramRule?
     let onSaved: () -> Void
 
     @Environment(\.dismiss) private var dismiss
+    @State private var medicationID: String
     @State private var name: String
     @State private var dose: String
+    @State private var form: MedicationForm
+    @State private var capsule: Bool
+    @State private var amount: MedicationAmount
     @State private var times: [String]
-    @State private var newTime = "08:00"
+    @State private var newTime = Calendar.current.date(from: DateComponents(hour: 8, minute: 0)) ?? Date()
     @State private var showAdvanced = false
     @State private var weekdays: Set<Int>
     @State private var busy = false
     @State private var errorMessage: String?
 
-    init(runtime: DosefolkRuntime, medication: Medication?, rule: ProgramRule?, onSaved: @escaping () -> Void) {
+    init(runtime: DosefolkRuntime, medication: Medication?, meta: MedicationMeta?, rule: ProgramRule?, onSaved: @escaping () -> Void) {
         self.runtime = runtime
         self.medication = medication
+        self.originalMeta = meta
+        self.originalRule = rule
         self.onSaved = onSaved
+        _medicationID = State(initialValue: medication?.id ?? UUID().uuidString)
         _name = State(initialValue: medication?.name ?? "")
-        _dose = State(initialValue: medication?.dose ?? "")
+        _dose = State(initialValue: meta?.editorNote(from: medication?.dose ?? "") ?? medication?.dose ?? "")
+        _form = State(initialValue: meta?.form ?? .OTHER)
+        _capsule = State(initialValue: meta?.isCapsule == true)
+        _amount = State(initialValue: MedicationAmount(existing: meta?.quantity))
         _times = State(initialValue: medication?.times ?? [])
         _weekdays = State(initialValue: rule?.weekdays ?? [])
-        _showAdvanced = State(initialValue: !(rule?.weekdays.isEmpty ?? true))
+        _showAdvanced = State(initialValue: UserDefaults.standard.string(forKey: DailyViewMode.preference) == DailyViewMode.advanced.rawValue || !(rule?.weekdays.isEmpty ?? true))
     }
 
     var body: some View {
         NavigationStack {
             Form {
-                Section("Temel bilgiler") {
+                Section("İlaç") {
                     TextField("İlaç adı", text: $name)
-                    TextField("Doz (isteğe bağlı)", text: $dose)
+                    Picker("İlaç biçimi", selection: Binding(get: {
+                        capsule ? "CAPSULE" : form.rawValue
+                    }, set: selectForm)) {
+                        ForEach(MedicationForm.allCases, id: \.self) { value in
+                            Text(value.editorLabel).tag(value.rawValue)
+                            if value == .TABLET { Text("Kapsül").tag("CAPSULE") }
+                        }
+                    }
                 }
 
-                Section("Saatler") {
+                Section("Her kullanımda") {
+                    if isTablet {
+                        Picker("Tablet miktarı", selection: Binding(get: { amount.choice }, set: { amount.select($0) })) {
+                            ForEach(MedicationAmount.Choice.allCases) { option in
+                                Text(option.label).tag(option)
+                            }
+                        }
+                    }
+                    if !isTablet || amount.choice == .custom {
+                        TextField("Kullanım miktarı (\(doseUnit))", text: $amount.text)
+                            .keyboardType(.decimalPad)
+                        if !amount.text.isEmpty && amount.quantity == nil {
+                            Text("Sıfırdan büyük bir sayı gir.").foregroundStyle(.red)
+                        }
+                    }
+                    TextField("Kullanım notu (isteğe bağlı)", text: $dose)
+                }
+
+                Section("Hatırlatma saatleri") {
                     ForEach(times, id: \.self) { time in
                         HStack {
-                            Text(time)
-                                .monospacedDigit()
+                            Text(time).monospacedDigit()
                             Spacer()
                             Button(role: .destructive) {
                                 times.removeAll { $0 == time }
                             } label: {
-                                Image(systemName: "minus.circle")
+                                Image(systemName: "minus.circle").frame(minWidth: 44, minHeight: 44)
                             }
+                            .accessibilityLabel("\(time) saatini kaldır")
                             .buttonStyle(.borderless)
                         }
                     }
-
-                    HStack {
-                        TextField("08:00", text: $newTime)
-                            .keyboardType(.numbersAndPunctuation)
-                        Button("Ekle") { addTime() }
-                            .disabled(MedicationProgramService.normalizeTime(newTime) == nil)
-                    }
+                    DatePicker("Saat", selection: $newTime, displayedComponents: .hourAndMinute)
+                    Button("Saati ekle") { times = (times + [timeText]).sorted() }
+                        .disabled(times.contains(timeText))
                 }
 
                 Section {
@@ -186,7 +222,7 @@ private struct MedicationEditorView: View {
                     Button("Kaydet") {
                         Task { await save() }
                     }
-                    .disabled(busy || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || times.isEmpty)
+                    .disabled(!amountValid || busy || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || times.isEmpty)
                 }
             }
         }
@@ -218,21 +254,62 @@ private struct MedicationEditorView: View {
         }
     }
 
-    private func addTime() {
-        guard let normalized = MedicationProgramService.normalizeTime(newTime), !times.contains(normalized) else { return }
-        times.append(normalized)
-        times.sort()
+    private var timeText: String {
+        let time = Calendar.current.dateComponents([.hour, .minute], from: newTime)
+        return String(format: "%02d:%02d", time.hour ?? 0, time.minute ?? 0)
+    }
+
+    private var isTablet: Bool { form == .TABLET && !capsule }
+
+    private var keepingForm: Bool {
+        originalMeta?.form == form && (originalMeta?.isCapsule == true) == capsule
+    }
+
+    private var amountValid: Bool {
+        if amount.quantity != nil { return true }
+        guard amount.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return false }
+        return !isTablet || (keepingForm && originalMeta?.quantity == nil)
+    }
+
+    private var doseUnit: String {
+        if keepingForm, let unit = originalMeta?.doseUnitOverride, !unit.isEmpty { return unit }
+        return capsule ? "kapsül" : form.editorUnit
+    }
+
+    private func selectForm(_ value: String) {
+        let nextCapsule = value == "CAPSULE"
+        let next = nextCapsule ? MedicationForm.TABLET : (MedicationForm(rawValue: value) ?? .OTHER)
+        guard next != form || nextCapsule != capsule else { return }
+        form = next
+        capsule = nextCapsule
+        amount = MedicationAmount(newTablet: isTablet)
     }
 
     @MainActor
     private func save() async {
         busy = true
         errorMessage = nil
-        let id = medication?.id ?? UUID().uuidString
-        let value = Medication(id: id, name: name, dose: dose, times: times)
-        let rule = ProgramRule(medicationId: id, weekdays: weekdays)
+        let id = medicationID
+        var meta = originalMeta ?? MedicationMeta(medicationId: id)
+        meta.form = form
+        meta.quantity = amount.quantity
+        if !keepingForm {
+            meta.doseUnitOverride = doseUnit
+            meta.administrationSite = ""
+        }
+        let originalDose = medication?.dose ?? ""
+        let savedDose: String
+        if keepingForm, meta.quantity == originalMeta?.quantity, dose == originalMeta?.editorNote(from: originalDose) {
+            savedDose = originalDose
+        } else {
+            savedDose = [meta.editorDoseLabel, dose.trimmingCharacters(in: .whitespacesAndNewlines)]
+                .filter { !$0.isEmpty }.joined(separator: " • ")
+        }
+        let value = Medication(id: id, name: name, dose: savedDose, times: times)
+        var rule = originalRule ?? ProgramRule(medicationId: id)
+        rule.weekdays = weekdays
         do {
-            _ = try await runtime.medicationProgramService.upsert(medication: value, rule: rule)
+            _ = try await runtime.medicationProgramService.upsert(medication: value, meta: meta, rule: rule)
             busy = false
             onSaved()
             dismiss()

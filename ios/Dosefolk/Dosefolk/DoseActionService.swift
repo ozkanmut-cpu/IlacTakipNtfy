@@ -12,6 +12,7 @@ enum DoseActionResult: Equatable {
 }
 
 actor DoseActionService {
+    static let snoozeMinutes = 15
     private let store: LocalStore
     private let publisher: ProtocolEventPublisher
     private let stockEngine: LocalStockEngine
@@ -50,7 +51,7 @@ actor DoseActionService {
             snoozeUntil = 0
         case .snooze:
             type = "snoozed"
-            snoozeUntil = nowMillis() + 30 * 60_000
+            snoozeUntil = nowMillis() + Int64(Self.snoozeMinutes) * 60_000
         }
 
         let event = try await publisher.publish(
