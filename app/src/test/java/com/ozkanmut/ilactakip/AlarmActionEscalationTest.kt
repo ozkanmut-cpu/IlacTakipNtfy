@@ -124,14 +124,15 @@ class AlarmActionEscalationTest {
     }
 
     @Test
-    fun snoozeNotificationAction_recordsSnoozeWithFutureDeadline() {
+    fun snoozeNotificationAction_recordsFifteenMinuteDeadline() {
         val before = System.currentTimeMillis()
         ActionReceiver().onReceive(c, actionIntent("snooze"))
         val state = DoseStateEngine.stateForTime(c, "08:00", LocalDate.now())
         assertEquals(DoseSessionStatus.SNOOZED, state.status)
         val event = state.latestEvent
         assertNotNull(event)
-        assertTrue(event!!.snoozeUntil >= before + 29 * 60_000L)
+        val after = System.currentTimeMillis()
+        assertTrue(event!!.snoozeUntil in (before + 900_000L)..(after + 900_000L))
     }
 
     @Test
