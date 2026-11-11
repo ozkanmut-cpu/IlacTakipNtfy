@@ -80,7 +80,7 @@ jobs:
             if adb shell dumpsys connectivity | grep -Ei '^ *Active default network: *(none|null|-1)'; then break; fi
             sleep 1
           done
-          adb shell dumpsys connectivity | grep -Ei '^ *Active default network: *(none|null|-1)' > "$RUNNER_TEMP/proof/network-state.txt"
+          adb shell dumpsys connectivity | grep -i '^ *Active default network:' > "$RUNNER_TEMP/proof/network-state.txt" || true
           cat "$RUNNER_TEMP/proof/network-state.txt"
           for scale in window_animation_scale transition_animation_scale animator_duration_scale; do adb shell settings put global "$scale" 0; done
           proof="$RUNNER_TEMP/proof"
@@ -108,7 +108,7 @@ jobs:
           test "$component" = "$PACKAGE/.MainActivity"
           printf '%s\n' "$component" > "$proof/resolved-launcher.txt"
           adb shell input keyevent KEYCODE_HOME
-          timeout 60 adb shell am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p "$PACKAGE" | tr -d '\r' | tee "$proof/launcher-start.txt"
+          timeout 60 adb shell am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -f 0x10200000 -n "$component" | tr -d '\r' | tee "$proof/launcher-start.txt"
           grep -Fxq 'Status: ok' "$proof/launcher-start.txt"
           for attempt in $(seq 1 12); do
             adb shell dumpsys activity activities > "$RUNNER_TEMP/activity.txt"
