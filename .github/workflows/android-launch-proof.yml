@@ -1,0 +1,134 @@
+name: Android launcher verification
+on:
+  push:
+    branches: [verification/android-launch-52dfcae]
+  workflow_dispatch:
+permissions:
+  contents: read
+
+jobs:
+  launch:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    env:
+      APP_SHA: 52dfcaebd67556c36ad8c82da0cd1e51b5bb866d
+      APP_TREE: 63afe449a9a5fe4e9eace517a36c35ac87c0cf1d
+      PACKAGE: com.ozkanmut.ilactakip
+      IMAGE: 'system-images;android-29;default;x86_64'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: 52dfcaebd67556c36ad8c82da0cd1e51b5bb866d
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Verify source and build APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$APP_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$APP_TREE"
+          gradle :app:assembleDebug --console plain
+          mkdir -p "$RUNNER_TEMP/proof"
+          printf '%s\n' "$APP_SHA" > "$RUNNER_TEMP/proof/source-commit.txt"
+          printf '%s\n' "$APP_TREE" > "$RUNNER_TEMP/proof/source-tree.txt"
+      - name: Launch on an isolated clean Android device
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+          test -e /dev/kvm
+          sudo chmod a+rw /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+          sdkmanager 'platform-tools' 'emulator' "$IMAGE"
+          echo no | avdmanager create avd --name launch-proof --package "$IMAGE" --device pixel_2 --force
+          emulator -avd launch-proof -accel on -no-window -no-audio -no-snapshot -wipe-data -no-boot-anim -gpu swiftshader_indirect -cores 2 -memory 2048 -http-proxy http://127.0.0.1:1 > "$RUNNER_TEMP/emulator.log" 2>&1 &
+          emulator_pid=$!
+          trap 'kill "$emulator_pid" 2>/dev/null || true' EXIT
+          adb start-server
+          timeout 240 adb wait-for-device
+          timeout 240 bash -c 'until [[ "$(adb shell getprop sys.boot_completed | tr -d "\r")" == 1 ]]; do sleep 2; done'
+          adb shell input keyevent KEYCODE_WAKEUP
+          adb shell wm dismiss-keyguard
+          adb shell settings put system screen_off_timeout 600000
+          adb shell settings put global airplane_mode_on 1
+          adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true >/dev/null
+          adb shell svc wifi disable
+          adb shell svc data disable
+          for scale in window_animation_scale transition_animation_scale animator_duration_scale; do adb shell settings put global "$scale" 0; done
+          proof="$RUNNER_TEMP/proof"
+          apk=app/build/outputs/apk/debug/app-debug.apk
+          test -f "$apk"
+          test -z "$(adb shell pm list packages "$PACKAGE" | tr -d '\r')"
+          timeout 100 adb install --no-streaming "$apk" | tee "$proof/installation.txt"
+          grep -Fxq Success "$proof/installation.txt"
+          path=$(adb shell pm path "$PACKAGE" | tr -d '\r' | sed -n 's/^package://p')
+          test -n "$path"
+          adb pull "$path" "$RUNNER_TEMP/installed.apk" >/dev/null
+          cmp "$apk" "$RUNNER_TEMP/installed.apk"
+          sha256sum "$RUNNER_TEMP/installed.apk" | cut -d' ' -f1 > "$proof/installed-apk.sha256"
+          python3 - "$RUNNER_TEMP/installed.apk" "$proof/installed-zip-entries.json" <<'PY'
+          import hashlib, json, sys, zipfile
+          with zipfile.ZipFile(sys.argv[1]) as archive:
+              entries = [{"name": info.filename, "size": info.file_size,
+                          "sha256": hashlib.sha256(archive.read(info)).hexdigest()}
+                         for info in archive.infolist() if not info.is_dir()]
+          with open(sys.argv[2], "w") as output:
+              json.dump(sorted(entries, key=lambda item: item["name"]), output, indent=2)
+          PY
+          adb shell getprop ro.build.version.release | tr -d '\r' > "$proof/android-version.txt"
+          component=$(adb shell cmd package resolve-activity --brief -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p "$PACKAGE" | tr -d '\r' | tail -n 1)
+          test "$component" = "$PACKAGE/.MainActivity"
+          printf '%s\n' "$component" > "$proof/resolved-launcher.txt"
+          adb shell input keyevent KEYCODE_HOME
+          timeout 60 adb shell am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p "$PACKAGE" | tr -d '\r' | tee "$proof/launcher-start.txt"
+          grep -Fxq 'Status: ok' "$proof/launcher-start.txt"
+          for attempt in $(seq 1 12); do
+            adb shell dumpsys activity activities > "$RUNNER_TEMP/activity.txt"
+            grep -m1 -E '(mResumedActivity|topResumedActivity).*com\.ozkanmut\.ilactakip/\.MainActivity' "$RUNNER_TEMP/activity.txt" > "$proof/resumed-activity.txt" || true
+            if test -s "$proof/resumed-activity.txt" && timeout 10 adb shell uiautomator dump /sdcard/dosefolk-window.xml >/dev/null; then
+              adb pull /sdcard/dosefolk-window.xml "$RUNNER_TEMP/ui.xml" >/dev/null
+              if python3 - "$RUNNER_TEMP/ui.xml" "$proof/visible-labels.txt" <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+          from pathlib import Path
+
+          allowed = {"My plan", "Kendi planım", "Today", "Bugün", "More", "Diğer", "Dosefolk",
+                     "View · Standard", "Görünüm · Standart", "No medication is scheduled for today.",
+                     "Bugün için planlı ilaç yok.", "Assistant", "Asistan", "Circle"}
+          nodes = ET.parse(sys.argv[1]).getroot().iter("node")
+          visible = {n.get("text", "") for n in nodes if n.get("package") == "com.ozkanmut.ilactakip"}
+          assert visible & {"My plan", "Kendi planım"}, "Daily screen has not appeared"
+          assert visible & {"Today", "Bugün"}, "Daily navigation has not appeared"
+          Path(sys.argv[2]).write_text("\n".join(sorted(allowed & visible)) + "\n")
+          PY
+              then
+                adb exec-out screencap -p > "$proof/first-launch.png"
+                break
+              fi
+            fi
+            sleep 2
+          done
+          test -s "$proof/visible-labels.txt" && test -s "$proof/resumed-activity.txt"
+          python3 - "$proof/first-launch.png" <<'PY'
+          import struct, sys
+          from pathlib import Path
+          data = Path(sys.argv[1]).read_bytes()
+          assert data[:8] == bytes.fromhex("89504e470d0a1a0a")
+          assert min(struct.unpack(">II", data[16:24])) >= 320
+          assert len(data) > 3000
+          PY
+          cat "$proof/resumed-activity.txt" "$proof/visible-labels.txt" "$proof/installed-apk.sha256"
+      - name: Upload launcher evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-launch-proof-52dfcae
+          path: ${{ runner.temp }}/proof/
+          retention-days: 7
+          if-no-files-found: error
