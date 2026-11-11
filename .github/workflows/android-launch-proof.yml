@@ -74,10 +74,14 @@ jobs:
           adb shell input keyevent KEYCODE_WAKEUP
           adb shell wm dismiss-keyguard
           adb shell settings put system screen_off_timeout 600000
-          adb shell settings put global airplane_mode_on 1
-          adb shell am broadcast -a android.intent.action.AIRPLANE_MODE --ez state true >/dev/null
           adb shell svc wifi disable
           adb shell svc data disable
+          for attempt in $(seq 1 15); do
+            if adb shell dumpsys connectivity | grep -Ei '^ *Active default network: *(none|null|-1)'; then break; fi
+            sleep 1
+          done
+          adb shell dumpsys connectivity | grep -Ei '^ *Active default network: *(none|null|-1)' > "$RUNNER_TEMP/proof/network-state.txt"
+          cat "$RUNNER_TEMP/proof/network-state.txt"
           for scale in window_animation_scale transition_animation_scale animator_duration_scale; do adb shell settings put global "$scale" 0; done
           proof="$RUNNER_TEMP/proof"
           apk=app/build/outputs/apk/debug/app-debug.apk
