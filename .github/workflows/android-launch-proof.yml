@@ -154,3 +154,12 @@ jobs:
           path: ${{ runner.temp }}/proof/
           retention-days: 7
           if-no-files-found: error
+      - name: Retain the same APK installed on the device
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dosefolk-Android-tested-52dfcae
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
