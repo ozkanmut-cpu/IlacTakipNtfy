@@ -45,14 +45,32 @@ jobs:
           test -e /dev/kvm
           sudo chmod a+rw /dev/kvm
           test -r /dev/kvm && test -w /dev/kvm
-          sdkmanager 'platform-tools' 'emulator' "$IMAGE"
+          export ANDROID_SDK_ROOT="$ANDROID_HOME"
+          export ANDROID_AVD_HOME="$RUNNER_TEMP/launch-avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+          if ! test -x "$ANDROID_HOME/emulator/emulator"; then sdkmanager 'emulator'; fi
+          sdkmanager "$IMAGE"
+          gradle --stop
+          "$ANDROID_HOME/emulator/emulator" -accel-check
+          df -h "$RUNNER_TEMP"
           echo no | avdmanager create avd --name launch-proof --package "$IMAGE" --device pixel_2 --force
-          emulator -avd launch-proof -accel on -no-window -no-audio -no-snapshot -wipe-data -no-boot-anim -gpu swiftshader_indirect -cores 2 -memory 2048 -http-proxy http://127.0.0.1:1 > "$RUNNER_TEMP/emulator.log" 2>&1 &
-          emulator_pid=$!
-          trap 'kill "$emulator_pid" 2>/dev/null || true' EXIT
+          config="$ANDROID_AVD_HOME/launch-proof.avd/config.ini"
+          sed -i -E 's@^image.sysdir.1=.*@image.sysdir.1=system-images/android-29/default/x86_64/@;s/^disk.dataPartition.size=.*/disk.dataPartition.size=1400M/;s/^hw.lcd.width=.*/hw.lcd.width=720/;s/^hw.lcd.height=.*/hw.lcd.height=1280/;s/^hw.lcd.density=.*/hw.lcd.density=320/' "$config"
+          export QT_QPA_PLATFORM=offscreen
           adb start-server
-          timeout 240 adb wait-for-device
-          timeout 240 bash -c 'until [[ "$(adb shell getprop sys.boot_completed | tr -d "\r")" == 1 ]]; do sleep 2; done'
+          diagnostics() {
+            grep -iE 'error|fatal|panic|not found|not a valid|incompatible|insufficient|not enough|kvm|accel' "$RUNNER_TEMP/emulator.log" | tail -35 || true
+          }
+          "$ANDROID_HOME/emulator/emulator" -avd launch-proof -port 5554 -accel on -no-window -no-audio -no-snapshot -no-boot-anim -gpu swiftshader_indirect -skin 720x1280 -cores 2 -memory 2048 -http-proxy http://127.0.0.1:1 > "$RUNNER_TEMP/emulator.log" 2>&1 &
+          emulator_pid=$!
+          trap 'diagnostics; kill "$emulator_pid" 2>/dev/null || true' EXIT
+          export ANDROID_SERIAL=emulator-5554
+          for attempt in $(seq 1 120); do
+            if ! kill -0 "$emulator_pid" 2>/dev/null; then diagnostics; exit 5; fi
+            if test "$(timeout 3 adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r' || true)" = 1; then break; fi
+            sleep 3
+          done
+          test "$(timeout 5 adb shell getprop sys.boot_completed | tr -d '\r')" = 1
           adb shell input keyevent KEYCODE_WAKEUP
           adb shell wm dismiss-keyguard
           adb shell settings put system screen_off_timeout 600000
